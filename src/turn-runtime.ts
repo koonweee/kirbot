@@ -1,6 +1,12 @@
 import type { UserTurnInput, UserTurnMessage } from "./domain";
+import type { MessagePhase } from "./generated/codex/MessagePhase";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
+
+type AssistantItemState = {
+  text: string;
+  phase: MessagePhase | null;
+};
 
 export type RuntimeTurn = {
   chatId: number;
@@ -9,7 +15,7 @@ export type RuntimeTurn = {
   turnId: string;
   draftId: number;
   assistantItemOrder: string[];
-  assistantItemTexts: Map<string, string>;
+  assistantItems: Map<string, AssistantItemState>;
   hasAssistantText: boolean;
 };
 
@@ -37,6 +43,15 @@ export type PendingSteerDrain = {
   queueState: QueueStateSnapshot;
 };
 
+export type AssistantDraftKind = "assistant" | "commentary";
+
+export type AssistantRenderUpdate = {
+  draftText: string;
+  draftKind: AssistantDraftKind;
+  finalText: string;
+  startedAssistantText: boolean;
+};
+
 export class BridgeTurnRuntime {
   readonly #turns = new Map<string, RuntimeTurn>();
   readonly #topicStates = new Map<string, TopicState>();
@@ -56,7 +71,7 @@ export class BridgeTurnRuntime {
       turnId: input.turnId,
       draftId: input.draftId,
       assistantItemOrder: [],
-      assistantItemTexts: new Map<string, string>(),
+      assistantItems: new Map<string, AssistantItemState>(),
       hasAssistantText: false
     };
 
@@ -167,29 +182,16 @@ export class BridgeTurnRuntime {
     return this.getQueueState(turn.chatId, turn.topicId);
   }
 
-  appendAssistantDelta(turnId: string, itemId: string, delta: string): { rendered: string; startedAssistantText: boolean } | null {
+  registerAssistantItem(turnId: string, itemId: string, phase: MessagePhase | null): void {
     const turn = this.#turns.get(turnId);
     if (!turn) {
-      return null;
+      return;
     }
 
-    const startedAssistantText = !turn.hasAssistantText;
-    turn.hasAssistantText = true;
-    if (!turn.assistantItemTexts.has(itemId)) {
-      turn.assistantItemOrder.push(itemId);
-      turn.assistantItemTexts.set(itemId, delta);
-    } else {
-      const current = turn.assistantItemTexts.get(itemId) ?? "";
-      turn.assistantItemTexts.set(itemId, `${current}${delta}`);
-    }
-
-    return {
-      rendered: renderAssistantItems(turn),
-      startedAssistantText
-    };
+    ensureAssistantItem(turn, itemId).phase = phase;
   }
 
-  commitAssistantItem(turnId: string, itemId: string, text: string): { rendered: string; startedAssistantText: boolean } | null {
+  appendAssistantDelta(turnId: string, itemId: string, delta: string): AssistantRenderUpdate | null {
     const turn = this.#turns.get(turnId);
     if (!turn) {
       return null;
@@ -197,20 +199,40 @@ export class BridgeTurnRuntime {
 
     const startedAssistantText = !turn.hasAssistantText;
     turn.hasAssistantText = true;
-    if (!turn.assistantItemTexts.has(itemId)) {
-      turn.assistantItemOrder.push(itemId);
-    }
-    turn.assistantItemTexts.set(itemId, text);
+    const item = ensureAssistantItem(turn, itemId);
+    item.text = `${item.text}${delta}`;
 
-    return {
-      rendered: renderAssistantItems(turn),
-      startedAssistantText
-    };
+    return buildAssistantRenderUpdate(turn, startedAssistantText);
+  }
+
+  commitAssistantItem(
+    turnId: string,
+    itemId: string,
+    text: string,
+    phase: MessagePhase | null
+  ): AssistantRenderUpdate | null {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return null;
+    }
+
+    const startedAssistantText = !turn.hasAssistantText;
+    turn.hasAssistantText = true;
+    const item = ensureAssistantItem(turn, itemId);
+    item.phase = phase;
+    item.text = text;
+
+    return buildAssistantRenderUpdate(turn, startedAssistantText);
   }
 
   renderAssistantItems(turnId: string): string {
     const turn = this.#turns.get(turnId);
-    return turn ? renderAssistantItems(turn) : "";
+    return turn ? renderFinalAssistantText(turn) : "";
+  }
+
+  renderAssistantDraft(turnId: string): { text: string; kind: AssistantDraftKind } {
+    const turn = this.#turns.get(turnId);
+    return turn ? renderAssistantDraft(turn) : { text: "", kind: "assistant" };
   }
 
   finalizeTurn(turnId: string): QueueStateSnapshot | null {
@@ -286,11 +308,70 @@ export class BridgeTurnRuntime {
   }
 }
 
-function renderAssistantItems(turn: RuntimeTurn): string {
+function ensureAssistantItem(turn: RuntimeTurn, itemId: string): AssistantItemState {
+  const existing = turn.assistantItems.get(itemId);
+  if (existing) {
+    return existing;
+  }
+
+  const created: AssistantItemState = {
+    text: "",
+    phase: null
+  };
+  turn.assistantItems.set(itemId, created);
+  turn.assistantItemOrder.push(itemId);
+  return created;
+}
+
+function buildAssistantRenderUpdate(turn: RuntimeTurn, startedAssistantText: boolean): AssistantRenderUpdate {
+  const draft = renderAssistantDraft(turn);
+  return {
+    draftText: draft.text,
+    draftKind: draft.kind,
+    finalText: renderFinalAssistantText(turn),
+    startedAssistantText
+  };
+}
+
+function renderAssistantDraft(turn: RuntimeTurn): { text: string; kind: AssistantDraftKind } {
+  const items = getAssistantItemsWithText(turn);
+  if (items.some((item) => item.phase === "final_answer")) {
+    return {
+      text: renderAssistantText(items.filter((item) => item.phase === "final_answer")),
+      kind: "assistant"
+    };
+  }
+
+  if (items.some((item) => item.phase === null)) {
+    return {
+      text: renderAssistantText(items),
+      kind: "assistant"
+    };
+  }
+
+  return {
+    text: renderAssistantText(items.filter((item) => item.phase === "commentary")),
+    kind: "commentary"
+  };
+}
+
+function renderFinalAssistantText(turn: RuntimeTurn): string {
+  const items = getAssistantItemsWithText(turn);
+  if (items.some((item) => item.phase === "final_answer")) {
+    return renderAssistantText(items.filter((item) => item.phase === "final_answer"));
+  }
+
+  return renderAssistantText(items);
+}
+
+function getAssistantItemsWithText(turn: RuntimeTurn): AssistantItemState[] {
   return turn.assistantItemOrder
-    .map((itemId) => turn.assistantItemTexts.get(itemId) ?? "")
-    .filter((text) => text.length > 0)
-    .join("\n\n");
+    .map((itemId) => turn.assistantItems.get(itemId))
+    .filter((item): item is AssistantItemState => Boolean(item?.text.length));
+}
+
+function renderAssistantText(items: AssistantItemState[]): string {
+  return items.map((item) => item.text).join("\n\n");
 }
 
 function topicKey(chatId: number, topicId: number): string {

@@ -488,6 +488,13 @@ export class TelegramCodexBridge {
         return;
       }
       case "item/started": {
+        if (notification.params.item.type === "agentMessage") {
+          this.#runtime.registerAssistantItem(
+            notification.params.turnId,
+            notification.params.item.id,
+            notification.params.item.phase
+          );
+        }
         await this.updateTurnStatus(notification.params.turnId, statusTextForItem(notification.params.item));
         return;
       }
@@ -526,9 +533,9 @@ export class TelegramCodexBridge {
           await this.updateTurnStatus(activeTurn.turnId, stableStatusText("streaming"), true);
         }
 
-        await this.database.appendTurnStream(activeTurn.turnId, update.rendered);
+        await this.database.appendTurnStream(activeTurn.turnId, update.draftText);
         await this.maybeSendChatAction(activeTurn);
-        await this.maybeSendMessageDraft(activeTurn, update.rendered || "…");
+        await this.maybeSendMessageDraft(activeTurn, update.draftText || "…", update.draftKind);
         return;
       }
       case "item/completed": {
@@ -548,7 +555,8 @@ export class TelegramCodexBridge {
         const update = this.#runtime.commitAssistantItem(
           notification.params.turnId,
           notification.params.item.id,
-          notification.params.item.text
+          notification.params.item.text,
+          notification.params.item.phase
         );
         if (!activeTurn || !update) {
           return;
@@ -558,8 +566,8 @@ export class TelegramCodexBridge {
           await this.updateTurnStatus(activeTurn.turnId, stableStatusText("streaming"), true);
         }
 
-        await this.database.appendTurnStream(activeTurn.turnId, update.rendered);
-        await this.maybeSendMessageDraft(activeTurn, update.rendered || "…", true);
+        await this.database.appendTurnStream(activeTurn.turnId, update.draftText);
+        await this.maybeSendMessageDraft(activeTurn, update.draftText || "…", update.draftKind, true);
         return;
       }
       case "turn/completed": {
@@ -913,13 +921,18 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async maybeSendMessageDraft(activeTurn: ActiveTurn, text: string, force = false): Promise<void> {
+  private async maybeSendMessageDraft(
+    activeTurn: ActiveTurn,
+    text: string,
+    kind: "assistant" | "commentary" = "assistant",
+    force = false
+  ): Promise<void> {
     if (activeTurn.lifecycle !== "active") {
       return;
     }
 
-    const previewText = buildDraftPreview(text);
-    const renderedPreview = renderTelegramAssistantText(previewText);
+    const renderedPreview =
+      kind === "commentary" ? renderTelegramCommentaryDraft(buildCommentaryDraftPreview(text)) : renderTelegramAssistantDraft(text);
     const now = Date.now();
     if (!force) {
       if (activeTurn.lastDraftText === renderedPreview.text && activeTurn.draftState.pendingText === null) {
@@ -1419,6 +1432,17 @@ function buildDraftPreview(text: string): string {
   return `${prefix}${text.slice(-budget)}${suffix}`;
 }
 
+function buildCommentaryDraftPreview(text: string): string {
+  if (text.length <= TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT) {
+    return text;
+  }
+
+  const prefix = "...\n";
+  const suffix = "\n\n[commentary truncated]";
+  const budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT - prefix.length - suffix.length;
+  return `${prefix}${text.slice(-budget)}${suffix}`;
+}
+
 function chunkTelegramMessage(text: string): string[] {
   const reservedHeaderChars = 32;
   const rawChunks = splitTextForTelegram(text, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
@@ -1471,6 +1495,17 @@ function renderTelegramAssistantText(text: string): { text: string; parse_mode?:
 
   return {
     text: rendered,
+    parse_mode: "HTML"
+  };
+}
+
+function renderTelegramAssistantDraft(text: string): { text: string; parse_mode?: TelegramParseMode } {
+  return renderTelegramAssistantText(buildDraftPreview(text));
+}
+
+function renderTelegramCommentaryDraft(text: string): { text: string; parse_mode: TelegramParseMode } {
+  return {
+    text: renderTelegramCodeFence("", text),
     parse_mode: "HTML"
   };
 }

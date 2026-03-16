@@ -141,4 +141,60 @@ describe("BridgeTurnRuntime", () => {
       queuedFollowUps: []
     });
   });
+
+  it("keeps commentary in the draft while reserving final output for final-answer items", () => {
+    const runtime = new BridgeTurnRuntime();
+    runtime.registerTurn({
+      chatId: -1001,
+      topicId: 777,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      draftId: 1
+    });
+
+    runtime.registerAssistantItem("turn-1", "item-1", "commentary");
+    const commentary = runtime.appendAssistantDelta("turn-1", "item-1", "Inspecting the repo");
+
+    expect(commentary).toEqual({
+      draftText: "Inspecting the repo",
+      draftKind: "commentary",
+      finalText: "Inspecting the repo",
+      startedAssistantText: true
+    });
+
+    runtime.registerAssistantItem("turn-1", "item-2", "final_answer");
+    const finalAnswer = runtime.appendAssistantDelta("turn-1", "item-2", "Here is the fix.");
+
+    expect(finalAnswer).toEqual({
+      draftText: "Here is the fix.",
+      draftKind: "assistant",
+      finalText: "Here is the fix.",
+      startedAssistantText: false
+    });
+    expect(runtime.renderAssistantDraft("turn-1")).toEqual({
+      text: "Here is the fix.",
+      kind: "assistant"
+    });
+    expect(runtime.renderAssistantItems("turn-1")).toBe("Here is the fix.");
+  });
+
+  it("falls back to legacy merged output when phase metadata is missing", () => {
+    const runtime = new BridgeTurnRuntime();
+    runtime.registerTurn({
+      chatId: -1001,
+      topicId: 777,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      draftId: 1
+    });
+
+    runtime.appendAssistantDelta("turn-1", "item-1", "First part");
+    runtime.appendAssistantDelta("turn-1", "item-2", "Second part");
+
+    expect(runtime.renderAssistantDraft("turn-1")).toEqual({
+      text: "First part\n\nSecond part",
+      kind: "assistant"
+    });
+    expect(runtime.renderAssistantItems("turn-1")).toBe("First part\n\nSecond part");
+  });
 });

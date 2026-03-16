@@ -85,4 +85,77 @@ describe("CodexGateway", () => {
 
     await expect(initializePromise).resolves.toBeUndefined();
   });
+
+  it("prefers final-answer agent messages when reading a completed turn", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      appServerUrl: "ws://127.0.0.1:8787",
+      spawnAppServer: false,
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const readPromise = gateway.readTurnMessages("thread-1", "turn-1");
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/read",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        includeTurns: true
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1",
+          turns: [
+            {
+              id: "turn-1",
+              items: [
+                {
+                  type: "agentMessage",
+                  id: "item-1",
+                  text: "Inspecting files",
+                  phase: "commentary"
+                },
+                {
+                  type: "agentMessage",
+                  id: "item-2",
+                  text: "Ship this patch.",
+                  phase: "final_answer"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    });
+
+    await expect(readPromise).resolves.toBe("Ship this patch.");
+  });
 });

@@ -165,10 +165,19 @@ export class CodexGateway {
       return "";
     }
 
-    return turn.items
-      .filter((item) => item.type === "agentMessage")
+    const agentMessages = turn.items.filter(
+      (item): item is Extract<(typeof turn.items)[number], { type: "agentMessage" }> => item.type === "agentMessage"
+    );
+    const finalAnswerText = agentMessages
+      .filter((item) => item.phase === "final_answer")
       .map((item) => item.text)
       .join("\n\n");
+
+    if (finalAnswerText.trim().length > 0) {
+      return finalAnswerText;
+    }
+
+    return agentMessages.map((item) => item.text).join("\n\n");
   }
 
   async respondToCommandApproval(id: RequestId, response: CommandExecutionRequestApprovalResponse): Promise<void> {

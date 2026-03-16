@@ -517,6 +517,91 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.options?.parse_mode).toBe("HTML");
   });
 
+  it("streams commentary as a code-block draft and publishes only the final answer", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 71,
+      updateId: 81,
+      userId: 42,
+      text: "Summarize the change"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Inspecting the files"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.drafts.at(-1)?.text).toBe("<pre><code>Inspecting the files</code></pre>");
+    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-2",
+          text: "",
+          phase: "final_answer"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-2",
+        delta: "Here is the answer."
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(telegram.drafts.at(-1)?.text).toBe("Here is the answer.");
+    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBeUndefined();
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Here is the answer.");
+  });
+
   it("chunks long final assistant output into multiple Telegram messages", async () => {
     codex.readTurnMessagesResult = longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90);
 
@@ -584,6 +669,48 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts).toHaveLength(1);
     expect(telegram.drafts[0]?.text.length).toBeLessThanOrEqual(3500);
     expect(telegram.drafts[0]?.text).toContain("[preview truncated]");
+  });
+
+  it("windows oversized commentary drafts inside a code block", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 72,
+      updateId: 82,
+      userId: 42,
+      text: "Think out loud"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: longText("commentary content", 180)
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.drafts).toHaveLength(1);
+    expect(telegram.drafts[0]?.text.startsWith("<pre><code>")).toBe(true);
+    expect(telegram.drafts[0]?.text).toContain("[commentary truncated]");
+    expect(telegram.drafts[0]?.options?.parse_mode).toBe("HTML");
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {
