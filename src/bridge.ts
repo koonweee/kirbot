@@ -86,6 +86,14 @@ type ActiveTurn = {
   lastDraftText: string | null;
   lastDraftUpdateAt: number;
   lastChatActionAt: number;
+  lifecycle: "active" | "finalizing";
+  draftState: {
+    pendingText: string | null;
+    pendingParseMode: TelegramParseMode | undefined;
+    flushTimer: NodeJS.Timeout | null;
+    retryTimer: NodeJS.Timeout | null;
+    inFlight: Promise<void> | null;
+  };
 };
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
@@ -96,6 +104,7 @@ export class TelegramCodexBridge {
   readonly #activeTurns = new Map<string, ActiveTurn>();
   readonly #queuePreviewMessageIds = new Map<string, number>();
   readonly #submitPendingSteersAfterInterrupt = new Set<string>();
+  readonly #notificationChains = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
@@ -104,7 +113,7 @@ export class TelegramCodexBridge {
     private readonly codex: BridgeCodexApi
   ) {
     this.codex.onNotification((notification) => {
-      void this.handleNotification(notification).catch((error) => {
+      void this.enqueueNotification(notification).catch((error) => {
         console.error("Failed to process Codex notification", error);
       });
     });
@@ -405,7 +414,15 @@ export class TelegramCodexBridge {
       lastStatusUpdateAt: Date.now(),
       lastDraftText: null,
       lastDraftUpdateAt: 0,
-      lastChatActionAt: 0
+      lastChatActionAt: 0,
+      lifecycle: "active",
+      draftState: {
+        pendingText: null,
+        pendingParseMode: undefined,
+        flushTimer: null,
+        retryTimer: null,
+        inFlight: null
+      }
     });
     this.#runtime.registerTurn({
       chatId: message.chatId,
@@ -414,6 +431,28 @@ export class TelegramCodexBridge {
       turnId: turn.id,
       draftId: message.updateId
     });
+  }
+
+  private async enqueueNotification(notification: ServerNotification): Promise<void> {
+    const turnId = getNotificationTurnId(notification);
+    if (!turnId) {
+      await this.handleNotification(notification);
+      return;
+    }
+
+    const previous = this.#notificationChains.get(turnId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(async () => {
+      await this.handleNotification(notification);
+    });
+    this.#notificationChains.set(turnId, next);
+
+    try {
+      await next;
+    } finally {
+      if (this.#notificationChains.get(turnId) === next) {
+        this.#notificationChains.delete(turnId);
+      }
+    }
   }
 
   private async handleNotification(notification: ServerNotification): Promise<void> {
@@ -521,6 +560,7 @@ export class TelegramCodexBridge {
       return;
     }
 
+    await this.beginTurnFinalization(activeTurn);
     const streamedText = this.#runtime.renderAssistantItems(turnId);
     const readbackText = await this.codex.readTurnMessages(threadId, turnId);
     const finalText = readbackText.trim().length > 0 ? readbackText : streamedText;
@@ -544,6 +584,7 @@ export class TelegramCodexBridge {
       return;
     }
 
+    await this.beginTurnFinalization(activeTurn);
     const streamedText = this.#runtime.renderAssistantItems(turnId);
     const readbackText = await this.codex.readTurnMessages(threadId, turnId);
     const fallbackOutput = readbackText.trim().length > 0 ? readbackText : streamedText;
@@ -581,6 +622,7 @@ export class TelegramCodexBridge {
       this.#runtime.movePendingSteersToQueued(activeTurn.chatId, activeTurn.topicId);
     }
 
+    await this.beginTurnFinalization(activeTurn);
     const streamedText = this.#runtime.renderAssistantItems(activeTurn.turnId);
     const readbackText = await this.codex.readTurnMessages(threadId, activeTurn.turnId);
     const finalText = readbackText.trim().length > 0 ? readbackText : streamedText;
@@ -846,31 +888,24 @@ export class TelegramCodexBridge {
   }
 
   private async maybeSendMessageDraft(activeTurn: ActiveTurn, text: string, force = false): Promise<void> {
+    if (activeTurn.lifecycle !== "active") {
+      return;
+    }
+
     const previewText = buildDraftPreview(text);
     const renderedPreview = renderTelegramAssistantText(previewText);
     const now = Date.now();
     if (!force) {
-      if (activeTurn.lastDraftText === renderedPreview.text) {
-        return;
-      }
-
-      if (now - activeTurn.lastDraftUpdateAt < 400) {
+      if (activeTurn.lastDraftText === renderedPreview.text && activeTurn.draftState.pendingText === null) {
         return;
       }
     }
 
-    try {
-      await this.telegram.sendMessageDraft(activeTurn.chatId, activeTurn.draftId, renderedPreview.text, {
-        message_thread_id: activeTurn.topicId,
-        ...withTelegramParseMode(renderedPreview.parse_mode)
-      });
-      activeTurn.lastDraftText = renderedPreview.text;
-      activeTurn.lastDraftUpdateAt = now;
-    } catch (error) {
-      if (!isRetryAfterError(error)) {
-        throw error;
-      }
-    }
+    activeTurn.draftState.pendingText = renderedPreview.text;
+    activeTurn.draftState.pendingParseMode = renderedPreview.parse_mode;
+
+    const delayMs = force ? 0 : Math.max(0, 400 - (now - activeTurn.lastDraftUpdateAt));
+    this.scheduleDraftFlush(activeTurn, delayMs);
   }
 
   private async replaceTurnStatusWithFinal(activeTurn: ActiveTurn, text: string): Promise<number> {
@@ -921,8 +956,136 @@ export class TelegramCodexBridge {
       return;
     }
 
+    this.clearDraftScheduling(activeTurn);
     this.#activeTurns.delete(turnId);
     this.#submitPendingSteersAfterInterrupt.delete(turnId);
+  }
+
+  private scheduleDraftFlush(activeTurn: ActiveTurn, delayMs: number): void {
+    if (activeTurn.lifecycle !== "active") {
+      return;
+    }
+
+    if (activeTurn.draftState.inFlight) {
+      return;
+    }
+
+    if (activeTurn.draftState.retryTimer) {
+      return;
+    }
+
+    if (activeTurn.draftState.flushTimer) {
+      clearTimeout(activeTurn.draftState.flushTimer);
+    }
+
+    if (delayMs === 0) {
+      activeTurn.draftState.flushTimer = null;
+      activeTurn.draftState.inFlight = this.flushPendingDraft(activeTurn).finally(() => {
+        activeTurn.draftState.inFlight = null;
+        if (activeTurn.lifecycle === "active" && activeTurn.draftState.pendingText !== null) {
+          this.scheduleDraftFlush(activeTurn, 0);
+        }
+      });
+      return;
+    }
+
+    activeTurn.draftState.flushTimer = setTimeout(() => {
+      activeTurn.draftState.flushTimer = null;
+      activeTurn.draftState.inFlight = this.flushPendingDraft(activeTurn).finally(() => {
+        activeTurn.draftState.inFlight = null;
+        if (activeTurn.lifecycle === "active" && activeTurn.draftState.pendingText !== null) {
+          this.scheduleDraftFlush(activeTurn, 0);
+        }
+      });
+    }, delayMs);
+  }
+
+  private async flushPendingDraft(activeTurn: ActiveTurn): Promise<void> {
+    const pendingText = activeTurn.draftState.pendingText;
+    if (activeTurn.lifecycle !== "active" || pendingText === null) {
+      return;
+    }
+
+    activeTurn.draftState.pendingText = null;
+    const pendingParseMode = activeTurn.draftState.pendingParseMode;
+    activeTurn.draftState.pendingParseMode = undefined;
+
+    if (pendingText === activeTurn.lastDraftText) {
+      return;
+    }
+
+    try {
+      await this.sendDraftText(activeTurn, pendingText, pendingParseMode);
+      activeTurn.lastDraftText = pendingText;
+      activeTurn.lastDraftUpdateAt = Date.now();
+    } catch (error) {
+      if (isRetryAfterError(error)) {
+        activeTurn.draftState.pendingText = pendingText;
+        activeTurn.draftState.pendingParseMode = pendingParseMode;
+        const retryDelayMs = getRetryAfterDelayMs(error);
+        activeTurn.draftState.retryTimer = setTimeout(() => {
+          activeTurn.draftState.retryTimer = null;
+          if (activeTurn.draftState.pendingText !== null) {
+            this.scheduleDraftFlush(activeTurn, 0);
+          }
+        }, retryDelayMs);
+        return;
+      }
+
+      if (pendingParseMode) {
+        await this.sendDraftText(activeTurn, pendingText, undefined);
+        activeTurn.lastDraftText = pendingText;
+        activeTurn.lastDraftUpdateAt = Date.now();
+        return;
+      }
+
+      throw error;
+    }
+  }
+
+  private async sendDraftText(
+    activeTurn: ActiveTurn,
+    text: string,
+    parseMode?: TelegramParseMode
+  ): Promise<void> {
+    await this.telegram.sendMessageDraft(activeTurn.chatId, activeTurn.draftId, text, {
+      message_thread_id: activeTurn.topicId,
+      ...withTelegramParseMode(parseMode)
+    });
+  }
+
+  private clearDraftScheduling(activeTurn: ActiveTurn): void {
+    if (activeTurn.draftState.flushTimer) {
+      clearTimeout(activeTurn.draftState.flushTimer);
+      activeTurn.draftState.flushTimer = null;
+    }
+
+    if (activeTurn.draftState.retryTimer) {
+      clearTimeout(activeTurn.draftState.retryTimer);
+      activeTurn.draftState.retryTimer = null;
+    }
+  }
+
+  private async beginTurnFinalization(activeTurn: ActiveTurn): Promise<void> {
+    if (activeTurn.lifecycle === "finalizing") {
+      if (activeTurn.draftState.inFlight) {
+        await activeTurn.draftState.inFlight;
+      }
+      return;
+    }
+
+    activeTurn.lifecycle = "finalizing";
+    activeTurn.draftState.pendingText = null;
+    activeTurn.draftState.pendingParseMode = undefined;
+    this.clearDraftScheduling(activeTurn);
+
+    if (activeTurn.draftState.inFlight) {
+      await activeTurn.draftState.inFlight;
+    }
+
+    activeTurn.draftState.pendingText = null;
+    activeTurn.draftState.pendingParseMode = undefined;
+    this.clearDraftScheduling(activeTurn);
   }
 
   private async trySteerTurn(activeTurn: ActiveTurn, message: UserTextMessage): Promise<void> {
@@ -1349,6 +1512,26 @@ function withTelegramParseMode(parseMode?: TelegramParseMode): { parse_mode?: Te
   return parseMode ? { parse_mode: parseMode } : {};
 }
 
+function getNotificationTurnId(notification: ServerNotification): string | null {
+  switch (notification.method) {
+    case "turn/started":
+    case "turn/completed":
+      return notification.params.turn.id;
+    case "item/started":
+    case "turn/plan/updated":
+    case "item/reasoning/summaryTextDelta":
+    case "item/mcpToolCall/progress":
+    case "item/commandExecution/outputDelta":
+    case "item/fileChange/outputDelta":
+    case "item/agentMessage/delta":
+    case "item/completed":
+    case "error":
+      return notification.params.turnId;
+    default:
+      return null;
+  }
+}
+
 type SteerErrorClassification =
   | {
       kind: "stale_or_missing_active_turn";
@@ -1432,6 +1615,13 @@ function isRetryAfterError(error: unknown): boolean {
     typeof (error as { parameters?: unknown }).parameters === "object" &&
     (error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after !== undefined
   );
+}
+
+function getRetryAfterDelayMs(error: unknown): number {
+  const retryAfter = (error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter >= 0
+    ? Math.ceil(retryAfter * 1000)
+    : 1000;
 }
 
 function isTelegramMessageMissingError(error: unknown): boolean {

@@ -14,6 +14,16 @@ import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileC
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import { JsonRpcMethodError } from "../src/rpc";
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
 }
@@ -126,6 +136,8 @@ class FakeTelegram implements TelegramApi {
   topicCounter = 100;
   messageCounter = 500;
   nextChatActionError: Error | null = null;
+  nextDraftError: Error | null = null;
+  draftBlocks: Array<Promise<void>> = [];
   createdTopics: Array<{ chatId: number; name: string }> = [];
   sentMessages: Array<{
     messageId: number;
@@ -138,6 +150,12 @@ class FakeTelegram implements TelegramApi {
     };
   }> = [];
   drafts: Array<{
+    chatId: number;
+    draftId: number;
+    text: string;
+    options?: { message_thread_id?: number; parse_mode?: "HTML" };
+  }> = [];
+  appliedDrafts: Array<{
     chatId: number;
     draftId: number;
     text: string;
@@ -186,6 +204,18 @@ class FakeTelegram implements TelegramApi {
     options?: { message_thread_id?: number; parse_mode?: "HTML" }
   ): Promise<true> {
     this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
+    if (this.nextDraftError) {
+      const error = this.nextDraftError;
+      this.nextDraftError = null;
+      throw error;
+    }
+
+    const blocker = this.draftBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
+
+    this.appliedDrafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     return true;
   }
 
@@ -480,6 +510,112 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts).toHaveLength(1);
     expect(telegram.drafts[0]?.text.length).toBeLessThanOrEqual(3500);
     expect(telegram.drafts[0]?.text).toContain("[preview truncated]");
+  });
+
+  it("flushes the latest draft after fast consecutive deltas", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Explain the fix"
+    });
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Hello"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: " world"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("Hello world");
+  });
+
+  it("does not let a stale delayed draft overwrite a newer one", async () => {
+    const firstDraft = deferred<void>();
+    telegram.draftBlocks.push(firstDraft.promise);
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Explain the fix"
+    });
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Hello"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: " world"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    firstDraft.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("Hello world");
+  });
+
+  it("retries the latest draft after a retry-after response", async () => {
+    telegram.nextDraftError = {
+      parameters: {
+        retry_after: 0
+      }
+    } as unknown as Error;
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Explain the fix"
+    });
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Retry me"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("Retry me");
   });
 
   it("renders multiple assistant items with separators instead of concatenating them", async () => {
