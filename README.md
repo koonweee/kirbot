@@ -51,8 +51,9 @@ Codex-related configuration:
 - `CODEX_APP_SERVER_URL`: WebSocket URL for the Codex app server
 - `CODEX_SPAWN_APP_SERVER`: set to `true` to let Kirbot start `codex app-server`
 - `CODEX_DEFAULT_CWD`: default working directory for Codex sessions
-- `CODEX_BASE_INSTRUCTIONS_FILE`: optional path to a text or Markdown file used as base instructions
-- `CODEX_DEVELOPER_INSTRUCTIONS_FILE`: optional path to a text or Markdown file used as developer instructions
+- `KIRBOT.md`: the developer-instructions prompt Kirbot always sends to Codex
+
+Kirbot intentionally leaves Codex base instructions unset and uses `KIRBOT.md` for developer instructions.
 
 Build and run:
 

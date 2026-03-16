@@ -1,6 +1,7 @@
 import { config as loadDotenv } from "dotenv";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { z } from "zod";
 
 import type { AskForApproval } from "./generated/codex/v2/AskForApproval";
@@ -39,8 +40,7 @@ const envSchema = z.object({
     z.enum(["untrusted", "on-request", "on-failure", "never"])
   ),
   CODEX_SERVICE_NAME: z.string().default("telegram-codex-bridge"),
-  CODEX_BASE_INSTRUCTIONS_FILE: optionalEnvString(z.string()),
-  CODEX_DEVELOPER_INSTRUCTIONS_FILE: optionalEnvString(z.string()),
+  // CODEX_BASE_INSTRUCTIONS_FILE: optionalEnvString(z.string()),
   CODEX_CONFIG_JSON: optionalEnvString(z.string())
 });
 
@@ -128,8 +128,11 @@ export function loadConfig(): AppConfig {
       sandbox: parsed.CODEX_SANDBOX_MODE as SandboxMode | undefined,
       approvalPolicy: parsed.CODEX_APPROVAL_POLICY as AskForApproval | undefined,
       serviceName: parsed.CODEX_SERVICE_NAME,
-      baseInstructions: readOptionalTextFile(parsed.CODEX_BASE_INSTRUCTIONS_FILE),
-      developerInstructions: readOptionalTextFile(parsed.CODEX_DEVELOPER_INSTRUCTIONS_FILE),
+      // Avoid using baseInstructions for Kirbot because it appears to replace
+      // Codex's default system prompt/identity framing instead of safely appending.
+      // baseInstructions: readOptionalTextFile(parsed.CODEX_BASE_INSTRUCTIONS_FILE),
+      baseInstructions: undefined,
+      developerInstructions: readRequiredTextFile(resolveKirbotPromptPath()),
       config: parseJsonConfig(parsed.CODEX_CONFIG_JSON)
     }
   };
@@ -142,6 +145,26 @@ function readOptionalTextFile(path: string | undefined): string | undefined {
 
   const content = readFileSync(expandHomePath(path), "utf8");
   return content.trim().length > 0 ? content : undefined;
+}
+
+function readRequiredTextFile(path: string): string {
+  return readFileSync(path, "utf8");
+}
+
+function resolveKirbotPromptPath(): string {
+  const candidates = [
+    resolve(__dirname, "..", "KIRBOT.md"),
+    resolve(__dirname, "..", "..", "KIRBOT.md"),
+    resolve(process.cwd(), "KIRBOT.md")
+  ];
+
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+
+  throw new Error("Could not locate KIRBOT.md");
 }
 
 function defaultTelegramMediaTempDir(): string {
