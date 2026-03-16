@@ -22,3 +22,4 @@
 
 - Decide whether queued follow-ups and pending steers should persist across process restart
 - Evaluate whether Telegram needs a separate interrupt-only affordance beyond send-now
+- Replace the separate status message with a single-slot status code fence whose lowercase label carries the current status and emoji, while commentary uses a lowercase `thinking` fence with a brain emoji

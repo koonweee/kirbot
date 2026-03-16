@@ -30,6 +30,18 @@ function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
 }
 
+function escapeHtml(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function codeBlock(text: string): string {
+  return `<pre><code>${escapeHtml(text)}</code></pre>`;
+}
+
+function combinedDraft(...parts: string[]): string {
+  return parts.join("\n\n");
+}
+
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
   ensuredThreads: string[] = [];
@@ -387,7 +399,8 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getSessionByTopic(-1001, 777);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Thinking 🤔");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("thinking 🤔\n----------"));
   });
 
   it("downloads Telegram images into temp storage and forwards them as local images", async () => {
@@ -435,7 +448,8 @@ describe("TelegramCodexBridge", () => {
       text: "Explain the fix"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Thinking 🤔");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("thinking 🤔\n----------"));
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -461,12 +475,12 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts).toHaveLength(1);
+    expect(telegram.drafts.some((draft) => draft.text === combinedDraft(codeBlock("streaming ✍️\n----------"), "Working on it"))).toBe(
+      true
+    );
     expect(telegram.deletions).toEqual([]);
-    expect(telegram.drafts[0]?.text).toBe("Working on it");
     expect(telegram.sentMessages.at(-1)?.text).toBe("Working on it");
-    expect(telegram.edits.some((edit) => edit.text === "Streaming ✍️")).toBe(true);
-    expect(telegram.edits.some((edit) => edit.text === "Done ✅")).toBe(true);
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
 
     const turn = await database.getTurnById("turn-1");
     expect(turn.status).toBe("completed");
@@ -509,8 +523,12 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Use <b>bold</b> and <code>code</code>.");
-    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
+    expect(
+      telegram.drafts.some(
+        (draft) => draft.text === combinedDraft(codeBlock("streaming ✍️\n----------"), "Use <b>bold</b> and <code>code</code>.")
+      )
+    ).toBe(true);
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
     expect(telegram.sentMessages.at(-1)?.text).toBe(
       "Use <b>bold</b> and <code>code</code>.\n\n<pre><code class=\"language-ts\">const answer = 42;</code></pre>"
     );
@@ -553,7 +571,12 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("<pre><code>Inspecting the files</code></pre>");
+    expect(telegram.drafts.at(-1)?.text).toBe(
+      combinedDraft(
+        codeBlock("streaming ✍️\n----------"),
+        codeBlock("thinking 🧠\n----------\nInspecting the files")
+      )
+    );
     expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
 
     codex.emitNotification({
@@ -582,8 +605,8 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Here is the answer.");
-    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBeUndefined();
+    expect(telegram.drafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Here is the answer."));
+    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
 
     codex.emitNotification({
       method: "turn/completed",
@@ -666,9 +689,9 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts).toHaveLength(1);
-    expect(telegram.drafts[0]?.text.length).toBeLessThanOrEqual(3500);
-    expect(telegram.drafts[0]?.text).toContain("[preview truncated]");
+    expect(telegram.drafts.length).toBeGreaterThan(0);
+    expect(telegram.drafts.at(-1)?.text.length).toBeLessThanOrEqual(3500);
+    expect(telegram.drafts.at(-1)?.text).toContain("[preview truncated]");
   });
 
   it("windows oversized commentary drafts inside a code block", async () => {
@@ -707,10 +730,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts).toHaveLength(1);
-    expect(telegram.drafts[0]?.text.startsWith("<pre><code>")).toBe(true);
-    expect(telegram.drafts[0]?.text).toContain("[commentary truncated]");
-    expect(telegram.drafts[0]?.options?.parse_mode).toBe("HTML");
+    expect(telegram.drafts.length).toBeGreaterThan(0);
+    expect(telegram.drafts.at(-1)?.text.startsWith("<pre><code>")).toBe(true);
+    expect(telegram.drafts.at(-1)?.text).toContain("[commentary truncated]");
+    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {
@@ -745,7 +768,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("Hello world");
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Hello world"));
   });
 
   it("does not let a stale delayed draft overwrite a newer one", async () => {
@@ -786,7 +809,7 @@ describe("TelegramCodexBridge", () => {
     firstDraft.resolve();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("Hello world");
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Hello world"));
   });
 
   it("retries the latest draft after a retry-after response", async () => {
@@ -816,7 +839,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("Retry me");
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Retry me"));
   });
 
   it("renders multiple assistant items with separators instead of concatenating them", async () => {
@@ -920,7 +943,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Start from the inside.");
+    expect(
+      telegram.drafts.some((draft) => draft.text === combinedDraft(codeBlock("streaming ✍️\n----------"), "Start from the inside."))
+    ).toBe(true);
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
     expect(telegram.sentMessages.at(-1)?.text).toBe("Start from the inside.");
   });
 
@@ -988,6 +1014,7 @@ describe("TelegramCodexBridge", () => {
       text: "Inspect the flaky command"
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 600));
     codex.emitNotification({
       method: "item/started",
@@ -1010,10 +1037,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.edits.some((edit) => edit.text === "Running command 💻")).toBe(true);
+    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("running 💻\n----------\nnpm test"));
   });
 
-  it("keeps a stable status message and sends the final text separately when no assistant delta arrives", async () => {
+  it("keeps a stable status draft and sends the final text separately when no assistant delta arrives", async () => {
     codex.readTurnMessagesResult = "Completed without streamed deltas";
 
     await bridge.handleUserTextMessage({
@@ -1040,7 +1067,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Completed without streamed deltas");
-    expect(telegram.edits.some((edit) => edit.text === "Done ✅")).toBe(true);
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
   });
 
   it("tracks a follow-up as a pending steer until the committed user item arrives", async () => {

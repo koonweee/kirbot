@@ -5,6 +5,7 @@ import type { PendingServerRequest, TopicLifecycleEvent, TopicSession, UserTurnI
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { RequestId } from "./generated/codex/RequestId";
+import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { CommandExecutionApprovalDecision } from "./generated/codex/v2/CommandExecutionApprovalDecision";
 import type { CommandExecutionRequestApprovalParams } from "./generated/codex/v2/CommandExecutionRequestApprovalParams";
@@ -30,6 +31,25 @@ type TelegramSendOptions = {
 type TelegramDraftOptions = {
   message_thread_id?: number;
   parse_mode?: TelegramParseMode;
+};
+
+type TurnStatusState =
+  | "thinking"
+  | "planning"
+  | "using tool"
+  | "running"
+  | "editing"
+  | "searching"
+  | "streaming"
+  | "waiting"
+  | "done"
+  | "failed"
+  | "interrupted";
+
+type TurnStatusDraft = {
+  state: TurnStatusState;
+  emoji: string;
+  details: string | null;
 };
 
 export interface TelegramApi {
@@ -83,9 +103,10 @@ type ActiveTurn = {
   threadId: string;
   turnId: string;
   draftId: number;
-  statusMessageId: number | null;
-  lastStatusText: string | null;
+  statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
+  previewText: string | null;
+  previewKind: "assistant" | "commentary" | null;
   lastDraftText: string | null;
   lastDraftUpdateAt: number;
   lastChatActionAt: number;
@@ -424,20 +445,16 @@ export class TelegramCodexBridge {
       draftId: message.updateId
     });
 
-    const initialStatus = stableStatusText("thinking");
-    const statusMessage = await this.telegram.sendMessage(message.chatId, initialStatus, {
-      message_thread_id: message.topicId
-    });
-
-    this.#activeTurns.set(turn.id, {
+    const activeTurn: ActiveTurn = {
       chatId: message.chatId,
       topicId: message.topicId,
       threadId: session.codexThreadId,
       turnId: turn.id,
       draftId: message.updateId,
-      statusMessageId: statusMessage.message_id,
-      lastStatusText: initialStatus,
+      statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: Date.now(),
+      previewText: null,
+      previewKind: null,
       lastDraftText: null,
       lastDraftUpdateAt: 0,
       lastChatActionAt: 0,
@@ -449,7 +466,8 @@ export class TelegramCodexBridge {
         retryTimer: null,
         inFlight: null
       }
-    });
+    };
+    this.#activeTurns.set(turn.id, activeTurn);
     this.#runtime.registerTurn({
       chatId: message.chatId,
       topicId: message.topicId,
@@ -457,6 +475,7 @@ export class TelegramCodexBridge {
       turnId: turn.id,
       draftId: message.updateId
     });
+    await this.queueDraftRender(activeTurn, true);
   }
 
   private async enqueueNotification(notification: ServerNotification): Promise<void> {
@@ -484,7 +503,7 @@ export class TelegramCodexBridge {
   private async handleNotification(notification: ServerNotification): Promise<void> {
     switch (notification.method) {
       case "turn/started": {
-        await this.updateTurnStatus(notification.params.turn.id, stableStatusText("thinking"));
+        await this.updateTurnStatus(notification.params.turn.id, buildStatusDraft("thinking"));
         return;
       }
       case "item/started": {
@@ -495,27 +514,27 @@ export class TelegramCodexBridge {
             notification.params.item.phase
           );
         }
-        await this.updateTurnStatus(notification.params.turnId, statusTextForItem(notification.params.item));
+        await this.updateTurnStatus(notification.params.turnId, buildStatusDraftForItem(notification.params.item));
         return;
       }
       case "turn/plan/updated": {
-        await this.updateTurnStatus(notification.params.turnId, stableStatusText("planning"));
+        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("planning"));
         return;
       }
       case "item/reasoning/summaryTextDelta": {
-        await this.updateTurnStatus(notification.params.turnId, stableStatusText("thinking"));
+        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("thinking"));
         return;
       }
       case "item/mcpToolCall/progress": {
-        await this.updateTurnStatus(notification.params.turnId, stableStatusText("using_tool"));
+        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("using tool"));
         return;
       }
       case "item/commandExecution/outputDelta": {
-        await this.updateTurnStatus(notification.params.turnId, "Running command...");
+        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("running"), false, true);
         return;
       }
       case "item/fileChange/outputDelta": {
-        await this.updateTurnStatus(notification.params.turnId, "Editing files...");
+        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("editing"), false, true);
         return;
       }
       case "item/agentMessage/delta": {
@@ -530,12 +549,12 @@ export class TelegramCodexBridge {
         }
 
         if (update.startedAssistantText) {
-          await this.updateTurnStatus(activeTurn.turnId, stableStatusText("streaming"), true);
+          await this.updateTurnStatus(activeTurn.turnId, buildStatusDraft("streaming"), true);
         }
 
         await this.database.appendTurnStream(activeTurn.turnId, update.draftText);
         await this.maybeSendChatAction(activeTurn);
-        await this.maybeSendMessageDraft(activeTurn, update.draftText || "…", update.draftKind);
+        await this.maybeSendMessageDraft(activeTurn, update.draftText || "…", update.draftKind, update.startedAssistantText);
         return;
       }
       case "item/completed": {
@@ -563,7 +582,7 @@ export class TelegramCodexBridge {
         }
 
         if (update.startedAssistantText) {
-          await this.updateTurnStatus(activeTurn.turnId, stableStatusText("streaming"), true);
+          await this.updateTurnStatus(activeTurn.turnId, buildStatusDraft("streaming"), true);
         }
 
         await this.database.appendTurnStream(activeTurn.turnId, update.draftText);
@@ -600,7 +619,7 @@ export class TelegramCodexBridge {
     const finalText = readbackText.trim().length > 0 ? readbackText : streamedText;
     const finalBody = finalText || "(no assistant output)";
     const messageId = await this.publishFinalTurnText(activeTurn, finalBody);
-    await this.updateTurnStatus(turnId, stableStatusText("done"), true);
+    await this.updateTurnStatus(turnId, buildStatusDraft("done"), true);
 
     await this.database.appendTurnStream(turnId, finalBody);
     await this.database.completeTurn(turnId, messageId, "completed");
@@ -624,7 +643,7 @@ export class TelegramCodexBridge {
     const fallbackOutput = readbackText.trim().length > 0 ? readbackText : streamedText;
     const text = [fallbackOutput, `\n\nCodex error: ${errorMessage}`].filter(Boolean).join("");
     const messageId = await this.publishFinalTurnText(activeTurn, text);
-    await this.updateTurnStatus(turnId, stableStatusText("failed"), true);
+    await this.updateTurnStatus(turnId, buildStatusDraft("failed"), true);
 
     await this.database.appendTurnStream(turnId, text);
     await this.database.completeTurn(turnId, messageId, "failed");
@@ -665,7 +684,7 @@ export class TelegramCodexBridge {
     if (finalText.trim().length > 0) {
       messageId = await this.publishFinalTurnText(activeTurn, finalText);
     }
-    await this.updateTurnStatus(activeTurn.turnId, stableStatusText("interrupted"), true);
+    await this.updateTurnStatus(activeTurn.turnId, buildStatusDraft("interrupted"), true);
 
     await this.database.appendTurnStream(activeTurn.turnId, finalText);
     await this.database.completeTurn(activeTurn.turnId, messageId, "interrupted");
@@ -734,7 +753,11 @@ export class TelegramCodexBridge {
   }
 
   private async handleApprovalRequest(session: TopicSession, request: ApprovalServerRequest): Promise<void> {
-    await this.updateTurnStatus(request.params.turnId, stableStatusText("awaiting_approval"), true);
+    await this.updateTurnStatus(
+      request.params.turnId,
+      buildStatusDraft("waiting", request.method === "item/commandExecution/requestApproval" ? "approval" : "file approval"),
+      true
+    );
 
     const promptText =
       request.method === "item/commandExecution/requestApproval"
@@ -765,7 +788,7 @@ export class TelegramCodexBridge {
   }
 
   private async handleUserInputRequest(session: TopicSession, request: UserInputServerRequest): Promise<void> {
-    await this.updateTurnStatus(request.params.turnId, stableStatusText("awaiting_input"), true);
+    await this.updateTurnStatus(request.params.turnId, buildStatusDraft("waiting", "input"), true);
 
     const promptText = [
       "Codex is asking for user input.",
@@ -858,15 +881,23 @@ export class TelegramCodexBridge {
     return this.database.getSessionByCodexThreadId(threadId);
   }
 
-  private async updateTurnStatus(turnId: string, statusText: string, force = false): Promise<void> {
+  private async updateTurnStatus(
+    turnId: string,
+    statusDraft: TurnStatusDraft,
+    force = false,
+    preserveDetails = false
+  ): Promise<void> {
     const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn || activeTurn.statusMessageId === null) {
+    if (!activeTurn) {
       return;
     }
 
-    const normalized = truncateStatus(statusText);
     const now = Date.now();
-    if (activeTurn.lastStatusText === normalized) {
+    const nextStatus =
+      preserveDetails && activeTurn.statusDraft?.state === statusDraft.state && activeTurn.statusDraft.details
+        ? { ...statusDraft, details: activeTurn.statusDraft.details }
+        : statusDraft;
+    if (isSameStatusDraft(activeTurn.statusDraft, nextStatus)) {
       return;
     }
 
@@ -874,30 +905,14 @@ export class TelegramCodexBridge {
       return;
     }
 
-    try {
-      await this.telegram.editMessageText(activeTurn.chatId, activeTurn.statusMessageId, normalized, {
-        message_thread_id: activeTurn.topicId
-      });
-      activeTurn.lastStatusText = normalized;
-      activeTurn.lastStatusUpdateAt = now;
-    } catch (error) {
-      if (isTelegramMessageMissingError(error)) {
-        activeTurn.statusMessageId = null;
-        activeTurn.lastStatusText = null;
-        return;
-      }
-
-      if (isRetryAfterError(error)) {
-        return;
-      }
-
-      throw error;
-    }
+    activeTurn.statusDraft = nextStatus;
+    activeTurn.lastStatusUpdateAt = now;
+    await this.queueDraftRender(activeTurn, force);
   }
 
   private async clearTurnStatus(activeTurn: ActiveTurn): Promise<void> {
-    activeTurn.statusMessageId = null;
-    activeTurn.lastStatusText = null;
+    activeTurn.statusDraft = null;
+    await this.queueDraftRender(activeTurn, true);
   }
 
   private async clearTurnStatusById(turnId: string): Promise<void> {
@@ -931,20 +946,9 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const renderedPreview =
-      kind === "commentary" ? renderTelegramCommentaryDraft(buildCommentaryDraftPreview(text)) : renderTelegramAssistantDraft(text);
-    const now = Date.now();
-    if (!force) {
-      if (activeTurn.lastDraftText === renderedPreview.text && activeTurn.draftState.pendingText === null) {
-        return;
-      }
-    }
-
-    activeTurn.draftState.pendingText = renderedPreview.text;
-    activeTurn.draftState.pendingParseMode = renderedPreview.parse_mode;
-
-    const delayMs = force ? 0 : Math.max(0, 400 - (now - activeTurn.lastDraftUpdateAt));
-    this.scheduleDraftFlush(activeTurn, delayMs);
+    activeTurn.previewText = text;
+    activeTurn.previewKind = kind;
+    await this.queueDraftRender(activeTurn, force);
   }
 
   private async replaceTurnStatusWithFinal(activeTurn: ActiveTurn, text: string): Promise<number> {
@@ -957,6 +961,20 @@ export class TelegramCodexBridge {
     }
 
     return this.replaceTurnStatusWithFinal(activeTurn, text);
+  }
+
+  private async queueDraftRender(activeTurn: ActiveTurn, force = false): Promise<void> {
+    const renderedPreview = renderTelegramTurnDraft(activeTurn.statusDraft, activeTurn.previewText, activeTurn.previewKind);
+    const now = Date.now();
+    if (!force && activeTurn.lastDraftText === renderedPreview.text && activeTurn.draftState.pendingText === null) {
+      return;
+    }
+
+    activeTurn.draftState.pendingText = renderedPreview.text;
+    activeTurn.draftState.pendingParseMode = renderedPreview.parse_mode;
+
+    const delayMs = force ? 0 : Math.max(0, 400 - (now - activeTurn.lastDraftUpdateAt));
+    this.scheduleDraftFlush(activeTurn, delayMs);
   }
 
   private async sendChunkedText(
@@ -1120,6 +1138,18 @@ export class TelegramCodexBridge {
 
     if (activeTurn.draftState.inFlight) {
       await activeTurn.draftState.inFlight;
+    }
+
+    try {
+      if (activeTurn.lastDraftText !== null) {
+        await this.sendDraftText(activeTurn, "");
+        activeTurn.lastDraftText = "";
+        activeTurn.lastDraftUpdateAt = Date.now();
+      }
+    } catch (error) {
+      if (!isRetryAfterError(error)) {
+        throw error;
+      }
     }
 
     activeTurn.draftState.pendingText = null;
@@ -1318,68 +1348,75 @@ function truncateStatus(text: string): string {
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
-function statusTextForItem(item: { type: string } & Record<string, unknown>): string {
-  switch (item.type) {
-    case "reasoning":
-      return stableStatusText("thinking");
-    case "commandExecution":
-      return stableStatusText("running_command");
-    case "fileChange":
-      return stableStatusText("editing_files");
-    case "plan":
-      return stableStatusText("planning");
-    case "mcpToolCall":
-    case "dynamicToolCall":
-    case "collabAgentToolCall":
-      return stableStatusText("using_tool");
-    case "webSearch":
-      return stableStatusText("searching");
-    default:
-      return stableStatusText("thinking");
+function buildStatusDraft(state: TurnStatusState, details: string | null = null): TurnStatusDraft {
+  switch (state) {
+    case "thinking":
+      return { state, emoji: "🤔", details };
+    case "planning":
+      return { state, emoji: "🗺️", details };
+    case "using tool":
+      return { state, emoji: "🛠️", details };
+    case "running":
+      return { state, emoji: "💻", details };
+    case "editing":
+      return { state, emoji: "✏️", details };
+    case "searching":
+      return { state, emoji: "🔎", details };
+    case "streaming":
+      return { state, emoji: "✍️", details };
+    case "waiting":
+      return { state, emoji: "⏸️", details };
+    case "done":
+      return { state, emoji: "✅", details };
+    case "failed":
+      return { state, emoji: "❌", details };
+    case "interrupted":
+      return { state, emoji: "⏹️", details };
   }
 }
 
-function stableStatusText(
-  state:
-    | "thinking"
-    | "planning"
-    | "using_tool"
-    | "running_command"
-    | "editing_files"
-    | "searching"
-    | "streaming"
-    | "awaiting_approval"
-    | "awaiting_input"
-    | "done"
-    | "failed"
-    | "interrupted"
-): string {
-  switch (state) {
-    case "thinking":
-      return "Thinking 🤔";
-    case "planning":
-      return "Planning 🗺️";
-    case "using_tool":
-      return "Using tool 🛠️";
-    case "running_command":
-      return "Running command 💻";
-    case "editing_files":
-      return "Editing files ✏️";
-    case "searching":
-      return "Searching 🔎";
-    case "streaming":
-      return "Streaming ✍️";
-    case "awaiting_approval":
-      return "Awaiting approval ⏸️";
-    case "awaiting_input":
-      return "Awaiting input ⏸️";
-    case "done":
-      return "Done ✅";
-    case "failed":
-      return "Failed ❌";
-    case "interrupted":
-      return "Interrupted ⏹️";
+function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
+  switch (item.type) {
+    case "reasoning":
+      return buildStatusDraft("thinking");
+    case "commandExecution":
+      return buildStatusDraft("running", item.command);
+    case "fileChange":
+      return buildStatusDraft("editing", summarizeFileChanges(item.changes));
+    case "plan":
+      return buildStatusDraft("planning");
+    case "mcpToolCall":
+      return buildStatusDraft("using tool", `${item.server}.${item.tool}`);
+    case "dynamicToolCall":
+      return buildStatusDraft("using tool", item.tool);
+    case "collabAgentToolCall":
+      return buildStatusDraft("using tool", item.tool);
+    case "webSearch":
+      return buildStatusDraft("searching", item.query);
+    default:
+      return buildStatusDraft("thinking");
   }
+}
+
+function isSameStatusDraft(left: TurnStatusDraft | null, right: TurnStatusDraft | null): boolean {
+  return left?.state === right?.state && left?.emoji === right?.emoji && left?.details === right?.details;
+}
+
+function summarizeFileChanges(changes: Array<{ path: string }>): string | null {
+  if (changes.length === 0) {
+    return null;
+  }
+
+  if (changes.length === 1) {
+    return changes[0]?.path ?? null;
+  }
+
+  const [first, second] = changes;
+  if (changes.length === 2 && first && second) {
+    return `${first.path}, ${second.path}`;
+  }
+
+  return `${first?.path ?? changes.length} (+${changes.length - 1} more)`;
 }
 
 function renderQueuePreview(queueState: QueueStateSnapshot): string | null {
@@ -1422,25 +1459,44 @@ function buildQueuePreviewKeyboard(queueState: QueueStateSnapshot, activeTurnId:
 }
 
 function buildDraftPreview(text: string): string {
-  if (text.length <= TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT) {
-    return text;
-  }
+  return buildTruncatedPreview(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT, "…\n", "\n\n[preview truncated]");
+}
 
-  const prefix = "…\n";
-  const suffix = "\n\n[preview truncated]";
-  const budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT - prefix.length - suffix.length;
-  return `${prefix}${text.slice(-budget)}${suffix}`;
+function buildDraftPreviewWithLimit(text: string, limit: number): string {
+  return buildTruncatedPreview(text, limit, "…\n", "\n\n[preview truncated]");
 }
 
 function buildCommentaryDraftPreview(text: string): string {
-  if (text.length <= TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT) {
+  return buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT);
+}
+
+function buildCommentaryDraftPreviewWithLimit(text: string, limit: number): string {
+  return buildTruncatedPreview(text, limit, "...\n", "\n\n[commentary truncated]");
+}
+
+function buildTruncatedPreview(text: string, limit: number, prefix: string, suffix: string): string {
+  if (text.length <= limit) {
     return text;
   }
 
-  const prefix = "...\n";
-  const suffix = "\n\n[commentary truncated]";
-  const budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT - prefix.length - suffix.length;
+  const budget = Math.max(0, limit - prefix.length - suffix.length);
   return `${prefix}${text.slice(-budget)}${suffix}`;
+}
+
+function buildCodeBlockContent(header: string, body: string | null): string {
+  return [header, "----------", body].filter((value): value is string => value !== null && value.length > 0).join("\n");
+}
+
+function buildStatusBlockContent(statusDraft: TurnStatusDraft): string {
+  return buildCodeBlockContent(`${statusDraft.state} ${statusDraft.emoji}`, statusDraft.details);
+}
+
+function buildCommentaryBlockContent(text: string): string {
+  return buildCodeBlockContent("thinking 🧠", text);
+}
+
+function buildCodeFence(content: string): string {
+  return `\`\`\`\n${content}\n\`\`\``;
 }
 
 function chunkTelegramMessage(text: string): string[] {
@@ -1499,15 +1555,49 @@ function renderTelegramAssistantText(text: string): { text: string; parse_mode?:
   };
 }
 
-function renderTelegramAssistantDraft(text: string): { text: string; parse_mode?: TelegramParseMode } {
-  return renderTelegramAssistantText(buildDraftPreview(text));
+function renderTelegramTurnDraft(
+  statusDraft: TurnStatusDraft | null,
+  previewText: string | null,
+  previewKind: "assistant" | "commentary" | null
+): { text: string; parse_mode?: TelegramParseMode } {
+  let budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT;
+  let rendered = renderTelegramTurnDraftWithLimit(statusDraft, previewText, previewKind, budget);
+
+  for (let attempt = 0; attempt < 3 && rendered.text.length > TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT; attempt += 1) {
+    const overflow = rendered.text.length - TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT;
+    budget = Math.max(0, budget - overflow - 16);
+    rendered = renderTelegramTurnDraftWithLimit(statusDraft, previewText, previewKind, budget);
+  }
+
+  return rendered;
 }
 
-function renderTelegramCommentaryDraft(text: string): { text: string; parse_mode: TelegramParseMode } {
-  return {
-    text: renderTelegramCodeFence("", text),
-    parse_mode: "HTML"
-  };
+function renderTelegramTurnDraftWithLimit(
+  statusDraft: TurnStatusDraft | null,
+  previewText: string | null,
+  previewKind: "assistant" | "commentary" | null,
+  limit: number
+): { text: string; parse_mode?: TelegramParseMode } {
+  const parts: string[] = [];
+  const statusMarkdown = statusDraft ? buildCodeFence(buildStatusBlockContent(statusDraft)) : null;
+  if (statusMarkdown) {
+    parts.push(statusMarkdown);
+  }
+
+  if (previewText && previewKind === "commentary") {
+    const reservedChars = parts.join("\n\n").length + (parts.length > 0 ? 2 : 0);
+    const fenceOverhead = "```\n\n```".length;
+    const commentaryHeaderOverhead = "thinking 🧠\n----------\n".length;
+    const bodyBudget = Math.max(0, limit - reservedChars - fenceOverhead - commentaryHeaderOverhead);
+    const commentaryPreview = buildCommentaryDraftPreviewWithLimit(previewText, bodyBudget);
+    parts.push(buildCodeFence(buildCommentaryBlockContent(commentaryPreview)));
+  } else if (previewText && previewKind === "assistant") {
+    const reservedChars = parts.join("\n\n").length + (parts.length > 0 ? 2 : 0);
+    const assistantBudget = Math.max(0, limit - reservedChars);
+    parts.push(buildDraftPreviewWithLimit(previewText, assistantBudget));
+  }
+
+  return renderTelegramAssistantText(parts.join("\n\n"));
 }
 
 function markdownToTelegramHtml(text: string): string {
