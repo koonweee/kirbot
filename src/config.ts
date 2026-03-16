@@ -1,5 +1,5 @@
 import { config as loadDotenv } from "dotenv";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { z } from "zod";
 
@@ -39,8 +39,8 @@ const envSchema = z.object({
     z.enum(["untrusted", "on-request", "on-failure", "never"])
   ),
   CODEX_SERVICE_NAME: z.string().default("telegram-codex-bridge"),
-  CODEX_BASE_INSTRUCTIONS: optionalEnvString(z.string()),
-  CODEX_DEVELOPER_INSTRUCTIONS: optionalEnvString(z.string()),
+  CODEX_BASE_INSTRUCTIONS_FILE: optionalEnvString(z.string()),
+  CODEX_DEVELOPER_INSTRUCTIONS_FILE: optionalEnvString(z.string()),
   CODEX_CONFIG_JSON: optionalEnvString(z.string())
 });
 
@@ -128,11 +128,20 @@ export function loadConfig(): AppConfig {
       sandbox: parsed.CODEX_SANDBOX_MODE as SandboxMode | undefined,
       approvalPolicy: parsed.CODEX_APPROVAL_POLICY as AskForApproval | undefined,
       serviceName: parsed.CODEX_SERVICE_NAME,
-      baseInstructions: parsed.CODEX_BASE_INSTRUCTIONS,
-      developerInstructions: parsed.CODEX_DEVELOPER_INSTRUCTIONS,
+      baseInstructions: readOptionalTextFile(parsed.CODEX_BASE_INSTRUCTIONS_FILE),
+      developerInstructions: readOptionalTextFile(parsed.CODEX_DEVELOPER_INSTRUCTIONS_FILE),
       config: parseJsonConfig(parsed.CODEX_CONFIG_JSON)
     }
   };
+}
+
+function readOptionalTextFile(path: string | undefined): string | undefined {
+  if (!path) {
+    return undefined;
+  }
+
+  const content = readFileSync(expandHomePath(path), "utf8");
+  return content.trim().length > 0 ? content : undefined;
 }
 
 function defaultTelegramMediaTempDir(): string {

@@ -86,6 +86,60 @@ describe("CodexGateway", () => {
     await expect(initializePromise).resolves.toBeUndefined();
   });
 
+  it("passes null instruction fields to thread/start when config does not provide them", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      appServerUrl: "ws://127.0.0.1:8787",
+      spawnAppServer: false,
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    void gateway.createThread("Test thread");
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/start",
+      id: 2,
+      params: {
+        cwd: "/workspace",
+        model: null,
+        modelProvider: null,
+        approvalPolicy: null,
+        sandbox: null,
+        config: null,
+        serviceName: "telegram-codex-bridge",
+        baseInstructions: null,
+        developerInstructions: null,
+        experimentalRawEvents: false,
+        persistExtendedHistory: false,
+        ephemeral: false,
+        personality: null,
+        serviceTier: null
+      }
+    });
+  });
+
   it("prefers final-answer agent messages when reading a completed turn", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
