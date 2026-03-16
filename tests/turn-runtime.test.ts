@@ -28,8 +28,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     runtime.queuePendingSteer(turn, message("Follow up"));
@@ -60,8 +59,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     const pending = runtime.queuePendingSteer(turn, message("Follow up"));
@@ -82,8 +80,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     runtime.queuePendingSteer(turn, message("First steer", 2));
@@ -105,8 +102,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     runtime.queuePendingSteer(turn, message("First steer", 2));
@@ -128,8 +124,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     runtime.queuePendingSteer(turn, message("Follow up"));
@@ -148,8 +143,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     runtime.registerAssistantItem("turn-1", "item-1", "commentary");
@@ -190,8 +184,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       threadId: "thread-1",
-      turnId: "turn-1",
-      draftId: 1
+      turnId: "turn-1"
     });
 
     runtime.appendAssistantDelta("turn-1", "item-1", "First part");

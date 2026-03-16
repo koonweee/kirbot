@@ -1,4 +1,5 @@
 import type { UserTurnInput, UserTurnMessage } from "./domain";
+import { buildUserInputSignature } from "./bridge/input-signature";
 import type { MessagePhase } from "./generated/codex/MessagePhase";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
@@ -13,7 +14,6 @@ export type RuntimeTurn = {
   topicId: number;
   threadId: string;
   turnId: string;
-  draftId: number;
   assistantItemOrder: string[];
   assistantItems: Map<string, AssistantItemState>;
   hasAssistantText: boolean;
@@ -65,14 +65,12 @@ export class BridgeTurnRuntime {
     topicId: number;
     threadId: string;
     turnId: string;
-    draftId: number;
   }): RuntimeTurn {
     const turn: RuntimeTurn = {
       chatId: input.chatId,
       topicId: input.topicId,
       threadId: input.threadId,
       turnId: input.turnId,
-      draftId: input.draftId,
       assistantItemOrder: [],
       assistantItems: new Map<string, AssistantItemState>(),
       hasAssistantText: false
@@ -450,33 +448,4 @@ function mergeUserTurnInput(messageInputs: UserTurnInput[][]): UserTurnInput[] {
   }
 
   return merged;
-}
-
-function buildUserInputSignature(input: UserInput[]): string {
-  return JSON.stringify(
-    input.map((item) => {
-      if (item.type === "text") {
-        return {
-          type: "text",
-          text: item.text
-        };
-      }
-
-      if (item.type === "localImage") {
-        return {
-          type: "localImage",
-          path: item.path
-        };
-      }
-
-      if (item.type === "image") {
-        return {
-          type: "image",
-          url: item.url
-        };
-      }
-
-      return item;
-    })
-  );
 }
