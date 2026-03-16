@@ -1,0 +1,1593 @@
+import type { AppConfig } from "./config";
+import type { ApprovalServerRequest, UserInputServerRequest } from "./codex";
+import { BridgeDatabase } from "./db";
+import type { PendingServerRequest, TopicLifecycleEvent, TopicSession, UserTextMessage } from "./domain";
+import type { ServerNotification } from "./generated/codex/ServerNotification";
+import type { ServerRequest } from "./generated/codex/ServerRequest";
+import type { RequestId } from "./generated/codex/RequestId";
+import type { CommandExecutionApprovalDecision } from "./generated/codex/v2/CommandExecutionApprovalDecision";
+import type { CommandExecutionRequestApprovalParams } from "./generated/codex/v2/CommandExecutionRequestApprovalParams";
+import type { FileChangeApprovalDecision } from "./generated/codex/v2/FileChangeApprovalDecision";
+import type { FileChangeRequestApprovalParams } from "./generated/codex/v2/FileChangeRequestApprovalParams";
+import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
+import { JsonRpcMethodError } from "./rpc";
+import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
+
+type InlineKeyboardMarkup = {
+  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+};
+
+type TelegramParseMode = "HTML";
+
+type TelegramSendOptions = {
+  message_thread_id?: number;
+  reply_markup?: InlineKeyboardMarkup;
+  parse_mode?: TelegramParseMode;
+};
+
+type TelegramDraftOptions = {
+  message_thread_id?: number;
+  parse_mode?: TelegramParseMode;
+};
+
+export interface TelegramApi {
+  createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }>;
+  sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }>;
+  sendMessageDraft(chatId: number, draftId: number, text: string, options?: TelegramDraftOptions): Promise<true>;
+  sendChatAction(
+    chatId: number,
+    action: "typing" | "upload_document",
+    options?: {
+      message_thread_id?: number;
+    }
+  ): Promise<true>;
+  editMessageText(
+    chatId: number,
+    messageId: number,
+    text: string,
+    options?: TelegramSendOptions
+  ): Promise<unknown>;
+  deleteMessage(chatId: number, messageId: number): Promise<true>;
+  answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true>;
+}
+
+export type CallbackQueryEvent = {
+  callbackQueryId: string;
+  data: string;
+  chatId: number;
+  topicId: number | null;
+};
+
+export interface BridgeCodexApi {
+  createThread(title: string): Promise<string>;
+  ensureThreadLoaded(threadId: string): Promise<void>;
+  sendTextTurn(threadId: string, text: string): Promise<{ id: string }>;
+  steerTurn(threadId: string, expectedTurnId: string, text: string): Promise<{ turnId: string }>;
+  interruptTurn(threadId: string, turnId: string): Promise<void>;
+  archiveThread(threadId: string): Promise<void>;
+  readTurnMessages(threadId: string, turnId: string): Promise<string>;
+  respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
+  respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
+  respondToUserInputRequest(id: RequestId, response: ToolRequestUserInputResponse): Promise<void>;
+  respondUnsupportedRequest(id: RequestId, message: string): Promise<void>;
+  onNotification(listener: (notification: ServerNotification) => void): void;
+  onServerRequest(listener: (request: ServerRequest) => void): void;
+}
+
+type ActiveTurn = {
+  chatId: number;
+  topicId: number;
+  threadId: string;
+  turnId: string;
+  draftId: number;
+  statusMessageId: number | null;
+  lastStatusText: string | null;
+  lastStatusUpdateAt: number;
+  lastDraftText: string | null;
+  lastDraftUpdateAt: number;
+  lastChatActionAt: number;
+};
+
+const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
+const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
+
+export class TelegramCodexBridge {
+  readonly #runtime = new BridgeTurnRuntime();
+  readonly #activeTurns = new Map<string, ActiveTurn>();
+  readonly #queuePreviewMessageIds = new Map<string, number>();
+  readonly #submitPendingSteersAfterInterrupt = new Set<string>();
+
+  constructor(
+    private readonly config: AppConfig,
+    private readonly database: BridgeDatabase,
+    private readonly telegram: TelegramApi,
+    private readonly codex: BridgeCodexApi
+  ) {
+    this.codex.onNotification((notification) => {
+      void this.handleNotification(notification).catch((error) => {
+        console.error("Failed to process Codex notification", error);
+      });
+    });
+    this.codex.onServerRequest((request) => {
+      void this.handleServerRequest(request).catch((error) => {
+        console.error("Failed to process Codex server request", error);
+      });
+    });
+  }
+
+  async handleUserTextMessage(message: UserTextMessage): Promise<void> {
+    if (message.chatId !== this.config.telegram.chatId) {
+      return;
+    }
+
+    if (!this.config.telegram.allowedUserIds.has(message.userId)) {
+      return;
+    }
+
+    const inserted = await this.database.markUpdateProcessed(message.updateId);
+    if (!inserted) {
+      return;
+    }
+
+    if (message.topicId === null) {
+      await this.startSessionFromRootMessage(message);
+      return;
+    }
+
+    const resolvedPendingInput = await this.tryResolveUserInput(message);
+    if (resolvedPendingInput) {
+      return;
+    }
+
+    if (message.topicId !== null) {
+      const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
+      if (!session) {
+        await this.startSessionInExistingTopic(message);
+        return;
+      }
+
+      if (!session.codexThreadId) {
+        await this.telegram.sendMessage(
+          message.chatId,
+          "This topic is still provisioning a Codex session. Try again in a moment.",
+          {
+            message_thread_id: message.topicId
+          }
+        );
+        return;
+      }
+
+      const activeTurn = this.findActiveTurnByTopic(message.chatId, message.topicId);
+      if (activeTurn) {
+        await this.trySteerTurn(activeTurn, message);
+        return;
+      }
+
+      await this.sendTurnForSession(session, message);
+      return;
+    }
+
+    await this.telegram.sendMessage(
+      message.chatId,
+      "Could not determine a Telegram topic for this message, so no Codex session was started."
+    );
+  }
+
+  async handleTopicClosed(event: TopicLifecycleEvent): Promise<void> {
+    const session = await this.database.archiveSessionByTopic(event.chatId, event.topicId);
+    if (!session?.codexThreadId) {
+      return;
+    }
+
+    try {
+      await this.codex.archiveThread(session.codexThreadId);
+    } catch (error) {
+      console.error("Failed to archive Codex thread", error);
+    }
+  }
+
+  async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
+    if (event.data.startsWith("req:")) {
+      await this.handleRequestCallbackQuery(event);
+      return;
+    }
+
+    if (event.data.startsWith("turn:")) {
+      await this.handleTurnCallbackQuery(event);
+      return;
+    }
+
+    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      text: "Unsupported callback."
+    });
+  }
+
+  private async handleRequestCallbackQuery(event: CallbackQueryEvent): Promise<void> {
+    const [, requestIdText, action] = event.data.split(":");
+    const requestId = Number.parseInt(requestIdText ?? "", 10);
+    if (Number.isNaN(requestId)) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Invalid callback payload."
+      });
+      return;
+    }
+
+    const request = await this.database.getServerRequestById(requestId);
+    if (!request || request.status !== "pending") {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "This request is no longer pending."
+      });
+      return;
+    }
+
+    await this.resolveApprovalAction(request, action ?? "cancel");
+    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      text: "Request updated."
+    });
+  }
+
+  private async handleTurnCallbackQuery(event: CallbackQueryEvent): Promise<void> {
+    const [, turnId, action] = event.data.split(":");
+    if (action !== "sendNow" || !turnId) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Unsupported callback."
+      });
+      return;
+    }
+
+    if (event.topicId === null) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "This action requires a topic."
+      });
+      return;
+    }
+
+    const activeTurn = this.findActiveTurnByTopic(event.chatId, event.topicId);
+    if (!activeTurn || activeTurn.turnId !== turnId) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "This turn is no longer active."
+      });
+      return;
+    }
+
+    const queueState = this.#runtime.getQueueState(event.chatId, event.topicId);
+    if (queueState.pendingSteers.length === 0) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "No pending steer instructions to send."
+      });
+      return;
+    }
+
+    this.#submitPendingSteersAfterInterrupt.add(turnId);
+
+    try {
+      await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Submitting queued steer instructions."
+      });
+    } catch (error) {
+      this.#submitPendingSteersAfterInterrupt.delete(turnId);
+
+      const classification = classifyInterruptError(error);
+      if (classification.kind === "stale_or_missing_active_turn") {
+        await this.finalizeInterruptedTurn(activeTurn, true);
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Previous turn already ended. Submitting queued steer instructions."
+        });
+        return;
+      }
+
+      console.error("Failed to interrupt turn", error);
+      await this.telegram.sendMessage(
+        event.chatId,
+        `Failed to interrupt the current turn: ${formatError(error)}`,
+        {
+          message_thread_id: event.topicId
+        }
+      );
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Failed to interrupt turn."
+      });
+    }
+  }
+
+  private async startSessionFromRootMessage(message: UserTextMessage): Promise<void> {
+    const title = deriveTopicTitle(message.text);
+    const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
+
+    const pending = await this.database.createProvisioningSession({
+      telegramChatId: String(message.chatId),
+      telegramTopicId: forumTopic.message_thread_id,
+      rootMessageId: message.messageId,
+      createdByUserId: message.userId,
+      title
+    });
+
+    try {
+      const threadId = await this.codex.createThread(title);
+      const session = await this.database.activateSession(pending.id, threadId);
+
+      await this.telegram.sendMessage(
+        message.chatId,
+        `Created session topic "${title}". Continue in the new topic.`
+      );
+
+      await this.telegram.sendMessage(message.chatId, `Starting Codex session for "${title}"...`, {
+        message_thread_id: forumTopic.message_thread_id
+      });
+
+      await this.sendTurnForSession(session, {
+        ...message,
+        topicId: forumTopic.message_thread_id
+      });
+    } catch (error) {
+      await this.database.markSessionErrored(pending.id);
+      await this.telegram.sendMessage(
+        message.chatId,
+        `Failed to create Codex session for "${title}": ${formatError(error)}`,
+        {
+          message_thread_id: forumTopic.message_thread_id
+        }
+      );
+    }
+  }
+
+  private async startSessionInExistingTopic(message: UserTextMessage): Promise<void> {
+    if (message.topicId === null) {
+      throw new Error("Cannot start an in-topic session without a Telegram topic id");
+    }
+
+    const title = deriveTopicTitle(message.text);
+    const pending = await this.database.createProvisioningSession({
+      telegramChatId: String(message.chatId),
+      telegramTopicId: message.topicId,
+      rootMessageId: message.messageId,
+      createdByUserId: message.userId,
+      title
+    });
+
+    try {
+      const threadId = await this.codex.createThread(title);
+      const session = await this.database.activateSession(pending.id, threadId);
+
+      await this.telegram.sendMessage(message.chatId, `Starting Codex session for "${title}"...`, {
+        message_thread_id: message.topicId
+      });
+
+      await this.sendTurnForSession(session, message);
+    } catch (error) {
+      await this.database.markSessionErrored(pending.id);
+      await this.telegram.sendMessage(
+        message.chatId,
+        `Failed to create Codex session for "${title}": ${formatError(error)}`,
+        {
+          message_thread_id: message.topicId
+        }
+      );
+    }
+  }
+
+  private async sendTurnForSession(session: TopicSession, message: UserTextMessage): Promise<void> {
+    if (!session.codexThreadId) {
+      throw new Error(`Session ${session.id} has no Codex thread id`);
+    }
+
+    if (message.topicId === null) {
+      throw new Error("Cannot send a Codex turn without a Telegram topic id");
+    }
+
+    await this.codex.ensureThreadLoaded(session.codexThreadId);
+    await this.sendChatActionBestEffort(message.chatId, message.topicId);
+
+    const turn = await this.codex.sendTextTurn(session.codexThreadId, message.text);
+    await this.database.recordTurnStart({
+      telegramUpdateId: message.updateId,
+      telegramChatId: String(message.chatId),
+      telegramTopicId: message.topicId,
+      codexThreadId: session.codexThreadId,
+      codexTurnId: turn.id,
+      draftId: message.updateId
+    });
+
+    const initialStatus = stableStatusText("thinking");
+    const statusMessage = await this.telegram.sendMessage(message.chatId, initialStatus, {
+      message_thread_id: message.topicId
+    });
+
+    this.#activeTurns.set(turn.id, {
+      chatId: message.chatId,
+      topicId: message.topicId,
+      threadId: session.codexThreadId,
+      turnId: turn.id,
+      draftId: message.updateId,
+      statusMessageId: statusMessage.message_id,
+      lastStatusText: initialStatus,
+      lastStatusUpdateAt: Date.now(),
+      lastDraftText: null,
+      lastDraftUpdateAt: 0,
+      lastChatActionAt: 0
+    });
+    this.#runtime.registerTurn({
+      chatId: message.chatId,
+      topicId: message.topicId,
+      threadId: session.codexThreadId,
+      turnId: turn.id,
+      draftId: message.updateId
+    });
+  }
+
+  private async handleNotification(notification: ServerNotification): Promise<void> {
+    switch (notification.method) {
+      case "turn/started": {
+        await this.updateTurnStatus(notification.params.turn.id, stableStatusText("thinking"));
+        return;
+      }
+      case "item/started": {
+        await this.updateTurnStatus(notification.params.turnId, statusTextForItem(notification.params.item));
+        return;
+      }
+      case "turn/plan/updated": {
+        await this.updateTurnStatus(notification.params.turnId, stableStatusText("planning"));
+        return;
+      }
+      case "item/reasoning/summaryTextDelta": {
+        await this.updateTurnStatus(notification.params.turnId, stableStatusText("thinking"));
+        return;
+      }
+      case "item/mcpToolCall/progress": {
+        await this.updateTurnStatus(notification.params.turnId, stableStatusText("using_tool"));
+        return;
+      }
+      case "item/commandExecution/outputDelta": {
+        await this.updateTurnStatus(notification.params.turnId, "Running command...");
+        return;
+      }
+      case "item/fileChange/outputDelta": {
+        await this.updateTurnStatus(notification.params.turnId, "Editing files...");
+        return;
+      }
+      case "item/agentMessage/delta": {
+        const activeTurn = this.#activeTurns.get(notification.params.turnId);
+        const update = this.#runtime.appendAssistantDelta(
+          notification.params.turnId,
+          notification.params.itemId,
+          notification.params.delta
+        );
+        if (!activeTurn || !update) {
+          return;
+        }
+
+        if (update.startedAssistantText) {
+          await this.updateTurnStatus(activeTurn.turnId, stableStatusText("streaming"), true);
+        }
+
+        await this.database.appendTurnStream(activeTurn.turnId, update.rendered);
+        await this.maybeSendChatAction(activeTurn);
+        await this.maybeSendMessageDraft(activeTurn, update.rendered || "…");
+        return;
+      }
+      case "item/completed": {
+        if (notification.params.item.type === "userMessage") {
+          const queueState = this.#runtime.acknowledgeCommittedUserItem(notification.params.turnId, notification.params.item);
+          if (queueState) {
+            await this.syncQueuePreview(queueState);
+          }
+          return;
+        }
+
+        if (notification.params.item.type !== "agentMessage") {
+          return;
+        }
+
+        const activeTurn = this.#activeTurns.get(notification.params.turnId);
+        const update = this.#runtime.commitAssistantItem(
+          notification.params.turnId,
+          notification.params.item.id,
+          notification.params.item.text
+        );
+        if (!activeTurn || !update) {
+          return;
+        }
+
+        if (update.startedAssistantText) {
+          await this.updateTurnStatus(activeTurn.turnId, stableStatusText("streaming"), true);
+        }
+
+        await this.database.appendTurnStream(activeTurn.turnId, update.rendered);
+        await this.maybeSendMessageDraft(activeTurn, update.rendered || "…", true);
+        return;
+      }
+      case "turn/completed": {
+        if (notification.params.turn.status === "interrupted") {
+          await this.finalizeInterruptedTurnById(notification.params.threadId, notification.params.turn.id);
+          return;
+        }
+
+        await this.completeTurn(notification.params.threadId, notification.params.turn.id);
+        return;
+      }
+      case "error": {
+        await this.failTurn(notification.params.threadId, notification.params.turnId, notification.params.error.message);
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  private async completeTurn(threadId: string, turnId: string): Promise<void> {
+    const activeTurn = this.#activeTurns.get(turnId);
+    if (!activeTurn) {
+      return;
+    }
+
+    const streamedText = this.#runtime.renderAssistantItems(turnId);
+    const readbackText = await this.codex.readTurnMessages(threadId, turnId);
+    const finalText = readbackText.trim().length > 0 ? readbackText : streamedText;
+    const finalBody = finalText || "(no assistant output)";
+    const messageId = await this.publishFinalTurnText(activeTurn, finalBody);
+    await this.updateTurnStatus(turnId, stableStatusText("done"), true);
+
+    await this.database.appendTurnStream(turnId, finalBody);
+    await this.database.completeTurn(turnId, messageId, "completed");
+    const queueState = this.#runtime.finalizeTurn(turnId);
+    this.removeActiveTurn(turnId);
+    if (queueState) {
+      await this.syncQueuePreview(queueState);
+      await this.maybeSendNextQueuedFollowUp(queueState.chatId, queueState.topicId);
+    }
+  }
+
+  private async failTurn(threadId: string, turnId: string, errorMessage: string): Promise<void> {
+    const activeTurn = this.#activeTurns.get(turnId);
+    if (!activeTurn) {
+      return;
+    }
+
+    const streamedText = this.#runtime.renderAssistantItems(turnId);
+    const readbackText = await this.codex.readTurnMessages(threadId, turnId);
+    const fallbackOutput = readbackText.trim().length > 0 ? readbackText : streamedText;
+    const text = [fallbackOutput, `\n\nCodex error: ${errorMessage}`].filter(Boolean).join("");
+    const messageId = await this.publishFinalTurnText(activeTurn, text);
+    await this.updateTurnStatus(turnId, stableStatusText("failed"), true);
+
+    await this.database.appendTurnStream(turnId, text);
+    await this.database.completeTurn(turnId, messageId, "failed");
+    const queueState = this.#runtime.finalizeTurn(turnId);
+    this.removeActiveTurn(turnId);
+    if (queueState) {
+      await this.syncQueuePreview(queueState);
+      await this.maybeSendNextQueuedFollowUp(queueState.chatId, queueState.topicId);
+    }
+  }
+
+  private async finalizeInterruptedTurnById(threadId: string, turnId: string): Promise<void> {
+    const activeTurn = this.#activeTurns.get(turnId);
+    if (!activeTurn) {
+      this.#submitPendingSteersAfterInterrupt.delete(turnId);
+      return;
+    }
+
+    await this.finalizeInterruptedTurn(activeTurn, this.#submitPendingSteersAfterInterrupt.has(turnId), threadId);
+  }
+
+  private async finalizeInterruptedTurn(
+    activeTurn: ActiveTurn,
+    submitPendingSteers: boolean,
+    threadId = activeTurn.threadId
+  ): Promise<void> {
+    const pendingSteers = submitPendingSteers ? this.#runtime.drainPendingSteers(activeTurn.chatId, activeTurn.topicId) : null;
+    if (!submitPendingSteers) {
+      this.#runtime.movePendingSteersToQueued(activeTurn.chatId, activeTurn.topicId);
+    }
+
+    const streamedText = this.#runtime.renderAssistantItems(activeTurn.turnId);
+    const readbackText = await this.codex.readTurnMessages(threadId, activeTurn.turnId);
+    const finalText = readbackText.trim().length > 0 ? readbackText : streamedText;
+    let messageId: number | null = null;
+
+    if (finalText.trim().length > 0) {
+      messageId = await this.publishFinalTurnText(activeTurn, finalText);
+    }
+    await this.updateTurnStatus(activeTurn.turnId, stableStatusText("interrupted"), true);
+
+    await this.database.appendTurnStream(activeTurn.turnId, finalText);
+    await this.database.completeTurn(activeTurn.turnId, messageId, "interrupted");
+    const queueState = this.#runtime.finalizeTurn(activeTurn.turnId);
+    this.removeActiveTurn(activeTurn.turnId);
+    this.#submitPendingSteersAfterInterrupt.delete(activeTurn.turnId);
+
+    if (!queueState) {
+      return;
+    }
+
+    await this.syncQueuePreview(queueState);
+
+    if (!submitPendingSteers || !pendingSteers?.mergedMessage) {
+      return;
+    }
+
+    const session = await this.database.getSessionByTopic(activeTurn.chatId, activeTurn.topicId);
+    if (!session?.codexThreadId) {
+      return;
+    }
+
+    try {
+      await this.sendTurnForSession(session, pendingSteers.mergedMessage);
+    } catch (error) {
+      const restoredQueue = this.#runtime.prependQueuedFollowUp(
+        activeTurn.chatId,
+        activeTurn.topicId,
+        pendingSteers.mergedMessage
+      );
+      await this.syncQueuePreview(restoredQueue);
+      await this.telegram.sendMessage(
+        activeTurn.chatId,
+        `Interrupted the current turn, but failed to submit queued steer instructions: ${formatError(error)}`,
+        {
+          message_thread_id: activeTurn.topicId
+        }
+      );
+      return;
+    }
+
+    await this.syncQueuePreview(this.#runtime.getQueueState(activeTurn.chatId, activeTurn.topicId));
+  }
+
+  private async handleServerRequest(request: ServerRequest): Promise<void> {
+    const session = await this.findSessionForRequest(request);
+    if (!session || !session.codexThreadId) {
+      await this.codex.respondUnsupportedRequest(request.id, "No Telegram topic mapping exists for this request.");
+      return;
+    }
+
+    if (
+      request.method === "item/commandExecution/requestApproval" ||
+      request.method === "item/fileChange/requestApproval"
+    ) {
+      await this.handleApprovalRequest(session, request);
+      return;
+    }
+
+    if (request.method === "item/tool/requestUserInput") {
+      await this.handleUserInputRequest(session, request);
+      return;
+    }
+
+    await this.codex.respondUnsupportedRequest(request.id, `Unsupported server request method: ${request.method}`);
+  }
+
+  private async handleApprovalRequest(session: TopicSession, request: ApprovalServerRequest): Promise<void> {
+    await this.updateTurnStatus(request.params.turnId, stableStatusText("awaiting_approval"), true);
+
+    const promptText =
+      request.method === "item/commandExecution/requestApproval"
+        ? formatCommandApprovalPrompt(request.params)
+        : formatFileChangeApprovalPrompt(request.params);
+
+    const pending = await this.database.createPendingRequest({
+      requestIdJson: JSON.stringify(request.id),
+      method: request.method,
+      telegramChatId: session.telegramChatId,
+      telegramTopicId: session.telegramTopicId,
+      telegramMessageId: null,
+      codexThreadId: session.codexThreadId!,
+      turnId: request.params.turnId,
+      itemId: request.params.itemId,
+      payloadJson: JSON.stringify(request.params)
+    });
+
+    const message = await this.telegram.sendMessage(Number.parseInt(session.telegramChatId, 10), promptText, {
+      message_thread_id: session.telegramTopicId,
+      reply_markup: buildApprovalKeyboard(
+        pending.id,
+        request.method === "item/commandExecution/requestApproval" ? request.params.availableDecisions ?? null : null
+      )
+    });
+
+    await this.database.updateServerRequestMessageId(pending.id, message.message_id);
+  }
+
+  private async handleUserInputRequest(session: TopicSession, request: UserInputServerRequest): Promise<void> {
+    await this.updateTurnStatus(request.params.turnId, stableStatusText("awaiting_input"), true);
+
+    const promptText = [
+      "Codex is asking for user input.",
+      ...request.params.questions.map((question) =>
+        question.options?.length
+          ? `- ${question.id}: ${question.question} Options: ${question.options.map((option) => option.label).join(", ")}`
+          : `- ${question.id}: ${question.question}`
+      ),
+      "",
+      "Reply in this topic. For one question, send plain text. For multiple questions, send JSON like {\"question_id\": \"answer\"}."
+    ].join("\n");
+
+    const message = await this.telegram.sendMessage(Number.parseInt(session.telegramChatId, 10), promptText, {
+      message_thread_id: session.telegramTopicId
+    });
+
+    await this.database.createPendingRequest({
+      requestIdJson: JSON.stringify(request.id),
+      method: request.method,
+      telegramChatId: session.telegramChatId,
+      telegramTopicId: session.telegramTopicId,
+      telegramMessageId: message.message_id,
+      codexThreadId: session.codexThreadId!,
+      turnId: request.params.turnId,
+      itemId: request.params.itemId,
+      payloadJson: JSON.stringify(request.params)
+    });
+  }
+
+  private async tryResolveUserInput(message: UserTextMessage): Promise<boolean> {
+    if (message.topicId === null) {
+      return false;
+    }
+
+    const pending = await this.database.getPendingRequestByTopic(message.chatId, message.topicId, "item/tool/requestUserInput");
+    if (!pending) {
+      return false;
+    }
+
+    const payload = JSON.parse(pending.payloadJson) as UserInputServerRequest["params"];
+    const response = parseUserInputResponse(message.text, payload.questions);
+
+    await this.codex.respondToUserInputRequest(parseRequestId(pending.requestIdJson), response);
+    await this.database.resolveRequest(pending.requestIdJson, JSON.stringify(response));
+    await this.telegram.sendMessage(message.chatId, "Sent your answer to Codex.", {
+      message_thread_id: message.topicId
+    });
+    return true;
+  }
+
+  private async resolveApprovalAction(request: PendingServerRequest, action: string): Promise<void> {
+    const requestId = parseRequestId(request.requestIdJson);
+    const chatId = Number.parseInt(request.telegramChatId, 10);
+
+    if (request.method === "item/commandExecution/requestApproval") {
+      const response = {
+        decision: normalizeCommandApprovalDecision(action)
+      };
+      await this.codex.respondToCommandApproval(requestId, response);
+      await this.database.resolveRequest(request.requestIdJson, JSON.stringify(response));
+    } else if (request.method === "item/fileChange/requestApproval") {
+      const response = {
+        decision: normalizeFileApprovalDecision(action)
+      };
+      await this.codex.respondToFileChangeApproval(requestId, response);
+      await this.database.resolveRequest(request.requestIdJson, JSON.stringify(response));
+    } else {
+      await this.codex.respondUnsupportedRequest(requestId, `Unsupported approval action for ${request.method}`);
+      return;
+    }
+
+    if (request.telegramMessageId) {
+      await this.telegram.editMessageText(
+        chatId,
+        request.telegramMessageId,
+        `Resolved ${request.method} with "${action}".`,
+        {
+          message_thread_id: request.telegramTopicId
+        }
+      );
+    }
+  }
+
+  private async findSessionForRequest(request: ServerRequest): Promise<TopicSession | undefined> {
+    const threadId = "threadId" in request.params && typeof request.params.threadId === "string" ? request.params.threadId : null;
+    if (!threadId) {
+      return undefined;
+    }
+
+    return this.database.getSessionByCodexThreadId(threadId);
+  }
+
+  private async updateTurnStatus(turnId: string, statusText: string, force = false): Promise<void> {
+    const activeTurn = this.#activeTurns.get(turnId);
+    if (!activeTurn || activeTurn.statusMessageId === null) {
+      return;
+    }
+
+    const normalized = truncateStatus(statusText);
+    const now = Date.now();
+    if (activeTurn.lastStatusText === normalized) {
+      return;
+    }
+
+    if (!force && now - activeTurn.lastStatusUpdateAt < 500) {
+      return;
+    }
+
+    try {
+      await this.telegram.editMessageText(activeTurn.chatId, activeTurn.statusMessageId, normalized, {
+        message_thread_id: activeTurn.topicId
+      });
+      activeTurn.lastStatusText = normalized;
+      activeTurn.lastStatusUpdateAt = now;
+    } catch (error) {
+      if (isTelegramMessageMissingError(error)) {
+        activeTurn.statusMessageId = null;
+        activeTurn.lastStatusText = null;
+        return;
+      }
+
+      if (isRetryAfterError(error)) {
+        return;
+      }
+
+      throw error;
+    }
+  }
+
+  private async clearTurnStatus(activeTurn: ActiveTurn): Promise<void> {
+    activeTurn.statusMessageId = null;
+    activeTurn.lastStatusText = null;
+  }
+
+  private async clearTurnStatusById(turnId: string): Promise<void> {
+    const activeTurn = this.#activeTurns.get(turnId);
+    if (!activeTurn) {
+      return;
+    }
+
+    await this.clearTurnStatus(activeTurn);
+  }
+
+  private async maybeSendChatAction(activeTurn: ActiveTurn): Promise<void> {
+    const now = Date.now();
+    if (now - activeTurn.lastChatActionAt < 3000) {
+      return;
+    }
+
+    const sent = await this.sendChatActionBestEffort(activeTurn.chatId, activeTurn.topicId);
+    if (sent) {
+      activeTurn.lastChatActionAt = now;
+    }
+  }
+
+  private async maybeSendMessageDraft(activeTurn: ActiveTurn, text: string, force = false): Promise<void> {
+    const previewText = buildDraftPreview(text);
+    const renderedPreview = renderTelegramAssistantText(previewText);
+    const now = Date.now();
+    if (!force) {
+      if (activeTurn.lastDraftText === renderedPreview.text) {
+        return;
+      }
+
+      if (now - activeTurn.lastDraftUpdateAt < 400) {
+        return;
+      }
+    }
+
+    try {
+      await this.telegram.sendMessageDraft(activeTurn.chatId, activeTurn.draftId, renderedPreview.text, {
+        message_thread_id: activeTurn.topicId,
+        ...withTelegramParseMode(renderedPreview.parse_mode)
+      });
+      activeTurn.lastDraftText = renderedPreview.text;
+      activeTurn.lastDraftUpdateAt = now;
+    } catch (error) {
+      if (!isRetryAfterError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  private async replaceTurnStatusWithFinal(activeTurn: ActiveTurn, text: string): Promise<number> {
+    return this.sendChunkedText(activeTurn.chatId, activeTurn.topicId, text);
+  }
+
+  private async publishFinalTurnText(activeTurn: ActiveTurn, text: string): Promise<number> {
+    if (this.#runtime.getTurn(activeTurn.turnId)?.hasAssistantText) {
+      return this.sendChunkedText(activeTurn.chatId, activeTurn.topicId, text);
+    }
+
+    return this.replaceTurnStatusWithFinal(activeTurn, text);
+  }
+
+  private async sendChunkedText(
+    chatId: number,
+    topicId: number,
+    text: string
+  ): Promise<number> {
+    const chunks = chunkTelegramMessage(text).map((chunk) => renderTelegramAssistantText(chunk));
+    let firstMessageId: number | null = null;
+
+    for (const chunk of chunks) {
+      const message = await this.telegram.sendMessage(chatId, chunk.text, {
+        message_thread_id: topicId,
+        ...withTelegramParseMode(chunk.parse_mode)
+      });
+      if (firstMessageId === null) {
+        firstMessageId = message.message_id;
+      }
+    }
+
+    if (firstMessageId === null) {
+      throw new Error("Failed to publish Telegram message chunks");
+    }
+
+    return firstMessageId;
+  }
+
+  private findActiveTurnByTopic(chatId: number, topicId: number): ActiveTurn | undefined {
+    const activeTurn = this.#runtime.getActiveTurnByTopic(chatId, topicId);
+    return activeTurn ? this.#activeTurns.get(activeTurn.turnId) : undefined;
+  }
+
+  private removeActiveTurn(turnId: string): void {
+    const activeTurn = this.#activeTurns.get(turnId);
+    if (!activeTurn) {
+      return;
+    }
+
+    this.#activeTurns.delete(turnId);
+    this.#submitPendingSteersAfterInterrupt.delete(turnId);
+  }
+
+  private async trySteerTurn(activeTurn: ActiveTurn, message: UserTextMessage): Promise<void> {
+    if (message.topicId === null) {
+      return;
+    }
+
+    await this.sendChatActionBestEffort(message.chatId, message.topicId);
+
+    const runtimeTurn = this.#runtime.getTurn(activeTurn.turnId);
+    if (!runtimeTurn) {
+      return;
+    }
+
+    const pending = this.#runtime.queuePendingSteer(runtimeTurn, message);
+    await this.syncQueuePreview(pending.queueState);
+
+    try {
+      await this.codex.steerTurn(activeTurn.threadId, activeTurn.turnId, message.text);
+    } catch (error) {
+      const classification = classifySteerError(error);
+      if (classification.kind === "stale_or_missing_active_turn") {
+        const queueState = this.#runtime.movePendingSteerToQueued(message.chatId, message.topicId, pending.localId);
+        await this.syncQueuePreview(queueState);
+        return;
+      }
+
+      const queueState = this.#runtime.dropPendingSteer(message.chatId, message.topicId, pending.localId);
+      await this.syncQueuePreview(queueState);
+
+      if (classification.kind === "invalid_input") {
+        await this.telegram.sendMessage(
+          message.chatId,
+          classification.userMessage ?? `Codex rejected the follow-up: ${formatError(error)}`,
+          {
+            message_thread_id: message.topicId
+          }
+        );
+        return;
+      }
+
+      console.error("Failed to steer turn", error);
+      await this.telegram.sendMessage(
+        message.chatId,
+        `Failed to add the follow-up to the current turn: ${formatError(error)}`,
+        {
+          message_thread_id: message.topicId
+        }
+      );
+      return;
+    }
+  }
+
+  private async syncQueuePreview(queueState: QueueStateSnapshot): Promise<void> {
+    const previewText = renderQueuePreview(queueState);
+    const key = topicKey(queueState.chatId, queueState.topicId);
+    const existingMessageId = this.#queuePreviewMessageIds.get(key) ?? null;
+    const activeTurn = this.findActiveTurnByTopic(queueState.chatId, queueState.topicId);
+    const replyMarkup = buildQueuePreviewKeyboard(queueState, activeTurn?.turnId ?? null);
+
+    if (!previewText) {
+      if (existingMessageId !== null) {
+        try {
+          await this.telegram.deleteMessage(queueState.chatId, existingMessageId);
+        } catch {
+          // Ignore preview cleanup failures.
+        }
+        this.#queuePreviewMessageIds.delete(key);
+      }
+      return;
+    }
+
+    if (existingMessageId !== null) {
+      try {
+        const options = replyMarkup
+          ? {
+              message_thread_id: queueState.topicId,
+              reply_markup: replyMarkup
+            }
+          : {
+              message_thread_id: queueState.topicId
+            };
+        await this.telegram.editMessageText(queueState.chatId, existingMessageId, previewText, options);
+        return;
+      } catch {
+        this.#queuePreviewMessageIds.delete(key);
+      }
+    }
+
+    const options = replyMarkup
+      ? {
+          message_thread_id: queueState.topicId,
+          reply_markup: replyMarkup
+        }
+      : {
+          message_thread_id: queueState.topicId
+        };
+    const message = await this.telegram.sendMessage(queueState.chatId, previewText, options);
+    this.#queuePreviewMessageIds.set(key, message.message_id);
+  }
+
+  private async maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void> {
+    if (this.findActiveTurnByTopic(chatId, topicId)) {
+      return;
+    }
+
+    const nextMessage = this.#runtime.peekNextQueuedFollowUp(chatId, topicId);
+    if (!nextMessage) {
+      return;
+    }
+
+    const session = await this.database.getSessionByTopic(chatId, topicId);
+    if (!session?.codexThreadId) {
+      return;
+    }
+
+    await this.sendTurnForSession(session, nextMessage);
+    this.#runtime.shiftNextQueuedFollowUp(chatId, topicId);
+    await this.syncQueuePreview(this.#runtime.getQueueState(chatId, topicId));
+  }
+
+  private async sendChatActionBestEffort(chatId: number, topicId: number): Promise<boolean> {
+    try {
+      await this.telegram.sendChatAction(chatId, "typing", {
+        message_thread_id: topicId
+      });
+      return true;
+    } catch (error) {
+      if (isRetryAfterError(error)) {
+        return false;
+      }
+
+      console.warn("Failed to send Telegram chat action", error);
+      return false;
+    }
+  }
+}
+
+function deriveTopicTitle(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
+}
+
+function topicKey(chatId: number, topicId: number): string {
+  return `${chatId}:${topicId}`;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function truncateStatus(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function statusTextForItem(item: { type: string } & Record<string, unknown>): string {
+  switch (item.type) {
+    case "reasoning":
+      return stableStatusText("thinking");
+    case "commandExecution":
+      return stableStatusText("running_command");
+    case "fileChange":
+      return stableStatusText("editing_files");
+    case "plan":
+      return stableStatusText("planning");
+    case "mcpToolCall":
+    case "dynamicToolCall":
+    case "collabAgentToolCall":
+      return stableStatusText("using_tool");
+    case "webSearch":
+      return stableStatusText("searching");
+    default:
+      return stableStatusText("thinking");
+  }
+}
+
+function stableStatusText(
+  state:
+    | "thinking"
+    | "planning"
+    | "using_tool"
+    | "running_command"
+    | "editing_files"
+    | "searching"
+    | "streaming"
+    | "awaiting_approval"
+    | "awaiting_input"
+    | "done"
+    | "failed"
+    | "interrupted"
+): string {
+  switch (state) {
+    case "thinking":
+      return "Thinking 🤔";
+    case "planning":
+      return "Planning 🗺️";
+    case "using_tool":
+      return "Using tool 🛠️";
+    case "running_command":
+      return "Running command 💻";
+    case "editing_files":
+      return "Editing files ✏️";
+    case "searching":
+      return "Searching 🔎";
+    case "streaming":
+      return "Streaming ✍️";
+    case "awaiting_approval":
+      return "Awaiting approval ⏸️";
+    case "awaiting_input":
+      return "Awaiting input ⏸️";
+    case "done":
+      return "Done ✅";
+    case "failed":
+      return "Failed ❌";
+    case "interrupted":
+      return "Interrupted ⏹️";
+  }
+}
+
+function renderQueuePreview(queueState: QueueStateSnapshot): string | null {
+  const lines: string[] = [];
+
+  if (queueState.pendingSteers.length > 0) {
+    lines.push("Queued for current turn:");
+    for (const text of queueState.pendingSteers.slice(0, 3)) {
+      lines.push(`- ${truncateStatus(text)}`);
+    }
+    if (queueState.pendingSteers.length > 3) {
+      lines.push(`- …and ${queueState.pendingSteers.length - 3} more`);
+    }
+  }
+
+  if (queueState.queuedFollowUps.length > 0) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push("Queued for next turn:");
+    for (const text of queueState.queuedFollowUps.slice(0, 3)) {
+      lines.push(`- ${truncateStatus(text)}`);
+    }
+    if (queueState.queuedFollowUps.length > 3) {
+      lines.push(`- …and ${queueState.queuedFollowUps.length - 3} more`);
+    }
+  }
+
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function buildQueuePreviewKeyboard(queueState: QueueStateSnapshot, activeTurnId: string | null): InlineKeyboardMarkup | undefined {
+  if (queueState.pendingSteers.length === 0 || !activeTurnId) {
+    return undefined;
+  }
+
+  return {
+    inline_keyboard: [[{ text: "Send now", callback_data: `turn:${activeTurnId}:sendNow` }]]
+  };
+}
+
+function buildDraftPreview(text: string): string {
+  if (text.length <= TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT) {
+    return text;
+  }
+
+  const prefix = "…\n";
+  const suffix = "\n\n[preview truncated]";
+  const budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT - prefix.length - suffix.length;
+  return `${prefix}${text.slice(-budget)}${suffix}`;
+}
+
+function chunkTelegramMessage(text: string): string[] {
+  const reservedHeaderChars = 32;
+  const rawChunks = splitTextForTelegram(text, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
+  if (rawChunks.length === 1) {
+    return rawChunks;
+  }
+
+  return rawChunks.map((chunk, index) => `Part ${index + 1}/${rawChunks.length}\n\n${chunk}`);
+}
+
+function splitTextForTelegram(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    const splitIndex = findChunkBoundary(remaining, maxChars);
+    chunks.push(remaining.slice(0, splitIndex).trimEnd());
+    remaining = remaining.slice(splitIndex).replace(/^\s+/, "");
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+
+  return chunks.length > 0 ? chunks : [text];
+}
+
+function findChunkBoundary(text: string, maxChars: number): number {
+  const minPreferredIndex = Math.floor(maxChars * 0.6);
+  const window = text.slice(0, maxChars + 1);
+  const candidates = [window.lastIndexOf("\n\n"), window.lastIndexOf("\n"), window.lastIndexOf(" ")];
+
+  for (const index of candidates) {
+    if (index >= minPreferredIndex) {
+      return index;
+    }
+  }
+
+  return maxChars;
+}
+
+function renderTelegramAssistantText(text: string): { text: string; parse_mode?: TelegramParseMode } {
+  const rendered = markdownToTelegramHtml(text);
+  if (rendered === text) {
+    return { text };
+  }
+
+  return {
+    text: rendered,
+    parse_mode: "HTML"
+  };
+}
+
+function markdownToTelegramHtml(text: string): string {
+  const segments = splitMarkdownByFences(text);
+  const rendered = segments
+    .map((segment) =>
+      segment.type === "fence" ? renderTelegramCodeFence(segment.language, segment.content) : renderTelegramInlineMarkdown(segment.content)
+    )
+    .join("");
+
+  return rendered === escapeHtml(text) ? text : rendered;
+}
+
+function splitMarkdownByFences(
+  text: string
+): Array<{ type: "text"; content: string } | { type: "fence"; language: string; content: string }> {
+  const segments: Array<{ type: "text"; content: string } | { type: "fence"; language: string; content: string }> = [];
+  const pattern = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      segments.push({
+        type: "text",
+        content: text.slice(lastIndex, index)
+      });
+    }
+
+    segments.push({
+      type: "fence",
+      language: (match[1] ?? "").trim(),
+      content: match[2] ?? ""
+    });
+    lastIndex = index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({
+      type: "text",
+      content: text.slice(lastIndex)
+    });
+  }
+
+  return segments.length > 0 ? segments : [{ type: "text", content: text }];
+}
+
+function renderTelegramCodeFence(language: string, content: string): string {
+  const escapedCode = escapeHtml(content.replace(/\n$/, ""));
+  if (!language) {
+    return `<pre><code>${escapedCode}</code></pre>`;
+  }
+
+  return `<pre><code class="language-${escapeHtmlAttribute(language)}">${escapedCode}</code></pre>`;
+}
+
+function renderTelegramInlineMarkdown(text: string): string {
+  let html = "";
+  let index = 0;
+
+  while (index < text.length) {
+    if (text.startsWith("`", index)) {
+      const closingIndex = text.indexOf("`", index + 1);
+      if (closingIndex > index + 1 && !text.slice(index + 1, closingIndex).includes("\n")) {
+        html += `<code>${escapeHtml(text.slice(index + 1, closingIndex))}</code>`;
+        index = closingIndex + 1;
+        continue;
+      }
+    }
+
+    const strongDelimiter = text.startsWith("**", index) ? "**" : text.startsWith("__", index) ? "__" : null;
+    if (strongDelimiter) {
+      const closingIndex = text.indexOf(strongDelimiter, index + strongDelimiter.length);
+      if (closingIndex > index + strongDelimiter.length) {
+        html += `<b>${renderTelegramInlineMarkdown(text.slice(index + strongDelimiter.length, closingIndex))}</b>`;
+        index = closingIndex + strongDelimiter.length;
+        continue;
+      }
+    }
+
+    html += escapeHtml(text[index] ?? "");
+    index += 1;
+  }
+
+  return html;
+}
+
+function escapeHtml(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function escapeHtmlAttribute(text: string): string {
+  return escapeHtml(text).replaceAll("\"", "&quot;");
+}
+
+function withTelegramParseMode(parseMode?: TelegramParseMode): { parse_mode?: TelegramParseMode } {
+  return parseMode ? { parse_mode: parseMode } : {};
+}
+
+type SteerErrorClassification =
+  | {
+      kind: "stale_or_missing_active_turn";
+    }
+  | {
+      kind: "invalid_input";
+      userMessage: string;
+    }
+  | {
+      kind: "fatal";
+    };
+
+function classifySteerError(error: unknown): SteerErrorClassification {
+  if (error instanceof JsonRpcMethodError && error.method === "turn/steer") {
+    const structured = isRecord(error.data) ? error.data : null;
+    if (structured && "input_error_code" in structured) {
+      const maxChars = typeof structured.max_chars === "number" ? structured.max_chars : null;
+      const actualChars = typeof structured.actual_chars === "number" ? structured.actual_chars : null;
+      const limitMessage =
+        maxChars !== null && actualChars !== null
+          ? `Codex rejected the follow-up because it exceeds the maximum input length (${actualChars}/${maxChars} characters).`
+          : `Codex rejected the follow-up: ${error.message}`;
+      return {
+        kind: "invalid_input",
+        userMessage: limitMessage
+      };
+    }
+
+    if (error.code === -32600 && isSteerRaceMessage(error.message, structured)) {
+      return {
+        kind: "stale_or_missing_active_turn"
+      };
+    }
+  }
+
+  if (isSteerRaceMessage(error instanceof Error ? error.message : String(error))) {
+    return {
+      kind: "stale_or_missing_active_turn"
+    };
+  }
+
+  return {
+    kind: "fatal"
+  };
+}
+
+type InterruptErrorClassification =
+  | {
+      kind: "stale_or_missing_active_turn";
+    }
+  | {
+      kind: "fatal";
+    };
+
+function classifyInterruptError(error: unknown): InterruptErrorClassification {
+  if (error instanceof JsonRpcMethodError && error.method === "turn/interrupt") {
+    const structured = isRecord(error.data) ? error.data : null;
+    if (error.code === -32600 && isInterruptRaceMessage(error.message, structured)) {
+      return {
+        kind: "stale_or_missing_active_turn"
+      };
+    }
+  }
+
+  if (isInterruptRaceMessage(error instanceof Error ? error.message : String(error))) {
+    return {
+      kind: "stale_or_missing_active_turn"
+    };
+  }
+
+  return {
+    kind: "fatal"
+  };
+}
+
+function isRetryAfterError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "parameters" in error &&
+    typeof (error as { parameters?: unknown }).parameters === "object" &&
+    (error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after !== undefined
+  );
+}
+
+function isTelegramMessageMissingError(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
+  }
+
+  const errorCode = error.error_code;
+  const description = error.description;
+  return (
+    errorCode === 400 &&
+    typeof description === "string" &&
+    (description.toLowerCase().includes("message to edit not found") ||
+      description.toLowerCase().includes("message to delete not found") ||
+      description.toLowerCase().includes("not found"))
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isInterruptRaceMessage(message: string, structured?: Record<string, unknown> | null): boolean {
+  if (structured?.kind === "invalid_active_turn") {
+    return true;
+  }
+
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("no active turn") ||
+    normalized.includes("not the active turn") ||
+    normalized.includes("already ended") ||
+    normalized.includes("already completed")
+  );
+}
+
+function buildApprovalKeyboard(
+  requestId: number,
+  availableDecisions: ReadonlyArray<unknown> | null
+): InlineKeyboardMarkup {
+  const allows = (decision: string): boolean =>
+    availableDecisions ? availableDecisions.some((value) => typeof value === "string" && value === decision) : true;
+
+  const approveRow = [
+    allows("accept") ? { text: "Approve", callback_data: `req:${requestId}:accept` } : null,
+    allows("acceptForSession")
+      ? { text: "Approve Session", callback_data: `req:${requestId}:acceptForSession` }
+      : null
+  ].filter((value): value is { text: string; callback_data: string } => value !== null);
+
+  const denyRow = [
+    allows("decline") ? { text: "Deny", callback_data: `req:${requestId}:decline` } : null,
+    allows("cancel") ? { text: "Interrupt", callback_data: `req:${requestId}:cancel` } : null
+  ].filter((value): value is { text: string; callback_data: string } => value !== null);
+
+  return {
+    inline_keyboard: [approveRow, denyRow].filter((row) => row.length > 0)
+  };
+}
+
+function formatCommandApprovalPrompt(params: CommandExecutionRequestApprovalParams): string {
+  const command = params.command ?? "(unknown command)";
+  const cwd = params.cwd ?? "(unknown cwd)";
+  const reason = params.reason ? `Reason: ${params.reason}` : "Reason: not provided";
+
+  return [
+    "Codex requested command approval.",
+    `Command: ${command}`,
+    `Cwd: ${cwd}`,
+    reason
+  ].join("\n");
+}
+
+function formatFileChangeApprovalPrompt(params: FileChangeRequestApprovalParams): string {
+  return [
+    "Codex requested file-change approval.",
+    `Turn: ${params.turnId}`,
+    `Item: ${params.itemId}`
+  ].join("\n");
+}
+
+function parseUserInputResponse(
+  text: string,
+  questions: UserInputServerRequest["params"]["questions"]
+): ToolRequestUserInputResponse {
+  if (questions.length === 1) {
+    const question = questions[0];
+    if (!question) {
+      throw new Error("Expected a single question for user input parsing");
+    }
+
+    return {
+      answers: {
+        [question.id]: {
+          answers: [text.trim()]
+        }
+      }
+    };
+  }
+
+  const parsed = JSON.parse(text) as Record<string, string | Array<string>>;
+  const answers = Object.fromEntries(
+    questions.map((question) => {
+      const value = parsed[question.id];
+      const normalized = Array.isArray(value) ? value : value ? [value] : [];
+      return [question.id, { answers: normalized }];
+    })
+  );
+
+  return { answers };
+}
+
+function parseRequestId(value: string): RequestId {
+  return JSON.parse(value) as RequestId;
+}
+
+function normalizeCommandApprovalDecision(action: string): CommandExecutionApprovalDecision {
+  switch (action) {
+    case "accept":
+      return "accept";
+    case "acceptForSession":
+      return "acceptForSession";
+    case "decline":
+      return "decline";
+    case "cancel":
+    default:
+      return "cancel";
+  }
+}
+
+function normalizeFileApprovalDecision(action: string): FileChangeApprovalDecision {
+  switch (action) {
+    case "accept":
+      return "accept";
+    case "acceptForSession":
+      return "acceptForSession";
+    case "decline":
+      return "decline";
+    case "cancel":
+    default:
+      return "cancel";
+  }
+}
+
+function isSteerRaceMessage(messageText: string, data?: Record<string, unknown> | null): boolean {
+  const message = messageText.toLowerCase();
+  const dataKind = typeof data?.kind === "string" ? data.kind.toLowerCase() : "";
+  return [
+    "expectedturnid",
+    "active turn",
+    "not active",
+    "no active turn",
+    "does not match",
+    "mismatch",
+    "precondition",
+    "stale",
+    "invalid_active_turn"
+  ].some((needle) => message.includes(needle) || dataKind.includes(needle));
+}
