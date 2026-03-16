@@ -1,15 +1,17 @@
 import type { AppConfig } from "./config";
 import type { ApprovalServerRequest, UserInputServerRequest } from "./codex";
 import { BridgeDatabase } from "./db";
-import type { PendingServerRequest, TopicLifecycleEvent, TopicSession, UserTextMessage } from "./domain";
+import type { PendingServerRequest, TopicLifecycleEvent, TopicSession, UserTurnInput, UserTurnMessage } from "./domain";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { RequestId } from "./generated/codex/RequestId";
+import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { CommandExecutionApprovalDecision } from "./generated/codex/v2/CommandExecutionApprovalDecision";
 import type { CommandExecutionRequestApprovalParams } from "./generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { FileChangeApprovalDecision } from "./generated/codex/v2/FileChangeApprovalDecision";
 import type { FileChangeRequestApprovalParams } from "./generated/codex/v2/FileChangeRequestApprovalParams";
 import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
+import { TemporaryImageStore } from "./media-store";
 import { JsonRpcMethodError } from "./rpc";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
 
@@ -49,6 +51,7 @@ export interface TelegramApi {
   ): Promise<unknown>;
   deleteMessage(chatId: number, messageId: number): Promise<true>;
   answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true>;
+  downloadFile(fileId: string): Promise<{ bytes: Uint8Array; filePath?: string }>;
 }
 
 export type CallbackQueryEvent = {
@@ -61,8 +64,8 @@ export type CallbackQueryEvent = {
 export interface BridgeCodexApi {
   createThread(title: string): Promise<string>;
   ensureThreadLoaded(threadId: string): Promise<void>;
-  sendTextTurn(threadId: string, text: string): Promise<{ id: string }>;
-  steerTurn(threadId: string, expectedTurnId: string, text: string): Promise<{ turnId: string }>;
+  sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }>;
+  steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   archiveThread(threadId: string): Promise<void>;
   readTurnMessages(threadId: string, turnId: string): Promise<string>;
@@ -110,7 +113,8 @@ export class TelegramCodexBridge {
     private readonly config: AppConfig,
     private readonly database: BridgeDatabase,
     private readonly telegram: TelegramApi,
-    private readonly codex: BridgeCodexApi
+    private readonly codex: BridgeCodexApi,
+    private readonly mediaStore: TemporaryImageStore
   ) {
     this.codex.onNotification((notification) => {
       void this.enqueueNotification(notification).catch((error) => {
@@ -124,7 +128,22 @@ export class TelegramCodexBridge {
     });
   }
 
-  async handleUserTextMessage(message: UserTextMessage): Promise<void> {
+  async handleUserTextMessage(
+    message: Omit<UserTurnMessage, "input" | "submittedInputSignature">
+  ): Promise<void> {
+    await this.handleUserMessage({
+      ...message,
+      input: [
+        {
+          type: "text",
+          text: message.text,
+          text_elements: []
+        }
+      ]
+    });
+  }
+
+  async handleUserMessage(message: UserTurnMessage): Promise<void> {
     if (message.chatId !== this.config.telegram.chatId) {
       return;
     }
@@ -300,7 +319,7 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async startSessionFromRootMessage(message: UserTextMessage): Promise<void> {
+  private async startSessionFromRootMessage(message: UserTurnMessage): Promise<void> {
     const title = deriveTopicTitle(message.text);
     const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
 
@@ -341,7 +360,7 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async startSessionInExistingTopic(message: UserTextMessage): Promise<void> {
+  private async startSessionInExistingTopic(message: UserTurnMessage): Promise<void> {
     if (message.topicId === null) {
       throw new Error("Cannot start an in-topic session without a Telegram topic id");
     }
@@ -376,7 +395,7 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async sendTurnForSession(session: TopicSession, message: UserTextMessage): Promise<void> {
+  private async sendTurnForSession(session: TopicSession, message: UserTurnMessage): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error(`Session ${session.id} has no Codex thread id`);
     }
@@ -388,7 +407,14 @@ export class TelegramCodexBridge {
     await this.codex.ensureThreadLoaded(session.codexThreadId);
     await this.sendChatActionBestEffort(message.chatId, message.topicId);
 
-    const turn = await this.codex.sendTextTurn(session.codexThreadId, message.text);
+    const preparedInput = await this.materializeCodexInput(message);
+    let turn: { id: string };
+    try {
+      turn = await this.codex.sendTurn(session.codexThreadId, preparedInput.input);
+    } finally {
+      await this.cleanupPreparedCodexInput(preparedInput);
+    }
+
     await this.database.recordTurnStart({
       telegramUpdateId: message.updateId,
       telegramChatId: String(message.chatId),
@@ -761,7 +787,7 @@ export class TelegramCodexBridge {
     });
   }
 
-  private async tryResolveUserInput(message: UserTextMessage): Promise<boolean> {
+  private async tryResolveUserInput(message: UserTurnMessage): Promise<boolean> {
     if (message.topicId === null) {
       return false;
     }
@@ -1088,7 +1114,7 @@ export class TelegramCodexBridge {
     this.clearDraftScheduling(activeTurn);
   }
 
-  private async trySteerTurn(activeTurn: ActiveTurn, message: UserTextMessage): Promise<void> {
+  private async trySteerTurn(activeTurn: ActiveTurn, message: UserTurnMessage): Promise<void> {
     if (message.topicId === null) {
       return;
     }
@@ -1103,8 +1129,10 @@ export class TelegramCodexBridge {
     const pending = this.#runtime.queuePendingSteer(runtimeTurn, message);
     await this.syncQueuePreview(pending.queueState);
 
+    let preparedInput: { input: UserInput[]; tempPaths: string[] } | null = null;
     try {
-      await this.codex.steerTurn(activeTurn.threadId, activeTurn.turnId, message.text);
+      preparedInput = await this.materializeCodexInput(message);
+      await this.codex.steerTurn(activeTurn.threadId, activeTurn.turnId, preparedInput.input);
     } catch (error) {
       const classification = classifySteerError(error);
       if (classification.kind === "stale_or_missing_active_turn") {
@@ -1136,7 +1164,39 @@ export class TelegramCodexBridge {
         }
       );
       return;
+    } finally {
+      if (preparedInput) {
+        await this.cleanupPreparedCodexInput(preparedInput);
+      }
     }
+  }
+
+  private async materializeCodexInput(message: UserTurnMessage): Promise<{ input: UserInput[]; tempPaths: string[] }> {
+    const input: UserInput[] = [];
+    const tempPaths: string[] = [];
+
+    for (const item of message.input) {
+      if (item.type === "text") {
+        input.push(item);
+        continue;
+      }
+
+      const download = await this.telegram.downloadFile(item.fileId);
+      const filenameHint = item.fileName ?? item.mimeType ?? download.filePath ?? null;
+      const path = await this.mediaStore.writeImage(download.bytes, filenameHint);
+      tempPaths.push(path);
+      input.push({
+        type: "localImage",
+        path
+      });
+    }
+
+    message.submittedInputSignature = buildUserInputSignature(input);
+    return { input, tempPaths };
+  }
+
+  private async cleanupPreparedCodexInput(preparedInput: { input: UserInput[]; tempPaths: string[] }): Promise<void> {
+    await Promise.all(preparedInput.tempPaths.map((path) => this.mediaStore.deleteFile(path)));
   }
 
   private async syncQueuePreview(queueState: QueueStateSnapshot): Promise<void> {
@@ -1510,6 +1570,35 @@ function escapeHtmlAttribute(text: string): string {
 
 function withTelegramParseMode(parseMode?: TelegramParseMode): { parse_mode?: TelegramParseMode } {
   return parseMode ? { parse_mode: parseMode } : {};
+}
+
+function buildUserInputSignature(input: UserInput[]): string {
+  return JSON.stringify(
+    input.map((item) => {
+      if (item.type === "text") {
+        return {
+          type: "text",
+          text: item.text
+        };
+      }
+
+      if (item.type === "localImage") {
+        return {
+          type: "localImage",
+          path: item.path
+        };
+      }
+
+      if (item.type === "image") {
+        return {
+          type: "image",
+          url: item.url
+        };
+      }
+
+      return item;
+    })
+  );
 }
 
 function getNotificationTurnId(notification: ServerNotification): string | null {

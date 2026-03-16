@@ -1,9 +1,11 @@
 import { Bot } from "grammy";
+import type { Message } from "grammy/types";
 
 import { TelegramCodexBridge, type TelegramApi } from "./bridge";
 import { CodexGateway, spawnCodexAppServer } from "./codex";
 import { loadConfig } from "./config";
 import { BridgeDatabase } from "./db";
+import { TemporaryImageStore } from "./media-store";
 import { CodexRpcClient, WebSocketRpcTransport } from "./rpc";
 
 async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30): Promise<void> {
@@ -25,7 +27,9 @@ async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30)
 async function main(): Promise<void> {
   const config = loadConfig();
   const database = new BridgeDatabase(config.database.path);
+  const mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
   await database.migrate();
+  await mediaStore.cleanupStaleFiles();
   const expiredPendingRequests = await database.expirePendingRequests(
     JSON.stringify({
       reason: "expired_on_startup",
@@ -57,10 +61,26 @@ async function main(): Promise<void> {
     sendChatAction: (chatId, action, options) => bot.api.sendChatAction(chatId, action, options),
     editMessageText: (chatId, messageId, text, options) => bot.api.editMessageText(chatId, messageId, text, options),
     deleteMessage: (chatId, messageId) => bot.api.deleteMessage(chatId, messageId),
-    answerCallbackQuery: (callbackQueryId, options) => bot.api.answerCallbackQuery(callbackQueryId, options)
+    answerCallbackQuery: (callbackQueryId, options) => bot.api.answerCallbackQuery(callbackQueryId, options),
+    downloadFile: async (fileId) => {
+      const file = await bot.api.getFile(fileId);
+      if (!file.file_path) {
+        throw new Error(`Telegram did not return a file path for ${fileId}`);
+      }
+
+      const response = await fetch(`https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`);
+      if (!response.ok) {
+        throw new Error(`Telegram file download failed with status ${response.status}`);
+      }
+
+      return {
+        bytes: new Uint8Array(await response.arrayBuffer()),
+        filePath: file.file_path
+      };
+    }
   };
 
-  const bridge = new TelegramCodexBridge(config, database, telegramApi, codex);
+  const bridge = new TelegramCodexBridge(config, database, telegramApi, codex, mediaStore);
   bot.catch((error) => {
     console.error("Telegram bot update handling failed", error.error);
   });
@@ -77,6 +97,47 @@ async function main(): Promise<void> {
       updateId: context.update.update_id,
       userId: context.message.from.id,
       text: context.message.text
+    });
+  });
+
+  bot.on("message:photo", async (context) => {
+    if (!context.message.from) {
+      return;
+    }
+
+    const photo = pickLargestPhoto(context.message.photo);
+    await bridge.handleUserMessage({
+      chatId: context.chat.id,
+      topicId: context.message.message_thread_id ?? null,
+      messageId: context.message.message_id,
+      updateId: context.update.update_id,
+      userId: context.message.from.id,
+      text: context.message.caption ?? "",
+      input: buildImageMessageInput(context.message.caption ?? "", {
+        fileId: photo.file_id,
+        fileName: "telegram-photo.jpg",
+        mimeType: "image/jpeg"
+      })
+    });
+  });
+
+  bot.on("message:document", async (context) => {
+    if (!context.message.from || !isImageDocument(context.message.document)) {
+      return;
+    }
+
+    await bridge.handleUserMessage({
+      chatId: context.chat.id,
+      topicId: context.message.message_thread_id ?? null,
+      messageId: context.message.message_id,
+      updateId: context.update.update_id,
+      userId: context.message.from.id,
+      text: context.message.caption ?? "",
+      input: buildImageMessageInput(context.message.caption ?? "", {
+        fileId: context.message.document.file_id,
+        ...(context.message.document.file_name ? { fileName: context.message.document.file_name } : {}),
+        ...(context.message.document.mime_type ? { mimeType: context.message.document.mime_type } : {})
+      })
     });
   });
 
@@ -126,6 +187,46 @@ async function main(): Promise<void> {
   });
 
   await bot.start();
+}
+
+function buildImageMessageInput(
+  text: string,
+  image: { fileId: string; fileName?: string | null; mimeType?: string | null }
+): Array<
+  | { type: "text"; text: string; text_elements: [] }
+  | { type: "telegramImage"; fileId: string; fileName?: string | null; mimeType?: string | null }
+> {
+  const input: Array<
+    | { type: "text"; text: string; text_elements: [] }
+    | { type: "telegramImage"; fileId: string; fileName?: string | null; mimeType?: string | null }
+  > = [];
+  if (text.trim().length > 0) {
+    input.push({
+      type: "text",
+      text,
+      text_elements: []
+    });
+  }
+  input.push({
+    type: "telegramImage",
+    fileId: image.fileId,
+    ...(image.fileName !== undefined ? { fileName: image.fileName } : {}),
+    ...(image.mimeType !== undefined ? { mimeType: image.mimeType } : {})
+  });
+  return input;
+}
+
+function pickLargestPhoto(photos: Message.PhotoMessage["photo"]): Message.PhotoMessage["photo"][number] {
+  const largest = photos.at(-1);
+  if (!largest) {
+    throw new Error("Telegram photo message did not include any photo sizes");
+  }
+
+  return largest;
+}
+
+function isImageDocument(document: Message.DocumentMessage["document"]): boolean {
+  return typeof document.mime_type === "string" && document.mime_type.startsWith("image/");
 }
 
 void main().catch((error) => {

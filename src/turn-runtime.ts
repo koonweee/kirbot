@@ -1,4 +1,5 @@
-import type { UserTextMessage } from "./domain";
+import type { UserTurnInput, UserTurnMessage } from "./domain";
+import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 
 export type RuntimeTurn = {
@@ -15,13 +16,13 @@ export type RuntimeTurn = {
 type PendingSteer = {
   localId: string;
   turnId: string;
-  message: UserTextMessage;
+  message: UserTurnMessage;
 };
 
 type TopicState = {
   activeTurnId: string | null;
   pendingSteers: PendingSteer[];
-  queuedFollowUps: UserTextMessage[];
+  queuedFollowUps: UserTurnMessage[];
 };
 
 export type QueueStateSnapshot = {
@@ -32,7 +33,7 @@ export type QueueStateSnapshot = {
 };
 
 export type PendingSteerDrain = {
-  mergedMessage: UserTextMessage | null;
+  mergedMessage: UserTurnMessage | null;
   queueState: QueueStateSnapshot;
 };
 
@@ -73,7 +74,7 @@ export class BridgeTurnRuntime {
     return activeTurnId ? this.#turns.get(activeTurnId) : undefined;
   }
 
-  queuePendingSteer(activeTurn: RuntimeTurn, message: UserTextMessage): { localId: string; queueState: QueueStateSnapshot } {
+  queuePendingSteer(activeTurn: RuntimeTurn, message: UserTurnMessage): { localId: string; queueState: QueueStateSnapshot } {
     const topicState = this.ensureTopicState(activeTurn.chatId, activeTurn.topicId);
     const localId = `pending-steer-${this.#nextPendingSteerId++}`;
     topicState.pendingSteers.push({
@@ -114,7 +115,8 @@ export class BridgeTurnRuntime {
     const mergedMessage = lastMessage
       ? {
           ...lastMessage,
-          text: drained.map((pending) => pending.message.text).join("\n")
+          text: drained.map((pending) => pending.message.text).filter((text) => text.length > 0).join("\n"),
+          input: mergeUserTurnInput(drained.map((pending) => pending.message.input))
         }
       : null;
 
@@ -152,8 +154,12 @@ export class BridgeTurnRuntime {
     }
 
     const topicState = this.ensureTopicState(turn.chatId, turn.topicId);
-    const messageText = flattenUserMessageText(item);
-    const index = topicState.pendingSteers.findIndex((pending) => pending.message.text === messageText);
+    const messageSignature = buildUserInputSignature(item.content);
+    const index = topicState.pendingSteers.findIndex(
+      (pending) =>
+        pending.message.submittedInputSignature === messageSignature ||
+        summarizeUserTurnMessage(pending.message) === summarizeCommittedUserMessage(item.content)
+    );
     if (index !== -1) {
       topicState.pendingSteers.splice(index, 1);
     }
@@ -230,23 +236,23 @@ export class BridgeTurnRuntime {
     return {
       chatId,
       topicId,
-      pendingSteers: topicState?.pendingSteers.map((pending) => pending.message.text) ?? [],
-      queuedFollowUps: topicState?.queuedFollowUps.map((message) => message.text) ?? []
+      pendingSteers: topicState?.pendingSteers.map((pending) => summarizeUserTurnMessage(pending.message)) ?? [],
+      queuedFollowUps: topicState?.queuedFollowUps.map((message) => summarizeUserTurnMessage(message)) ?? []
     };
   }
 
-  peekNextQueuedFollowUp(chatId: number, topicId: number): UserTextMessage | undefined {
+  peekNextQueuedFollowUp(chatId: number, topicId: number): UserTurnMessage | undefined {
     return this.#topicStates.get(topicKey(chatId, topicId))?.queuedFollowUps[0];
   }
 
-  shiftNextQueuedFollowUp(chatId: number, topicId: number): UserTextMessage | undefined {
+  shiftNextQueuedFollowUp(chatId: number, topicId: number): UserTurnMessage | undefined {
     const topicState = this.#topicStates.get(topicKey(chatId, topicId));
     const next = topicState?.queuedFollowUps.shift();
     this.cleanupTopicState(chatId, topicId);
     return next;
   }
 
-  prependQueuedFollowUp(chatId: number, topicId: number, message: UserTextMessage): QueueStateSnapshot {
+  prependQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): QueueStateSnapshot {
     this.ensureTopicState(chatId, topicId).queuedFollowUps.unshift(message);
     return this.getQueueState(chatId, topicId);
   }
@@ -280,13 +286,6 @@ export class BridgeTurnRuntime {
   }
 }
 
-function flattenUserMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
-  return item.content
-    .filter((contentItem): contentItem is Extract<typeof contentItem, { type: "text" }> => contentItem.type === "text")
-    .map((contentItem) => contentItem.text)
-    .join("");
-}
-
 function renderAssistantItems(turn: RuntimeTurn): string {
   return turn.assistantItemOrder
     .map((itemId) => turn.assistantItemTexts.get(itemId) ?? "")
@@ -296,4 +295,100 @@ function renderAssistantItems(turn: RuntimeTurn): string {
 
 function topicKey(chatId: number, topicId: number): string {
   return `${chatId}:${topicId}`;
+}
+
+function summarizeUserTurnMessage(message: UserTurnMessage): string {
+  const text = message.text.trim();
+  if (text.length > 0) {
+    return text;
+  }
+
+  const imageCount = message.input.filter((item) => item.type === "telegramImage").length;
+  if (imageCount === 1) {
+    return "[Image]";
+  }
+
+  if (imageCount > 1) {
+    return `[${imageCount} images]`;
+  }
+
+  return "(empty message)";
+}
+
+function summarizeCommittedUserMessage(input: UserInput[]): string {
+  const text = input
+    .filter((item): item is Extract<UserInput, { type: "text" }> => item.type === "text")
+    .map((item) => item.text)
+    .join("")
+    .trim();
+
+  if (text.length > 0) {
+    return text;
+  }
+
+  const imageCount = input.filter((item) => item.type === "localImage" || item.type === "image").length;
+  if (imageCount === 1) {
+    return "[Image]";
+  }
+
+  if (imageCount > 1) {
+    return `[${imageCount} images]`;
+  }
+
+  return "(empty message)";
+}
+
+function mergeUserTurnInput(messageInputs: UserTurnInput[][]): UserTurnInput[] {
+  const merged: UserTurnInput[] = [];
+
+  for (const input of messageInputs) {
+    for (const item of input) {
+      if (item.type !== "text") {
+        merged.push(item);
+        continue;
+      }
+
+      const previous = merged.at(-1);
+      if (previous?.type === "text") {
+        previous.text = `${previous.text}\n${item.text}`;
+        continue;
+      }
+
+      merged.push({
+        ...item,
+        text_elements: [...item.text_elements]
+      });
+    }
+  }
+
+  return merged;
+}
+
+function buildUserInputSignature(input: UserInput[]): string {
+  return JSON.stringify(
+    input.map((item) => {
+      if (item.type === "text") {
+        return {
+          type: "text",
+          text: item.text
+        };
+      }
+
+      if (item.type === "localImage") {
+        return {
+          type: "localImage",
+          path: item.path
+        };
+      }
+
+      if (item.type === "image") {
+        return {
+          type: "image",
+          url: item.url
+        };
+      }
+
+      return item;
+    })
+  );
 }

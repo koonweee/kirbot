@@ -1,4 +1,5 @@
 import { config as loadDotenv } from "dotenv";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { z } from "zod";
 
@@ -21,6 +22,7 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_CHAT_ID: z.string().min(1),
   TELEGRAM_ALLOWED_USER_IDS: z.string().min(1),
+  TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
   CODEX_APP_SERVER_URL: z.string().url().default("ws://127.0.0.1:8787"),
@@ -82,6 +84,7 @@ export type AppConfig = {
     botToken: string;
     chatId: number;
     allowedUserIds: Set<number>;
+    mediaTempDir: string;
   };
   database: {
     path: string;
@@ -108,7 +111,10 @@ export function loadConfig(): AppConfig {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
       chatId: Number.parseInt(parsed.TELEGRAM_CHAT_ID, 10),
-      allowedUserIds
+      allowedUserIds,
+      mediaTempDir: parsed.TELEGRAM_MEDIA_TMP_DIR
+        ? expandHomePath(parsed.TELEGRAM_MEDIA_TMP_DIR)
+        : defaultTelegramMediaTempDir()
     },
     database: {
       path: parsed.DATABASE_PATH
@@ -127,4 +133,13 @@ export function loadConfig(): AppConfig {
       config: parseJsonConfig(parsed.CODEX_CONFIG_JSON)
     }
   };
+}
+
+function defaultTelegramMediaTempDir(): string {
+  const shmDir = "/dev/shm";
+  if (existsSync(shmDir) && statSync(shmDir).isDirectory()) {
+    return `${shmDir}/telegram-codex-bridge-images`;
+  }
+
+  return "/tmp/telegram-codex-bridge-images";
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TelegramCodexBridge, type BridgeCodexApi, type TelegramApi } from "../src/bridge";
 import type { AppConfig } from "../src/config";
 import { BridgeDatabase } from "../src/db";
+import type { UserInput } from "../src/generated/codex/v2/UserInput";
+import { TemporaryImageStore } from "../src/media-store";
 import type { ServerNotification } from "../src/generated/codex/ServerNotification";
 import type { ServerRequest } from "../src/generated/codex/ServerRequest";
 import type { CommandExecutionApprovalDecision } from "../src/generated/codex/v2/CommandExecutionApprovalDecision";
@@ -31,8 +33,8 @@ function longText(paragraph: string, count: number): string {
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
   ensuredThreads: string[] = [];
-  turns: Array<{ threadId: string; text: string; turnId: string }> = [];
-  steerCalls: Array<{ threadId: string; expectedTurnId: string; text: string }> = [];
+  turns: Array<{ threadId: string; text: string; input: UserInput[]; turnId: string }> = [];
+  steerCalls: Array<{ threadId: string; expectedTurnId: string; text: string; input: UserInput[] }> = [];
   interruptCalls: Array<{ threadId: string; turnId: string }> = [];
   commandApprovals: Array<{ id: string | number; decision: CommandExecutionApprovalDecision }> = [];
   fileApprovals: Array<{ id: string | number; decision: FileChangeApprovalDecision }> = [];
@@ -54,14 +56,38 @@ class FakeCodex implements BridgeCodexApi {
     this.ensuredThreads.push(threadId);
   }
 
-  async sendTextTurn(threadId: string, text: string): Promise<{ id: string }> {
+  async sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }> {
     const turnId = `turn-${this.turns.length + 1}`;
-    this.turns.push({ threadId, text, turnId });
+    const turn = { threadId, text: flattenTextInput(input), turnId } as {
+      threadId: string;
+      text: string;
+      input: UserInput[];
+      turnId: string;
+    };
+    Object.defineProperty(turn, "input", {
+      value: input,
+      enumerable: false,
+      configurable: true,
+      writable: true
+    });
+    this.turns.push(turn);
     return { id: turnId };
   }
 
-  async steerTurn(threadId: string, expectedTurnId: string, text: string): Promise<{ turnId: string }> {
-    this.steerCalls.push({ threadId, expectedTurnId, text });
+  async steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }> {
+    const steerCall = { threadId, expectedTurnId, text: flattenTextInput(input) } as {
+      threadId: string;
+      expectedTurnId: string;
+      text: string;
+      input: UserInput[];
+    };
+    Object.defineProperty(steerCall, "input", {
+      value: input,
+      enumerable: false,
+      configurable: true,
+      writable: true
+    });
+    this.steerCalls.push(steerCall);
     if (this.nextSteerError) {
       const error = this.nextSteerError;
       this.nextSteerError = null;
@@ -172,6 +198,7 @@ class FakeTelegram implements TelegramApi {
     };
   }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
+  downloads: Array<{ fileId: string }> = [];
 
   async createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }> {
     this.createdTopics.push({ chatId, name });
@@ -251,6 +278,14 @@ class FakeTelegram implements TelegramApi {
   async answerCallbackQuery(): Promise<true> {
     return true;
   }
+
+  async downloadFile(fileId: string): Promise<{ bytes: Uint8Array; filePath?: string }> {
+    this.downloads.push({ fileId });
+    return {
+      bytes: new TextEncoder().encode(`image:${fileId}`),
+      filePath: `${fileId}.png`
+    };
+  }
 }
 
 describe("TelegramCodexBridge", () => {
@@ -260,6 +295,7 @@ describe("TelegramCodexBridge", () => {
   let telegram: FakeTelegram;
   let bridge: TelegramCodexBridge;
   let config: AppConfig;
+  let mediaStore: TemporaryImageStore;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), "telegram-codex-bridge-service-"));
@@ -272,7 +308,8 @@ describe("TelegramCodexBridge", () => {
       telegram: {
         botToken: "token",
         chatId: -1001,
-        allowedUserIds: new Set([42])
+        allowedUserIds: new Set([42]),
+        mediaTempDir: join(tempDir, "telegram-media")
       },
       database: {
         path: join(tempDir, "bridge.sqlite")
@@ -292,7 +329,9 @@ describe("TelegramCodexBridge", () => {
       }
     };
 
-    bridge = new TelegramCodexBridge(config, database, telegram, codex);
+    mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
+    await mediaStore.cleanupStaleFiles();
+    bridge = new TelegramCodexBridge(config, database, telegram, codex, mediaStore);
   });
 
   afterEach(async () => {
@@ -349,6 +388,41 @@ describe("TelegramCodexBridge", () => {
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
     expect(telegram.sentMessages.at(-1)?.text).toBe("Thinking 🤔");
+  });
+
+  it("downloads Telegram images into temp storage and forwards them as local images", async () => {
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Check this screenshot",
+      input: [
+        {
+          type: "text",
+          text: "Check this screenshot",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-1",
+          fileName: "screenshot.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(telegram.downloads).toEqual([{ fileId: "photo-1" }]);
+    expect(codex.turns).toHaveLength(1);
+    expect(codex.turns[0]?.input[0]).toEqual({
+      type: "text",
+      text: "Check this screenshot",
+      text_elements: []
+    });
+    expect(codex.turns[0]?.input[1]?.type).toBe("localImage");
+    const localImage = codex.turns[0]?.input[1];
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : true).toBe(false);
   });
 
   it("streams turn deltas and publishes the final completion message", async () => {
@@ -898,6 +972,57 @@ describe("TelegramCodexBridge", () => {
     );
   });
 
+  it("tracks an image follow-up as a pending steer until the committed user item arrives", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 12,
+      updateId: 125,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 13,
+      updateId: 126,
+      userId: 42,
+      text: "",
+      input: [
+        {
+          type: "telegramImage",
+          fileId: "photo-follow-up",
+          fileName: "deploy.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Queued for current turn:\n- [Image]");
+    const localImage = codex.steerCalls[0]?.input[0];
+    expect(localImage?.type).toBe("localImage");
+
+    const previewMessageId = telegram.sentMessages.at(-1)?.messageId;
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "item-user-image-1",
+          content: localImage && "path" in localImage ? [{ type: "localImage", path: localImage.path }] : []
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.deletions).toEqual(
+      previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
+    );
+  });
+
   it("queues a follow-up for the next turn when steer loses the active-turn race", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1369,3 +1494,10 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.edits.at(-1)?.text).toContain("accept");
   });
 });
+
+function flattenTextInput(input: UserInput[]): string {
+  return input
+    .filter((item): item is Extract<UserInput, { type: "text" }> => item.type === "text")
+    .map((item) => item.text)
+    .join("\n");
+}

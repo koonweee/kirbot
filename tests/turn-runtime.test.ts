@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import type { UserTextMessage } from "../src/domain";
+import type { UserTurnMessage } from "../src/domain";
 import { BridgeTurnRuntime } from "../src/turn-runtime";
 
-function message(text: string, updateId = 1): UserTextMessage {
+function message(text: string, updateId = 1): UserTurnMessage {
   return {
     chatId: -1001,
     topicId: 777,
     messageId: updateId,
     updateId,
     userId: 42,
-    text
+    text,
+    input: [
+      {
+        type: "text",
+        text,
+        text_elements: []
+      }
+    ]
   };
 }
 

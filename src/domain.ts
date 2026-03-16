@@ -1,4 +1,15 @@
+import type { UserInput } from "./generated/codex/v2/UserInput";
+
 export type SessionStatus = "provisioning" | "active" | "archived" | "errored";
+
+export type UserTurnInput =
+  | Extract<UserInput, { type: "text" }>
+  | {
+      type: "telegramImage";
+      fileId: string;
+      fileName?: string | null;
+      mimeType?: string | null;
+    };
 
 export type TopicSession = {
   id: number;
@@ -46,13 +57,15 @@ export type PendingServerRequest = {
   updatedAt: string;
 };
 
-export type UserTextMessage = {
+export type UserTurnMessage = {
   chatId: number;
   topicId: number | null;
   messageId: number;
   updateId: number;
   userId: number;
   text: string;
+  input: UserTurnInput[];
+  submittedInputSignature?: string;
 };
 
 export type TopicLifecycleEvent = {

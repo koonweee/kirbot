@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 
 import type { AppConfig } from "./config";
+import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { RequestId } from "./generated/codex/RequestId";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
@@ -124,32 +125,20 @@ export class CodexGateway {
     this.#loadedThreads.add(threadId);
   }
 
-  async sendTextTurn(threadId: string, text: string): Promise<Turn> {
+  async sendTurn(threadId: string, input: UserInput[]): Promise<Turn> {
     const response = await this.client.startTurn({
       threadId,
-      input: [
-        {
-          type: "text",
-          text,
-          text_elements: []
-        }
-      ]
+      input
     });
 
     return response.turn;
   }
 
-  async steerTurn(threadId: string, expectedTurnId: string, text: string): Promise<TurnSteerResponse> {
+  async steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<TurnSteerResponse> {
     return this.client.steerTurn({
       threadId,
       expectedTurnId,
-      input: [
-        {
-          type: "text",
-          text,
-          text_elements: []
-        }
-      ]
+      input
     });
   }
 
