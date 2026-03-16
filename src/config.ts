@@ -138,15 +138,6 @@ export function loadConfig(): AppConfig {
   };
 }
 
-function readOptionalTextFile(path: string | undefined): string | undefined {
-  if (!path) {
-    return undefined;
-  }
-
-  const content = readFileSync(expandHomePath(path), "utf8");
-  return content.trim().length > 0 ? content : undefined;
-}
-
 function readRequiredTextFile(path: string): string {
   return readFileSync(path, "utf8");
 }
