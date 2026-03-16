@@ -4,7 +4,6 @@ import type { TopicLifecycleEvent, TopicSession, UserTurnInput, UserTurnMessage 
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { RequestId } from "./generated/codex/RequestId";
-import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { CommandExecutionApprovalDecision } from "./generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "./generated/codex/v2/FileChangeApprovalDecision";
@@ -18,24 +17,26 @@ import { TemporaryImageStore } from "./media-store";
 import { buildUserInputSignature } from "./bridge/input-signature";
 import { getNotificationTurnId } from "./bridge/notifications";
 import {
+  buildTurnControlKeyboard,
   buildRenderedAssistantMessages,
   buildRenderedCommentaryMessage,
+  buildQueuePreviewKeyboard,
   buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
-  buildQueuePreviewKeyboard,
   deriveTopicTitle,
   isSameStatusDraft,
   renderQueuePreview,
+  renderTurnControlMessage,
   renderTelegramAssistantDraft,
   renderTelegramCommentaryDraft,
   renderTelegramStatusDraft,
-  type TurnStatusDraft,
-  type TurnStatusState
+  type TurnStatusDraft
 } from "./bridge/presentation";
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import {
   TelegramMessenger,
+  type InlineKeyboardMarkup,
   type TelegramApi,
   type TelegramRenderedMessage,
   type TelegramStatusDraftHandle,
@@ -71,6 +72,8 @@ type ActiveTurn = {
   topicId: number;
   threadId: string;
   turnId: string;
+  stopControlMessageId: number | null;
+  stopRequested: boolean;
   statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
   lifecycle: "active" | "finalizing";
@@ -216,7 +219,7 @@ export class TelegramCodexBridge {
 
   private async handleTurnCallbackQuery(event: CallbackQueryEvent): Promise<void> {
     const [, turnId, action] = event.data.split(":");
-    if (action !== "sendNow" || !turnId) {
+    if ((action !== "sendNow" && action !== "stop") || !turnId) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: "Unsupported callback."
       });
@@ -234,6 +237,18 @@ export class TelegramCodexBridge {
     if (!activeTurn || activeTurn.turnId !== turnId) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: "This turn is no longer active."
+      });
+      return;
+    }
+
+    if (action === "stop") {
+      await this.stopActiveTurn(activeTurn, event);
+      return;
+    }
+
+    if (activeTurn.stopRequested) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Interrupt already requested."
       });
       return;
     }
@@ -264,6 +279,53 @@ export class TelegramCodexBridge {
         });
         return;
       }
+
+      console.error("Failed to interrupt turn", error);
+      await this.#messenger.sendMessage({
+        chatId: event.chatId,
+        topicId: event.topicId,
+        text: `Failed to interrupt the current turn: ${formatError(error)}`
+      });
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Failed to interrupt turn."
+      });
+    }
+  }
+
+  private async stopActiveTurn(activeTurn: ActiveTurn, event: CallbackQueryEvent): Promise<void> {
+    if (activeTurn.stopRequested) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Interrupt already requested."
+      });
+      return;
+    }
+
+    activeTurn.stopRequested = true;
+    await this.updateTurnControlMessage(activeTurn, renderTurnControlMessage("stopping"));
+    await this.syncQueuePreview(this.#runtime.getQueueState(activeTurn.chatId, activeTurn.topicId));
+
+    try {
+      await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Stopping current turn."
+      });
+    } catch (error) {
+      const classification = classifyInterruptError(error);
+      if (classification.kind === "stale_or_missing_active_turn") {
+        await this.updateTurnControlMessage(activeTurn, renderTurnControlMessage("finishing"));
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "This turn is already finishing."
+        });
+        return;
+      }
+
+      activeTurn.stopRequested = false;
+      await this.updateTurnControlMessage(
+        activeTurn,
+        renderTurnControlMessage("active"),
+        buildTurnControlKeyboard(activeTurn.turnId)
+      );
+      await this.syncQueuePreview(this.#runtime.getQueueState(activeTurn.chatId, activeTurn.topicId));
 
       console.error("Failed to interrupt turn", error);
       await this.#messenger.sendMessage({
@@ -374,6 +436,7 @@ export class TelegramCodexBridge {
       threadId: session.codexThreadId,
       turnId: turn.id
     });
+    await this.sendTurnControlMessage(activeTurn, message.messageId);
     await activeTurn.statusHandle.set(renderTelegramStatusDraft(activeTurn.statusDraft), true);
   }
 
@@ -723,6 +786,8 @@ export class TelegramCodexBridge {
       topicId: message.topicId,
       threadId,
       turnId,
+      stopControlMessageId: null,
+      stopRequested: false,
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: Date.now(),
       lifecycle: "active",
@@ -775,6 +840,7 @@ export class TelegramCodexBridge {
     }
 
     activeTurn.lifecycle = "finalizing";
+    await this.clearTurnControlMessage(activeTurn);
     await activeTurn.statusHandle.clear();
 
     for (const [itemId, commentary] of activeTurn.commentaryStreams) {
@@ -784,6 +850,65 @@ export class TelegramCodexBridge {
         await commentary.handle.clear();
       }
       activeTurn.commentaryStreams.delete(itemId);
+    }
+  }
+
+  private async sendTurnControlMessage(activeTurn: ActiveTurn, replyToMessageId: number): Promise<void> {
+    try {
+      const message = await this.#messenger.sendMessage({
+        chatId: activeTurn.chatId,
+        topicId: activeTurn.topicId,
+        text: renderTurnControlMessage("active"),
+        replyToMessageId,
+        replyMarkup: buildTurnControlKeyboard(activeTurn.turnId)
+      });
+      activeTurn.stopControlMessageId = message.messageId;
+    } catch (error) {
+      console.warn("Failed to send turn control message", error);
+    }
+  }
+
+  private async updateTurnControlMessage(
+    activeTurn: ActiveTurn,
+    text: string,
+    replyMarkup?: InlineKeyboardMarkup
+  ): Promise<void> {
+    if (activeTurn.stopControlMessageId === null) {
+      return;
+    }
+
+    try {
+      const options = replyMarkup
+        ? {
+            message_thread_id: activeTurn.topicId,
+            reply_markup: replyMarkup
+          }
+        : {
+            message_thread_id: activeTurn.topicId
+          };
+      await this.telegram.editMessageText(activeTurn.chatId, activeTurn.stopControlMessageId, text, options);
+    } catch (error) {
+      if (isTelegramMessageMissingError(error)) {
+        activeTurn.stopControlMessageId = null;
+        return;
+      }
+      console.warn("Failed to update turn control message", error);
+    }
+  }
+
+  private async clearTurnControlMessage(activeTurn: ActiveTurn): Promise<void> {
+    if (activeTurn.stopControlMessageId === null) {
+      return;
+    }
+
+    try {
+      await this.telegram.deleteMessage(activeTurn.chatId, activeTurn.stopControlMessageId);
+    } catch (error) {
+      if (!isTelegramMessageMissingError(error)) {
+        console.warn("Failed to delete turn control message", error);
+      }
+    } finally {
+      activeTurn.stopControlMessageId = null;
     }
   }
 
@@ -871,7 +996,11 @@ export class TelegramCodexBridge {
     const key = topicKey(queueState.chatId, queueState.topicId);
     const existingMessageId = this.#queuePreviewMessageIds.get(key) ?? null;
     const activeTurn = this.findActiveTurnByTopic(queueState.chatId, queueState.topicId);
-    const replyMarkup = buildQueuePreviewKeyboard(queueState, activeTurn?.turnId ?? null);
+    const replyMarkup = buildQueuePreviewKeyboard(
+      queueState,
+      activeTurn?.turnId ?? null,
+      activeTurn?.stopRequested ?? false
+    );
 
     if (!previewText) {
       if (existingMessageId !== null) {
@@ -943,4 +1072,19 @@ export class TelegramCodexBridge {
 
 function topicKey(chatId: number, topicId: number): string {
   return `${chatId}:${topicId}`;
+}
+
+function isTelegramMessageMissingError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeTelegramError = error as { error_code?: unknown; description?: unknown };
+  return (
+    maybeTelegramError.error_code === 400 &&
+    typeof maybeTelegramError.description === "string" &&
+    (maybeTelegramError.description.toLowerCase().includes("message to edit not found") ||
+      maybeTelegramError.description.toLowerCase().includes("message to delete not found") ||
+      maybeTelegramError.description.toLowerCase().includes("not found"))
+  );
 }
