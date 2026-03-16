@@ -1,12 +1,13 @@
 import { Bot } from "grammy";
 import type { Message } from "grammy/types";
 
-import { TelegramCodexBridge, type TelegramApi } from "./bridge";
+import { TelegramCodexBridge } from "./bridge";
 import { CodexGateway, spawnCodexAppServer } from "./codex";
 import { loadConfig } from "./config";
 import { BridgeDatabase } from "./db";
 import { TemporaryImageStore } from "./media-store";
 import { CodexRpcClient, WebSocketRpcTransport } from "./rpc";
+import type { TelegramApi } from "./telegram-messenger";
 
 async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30): Promise<void> {
   let lastError: unknown;

@@ -43,11 +43,14 @@ export type PendingSteerDrain = {
   queueState: QueueStateSnapshot;
 };
 
-export type AssistantDraftKind = "assistant" | "commentary";
+export type AssistantDraftKind = "assistant";
 
 export type AssistantRenderUpdate = {
+  itemId: string;
+  itemText: string;
+  itemPhase: MessagePhase | null;
   draftText: string;
-  draftKind: AssistantDraftKind;
+  draftKind: AssistantDraftKind | null;
   finalText: string;
   startedAssistantText: boolean;
 };
@@ -202,7 +205,7 @@ export class BridgeTurnRuntime {
     const item = ensureAssistantItem(turn, itemId);
     item.text = `${item.text}${delta}`;
 
-    return buildAssistantRenderUpdate(turn, startedAssistantText);
+    return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
 
   commitAssistantItem(
@@ -222,7 +225,7 @@ export class BridgeTurnRuntime {
     item.phase = phase;
     item.text = text;
 
-    return buildAssistantRenderUpdate(turn, startedAssistantText);
+    return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
 
   renderAssistantItems(turnId: string): string {
@@ -230,9 +233,9 @@ export class BridgeTurnRuntime {
     return turn ? renderFinalAssistantText(turn) : "";
   }
 
-  renderAssistantDraft(turnId: string): { text: string; kind: AssistantDraftKind } {
+  renderAssistantDraft(turnId: string): { text: string; kind: AssistantDraftKind | null } {
     const turn = this.#turns.get(turnId);
-    return turn ? renderAssistantDraft(turn) : { text: "", kind: "assistant" };
+    return turn ? renderAssistantDraft(turn) : { text: "", kind: null };
   }
 
   finalizeTurn(turnId: string): QueueStateSnapshot | null {
@@ -323,9 +326,13 @@ function ensureAssistantItem(turn: RuntimeTurn, itemId: string): AssistantItemSt
   return created;
 }
 
-function buildAssistantRenderUpdate(turn: RuntimeTurn, startedAssistantText: boolean): AssistantRenderUpdate {
+function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAssistantText: boolean): AssistantRenderUpdate {
+  const item = turn.assistantItems.get(itemId);
   const draft = renderAssistantDraft(turn);
   return {
+    itemId,
+    itemText: item?.text ?? "",
+    itemPhase: item?.phase ?? null,
     draftText: draft.text,
     draftKind: draft.kind,
     finalText: renderFinalAssistantText(turn),
@@ -333,7 +340,7 @@ function buildAssistantRenderUpdate(turn: RuntimeTurn, startedAssistantText: boo
   };
 }
 
-function renderAssistantDraft(turn: RuntimeTurn): { text: string; kind: AssistantDraftKind } {
+function renderAssistantDraft(turn: RuntimeTurn): { text: string; kind: AssistantDraftKind | null } {
   const items = getAssistantItemsWithText(turn);
   if (items.some((item) => item.phase === "final_answer")) {
     return {
@@ -350,8 +357,8 @@ function renderAssistantDraft(turn: RuntimeTurn): { text: string; kind: Assistan
   }
 
   return {
-    text: renderAssistantText(items.filter((item) => item.phase === "commentary")),
-    kind: "commentary"
+    text: "",
+    kind: null
   };
 }
 

@@ -156,8 +156,11 @@ describe("BridgeTurnRuntime", () => {
     const commentary = runtime.appendAssistantDelta("turn-1", "item-1", "Inspecting the repo");
 
     expect(commentary).toEqual({
-      draftText: "Inspecting the repo",
-      draftKind: "commentary",
+      itemId: "item-1",
+      itemText: "Inspecting the repo",
+      itemPhase: "commentary",
+      draftText: "",
+      draftKind: null,
       finalText: "Inspecting the repo",
       startedAssistantText: true
     });
@@ -166,6 +169,9 @@ describe("BridgeTurnRuntime", () => {
     const finalAnswer = runtime.appendAssistantDelta("turn-1", "item-2", "Here is the fix.");
 
     expect(finalAnswer).toEqual({
+      itemId: "item-2",
+      itemText: "Here is the fix.",
+      itemPhase: "final_answer",
       draftText: "Here is the fix.",
       draftKind: "assistant",
       finalText: "Here is the fix.",

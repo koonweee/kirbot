@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { TelegramCodexBridge, type BridgeCodexApi, type TelegramApi } from "../src/bridge";
+import { TelegramCodexBridge, type BridgeCodexApi } from "../src/bridge";
 import type { AppConfig } from "../src/config";
 import { BridgeDatabase } from "../src/db";
 import type { UserInput } from "../src/generated/codex/v2/UserInput";
@@ -15,6 +15,9 @@ import type { CommandExecutionApprovalDecision } from "../src/generated/codex/v2
 import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileChangeApprovalDecision";
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import { JsonRpcMethodError } from "../src/rpc";
+import type { TelegramApi } from "../src/telegram-messenger";
+
+const EMPTY_DRAFT_TEXT = "";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
   let resolve!: (value: T) => void;
@@ -34,7 +37,11 @@ function escapeHtml(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-function codeBlock(text: string): string {
+function codeBlock(text: string, language?: string): string {
+  if (language) {
+    return `<pre><code class="language-${escapeHtml(language)}">${escapeHtml(text)}</code></pre>`;
+  }
+
   return `<pre><code>${escapeHtml(text)}</code></pre>`;
 }
 
@@ -176,6 +183,11 @@ class FakeTelegram implements TelegramApi {
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
+  chatActions: Array<{
+    chatId: number;
+    action: "typing" | "upload_document";
+    options?: { message_thread_id?: number };
+  }> = [];
   createdTopics: Array<{ chatId: number; name: string }> = [];
   sentMessages: Array<{
     messageId: number;
@@ -258,7 +270,12 @@ class FakeTelegram implements TelegramApi {
     return true;
   }
 
-  async sendChatAction(): Promise<true> {
+  async sendChatAction(
+    chatId: number,
+    action: "typing" | "upload_document",
+    options?: { message_thread_id?: number }
+  ): Promise<true> {
+    this.chatActions.push(options ? { chatId, action, options } : { chatId, action });
     if (this.nextChatActionError) {
       const error = this.nextChatActionError;
       this.nextChatActionError = null;
@@ -400,7 +417,8 @@ describe("TelegramCodexBridge", () => {
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("thinking 🤔\n----------"));
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking");
+    expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
   it("downloads Telegram images into temp storage and forwards them as local images", async () => {
@@ -449,7 +467,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("thinking 🤔\n----------"));
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking");
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -475,12 +493,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.some((draft) => draft.text === combinedDraft(codeBlock("streaming ✍️\n----------"), "Working on it"))).toBe(
-      true
-    );
+    expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
     expect(telegram.deletions).toEqual([]);
     expect(telegram.sentMessages.at(-1)?.text).toBe("Working on it");
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
 
     const turn = await database.getTurnById("turn-1");
     expect(turn.status).toBe("completed");
@@ -524,18 +540,17 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(
-      telegram.drafts.some(
-        (draft) => draft.text === combinedDraft(codeBlock("streaming ✍️\n----------"), "Use <b>bold</b> and <code>code</code>.")
-      )
+      telegram.drafts.some((draft) => draft.text === "Use <b>bold</b> and <code>code</code>.")
     ).toBe(true);
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
+    expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
     expect(telegram.sentMessages.at(-1)?.text).toBe(
       "Use <b>bold</b> and <code>code</code>.\n\n<pre><code class=\"language-ts\">const answer = 42;</code></pre>"
     );
     expect(telegram.sentMessages.at(-1)?.options?.parse_mode).toBe("HTML");
   });
 
-  it("streams commentary as a code-block draft and publishes only the final answer", async () => {
+  it("streams commentary in its own draft and persists it when the turn finalizes", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -560,6 +575,8 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    const initialDraftCount = telegram.appliedDrafts.length;
+
     codex.emitNotification({
       method: "item/agentMessage/delta",
       params: {
@@ -571,13 +588,11 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe(
-      combinedDraft(
-        codeBlock("streaming ✍️\n----------"),
-        codeBlock("thinking 🧠\n----------\nInspecting the files")
-      )
-    );
+    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("Inspecting the files", "kirbot"));
     expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
+    expect(telegram.sentMessages.at(-1)?.text).not.toBe(codeBlock("Inspecting the files", "kirbot"));
+    expect(telegram.appliedDrafts.length).toBeGreaterThan(initialDraftCount);
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking")).toBe(true);
 
     codex.emitNotification({
       method: "item/started",
@@ -605,8 +620,8 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    expect(telegram.drafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Here is the answer."));
-    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
+    expect(telegram.drafts.at(-1)?.text).toBe("Here is the answer.");
+    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBeUndefined();
 
     codex.emitNotification({
       method: "turn/completed",
@@ -622,6 +637,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(telegram.sentMessages.some((message) => message.text === codeBlock("Inspecting the files", "kirbot"))).toBe(true);
     expect(telegram.sentMessages.at(-1)?.text).toBe("Here is the answer.");
   });
 
@@ -731,9 +747,105 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.length).toBeGreaterThan(0);
-    expect(telegram.drafts.at(-1)?.text.startsWith("<pre><code>")).toBe(true);
-    expect(telegram.drafts.at(-1)?.text).toContain("[commentary truncated]");
-    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
+    expect(telegram.drafts.some((draft) => draft.text.startsWith("<pre><code class=\"language-kirbot\">"))).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.options?.parse_mode === "HTML")).toBe(true);
+  });
+
+  it("persists one commentary message per commentary item on item completion", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 73,
+      updateId: 83,
+      userId: 42,
+      text: "Narrate the work"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Inspecting files"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "Inspecting files",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-2",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-2",
+        delta: "Planning edits"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-2",
+          text: "Planning edits",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.sentMessages.at(-2)?.text).toBe(codeBlock("Inspecting files", "kirbot"));
+    expect(telegram.sentMessages.at(-1)?.text).toBe(codeBlock("Planning edits", "kirbot"));
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking")).toBe(true);
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {
@@ -768,13 +880,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Hello world"));
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "Hello world")).toBe(true);
   });
 
   it("does not let a stale delayed draft overwrite a newer one", async () => {
-    const firstDraft = deferred<void>();
-    telegram.draftBlocks.push(firstDraft.promise);
-
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -783,6 +892,10 @@ describe("TelegramCodexBridge", () => {
       userId: 42,
       text: "Explain the fix"
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const firstDraft = deferred<void>();
+    telegram.draftBlocks.push(firstDraft.promise);
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -809,7 +922,7 @@ describe("TelegramCodexBridge", () => {
     firstDraft.resolve();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Hello world"));
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "Hello world")).toBe(true);
   });
 
   it("retries the latest draft after a retry-after response", async () => {
@@ -839,7 +952,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(combinedDraft(codeBlock("streaming ✍️\n----------"), "Retry me"));
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "Retry me")).toBe(true);
   });
 
   it("renders multiple assistant items with separators instead of concatenating them", async () => {
@@ -944,9 +1057,9 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(
-      telegram.drafts.some((draft) => draft.text === combinedDraft(codeBlock("streaming ✍️\n----------"), "Start from the inside."))
+      telegram.drafts.some((draft) => draft.text === "Start from the inside.")
     ).toBe(true);
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
     expect(telegram.sentMessages.at(-1)?.text).toBe("Start from the inside.");
   });
 
@@ -1037,7 +1150,12 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("running 💻\n----------\nnpm test"));
+    expect(
+      telegram.drafts.some(
+        (draft) => draft.text === "<pre><code class=\"language-kirbot\">running\nnpm test</code></pre>"
+      )
+    ).toBe(true);
+    expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
   it("keeps a stable status draft and sends the final text separately when no assistant delta arrives", async () => {
@@ -1067,7 +1185,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Completed without streamed deltas");
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe("");
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
   });
 
   it("tracks a follow-up as a pending steer until the committed user item arrives", async () => {
@@ -1513,6 +1631,7 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-2"
       }
     ]);
+    expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
   it("preserves queued input when interrupting the current turn fails", async () => {

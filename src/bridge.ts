@@ -14,24 +14,16 @@ import type { FileChangeRequestApprovalParams } from "./generated/codex/v2/FileC
 import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
 import { TemporaryImageStore } from "./media-store";
 import { JsonRpcMethodError } from "./rpc";
-import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
-
-type InlineKeyboardMarkup = {
-  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
-};
-
-type TelegramParseMode = "HTML";
-
-type TelegramSendOptions = {
-  message_thread_id?: number;
-  reply_markup?: InlineKeyboardMarkup;
-  parse_mode?: TelegramParseMode;
-};
-
-type TelegramDraftOptions = {
-  message_thread_id?: number;
-  parse_mode?: TelegramParseMode;
-};
+import {
+  TelegramMessenger,
+  type InlineKeyboardMarkup,
+  type TelegramApi,
+  type TelegramParseMode,
+  type TelegramRenderedMessage,
+  type TelegramStatusDraftHandle,
+  type TelegramStreamMessageHandle
+} from "./telegram-messenger";
+import { BridgeTurnRuntime, type AssistantRenderUpdate, type QueueStateSnapshot } from "./turn-runtime";
 
 type TurnStatusState =
   | "thinking"
@@ -51,28 +43,6 @@ type TurnStatusDraft = {
   emoji: string;
   details: string | null;
 };
-
-export interface TelegramApi {
-  createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }>;
-  sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }>;
-  sendMessageDraft(chatId: number, draftId: number, text: string, options?: TelegramDraftOptions): Promise<true>;
-  sendChatAction(
-    chatId: number,
-    action: "typing" | "upload_document",
-    options?: {
-      message_thread_id?: number;
-    }
-  ): Promise<true>;
-  editMessageText(
-    chatId: number,
-    messageId: number,
-    text: string,
-    options?: TelegramSendOptions
-  ): Promise<unknown>;
-  deleteMessage(chatId: number, messageId: number): Promise<true>;
-  answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true>;
-  downloadFile(fileId: string): Promise<{ bytes: Uint8Array; filePath?: string }>;
-}
 
 export type CallbackQueryEvent = {
   callbackQueryId: string;
@@ -102,22 +72,12 @@ type ActiveTurn = {
   topicId: number;
   threadId: string;
   turnId: string;
-  draftId: number;
   statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
-  previewText: string | null;
-  previewKind: "assistant" | "commentary" | null;
-  lastDraftText: string | null;
-  lastDraftUpdateAt: number;
-  lastChatActionAt: number;
   lifecycle: "active" | "finalizing";
-  draftState: {
-    pendingText: string | null;
-    pendingParseMode: TelegramParseMode | undefined;
-    flushTimer: NodeJS.Timeout | null;
-    retryTimer: NodeJS.Timeout | null;
-    inFlight: Promise<void> | null;
-  };
+  statusHandle: TelegramStatusDraftHandle;
+  finalStream: TelegramStreamMessageHandle;
+  commentaryStreams: Map<string, { handle: TelegramStreamMessageHandle; text: string }>;
 };
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
@@ -129,6 +89,7 @@ export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
   readonly #submitPendingSteersAfterInterrupt = new Set<string>();
   readonly #notificationChains = new Map<string, Promise<void>>();
+  readonly #messenger: TelegramMessenger;
 
   constructor(
     private readonly config: AppConfig,
@@ -137,6 +98,7 @@ export class TelegramCodexBridge {
     private readonly codex: BridgeCodexApi,
     private readonly mediaStore: TemporaryImageStore
   ) {
+    this.#messenger = new TelegramMessenger(telegram);
     this.codex.onNotification((notification) => {
       void this.enqueueNotification(notification).catch((error) => {
         console.error("Failed to process Codex notification", error);
@@ -196,13 +158,11 @@ export class TelegramCodexBridge {
       }
 
       if (!session.codexThreadId) {
-        await this.telegram.sendMessage(
-          message.chatId,
-          "This topic is still provisioning a Codex session. Try again in a moment.",
-          {
-            message_thread_id: message.topicId
-          }
-        );
+        await this.#messenger.sendMessage({
+          chatId: message.chatId,
+          topicId: message.topicId,
+          text: "This topic is still provisioning a Codex session. Try again in a moment."
+        });
         return;
       }
 
@@ -216,10 +176,10 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.telegram.sendMessage(
-      message.chatId,
-      "Could not determine a Telegram topic for this message, so no Codex session was started."
-    );
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      text: "Could not determine a Telegram topic for this message, so no Codex session was started."
+    });
   }
 
   async handleTopicClosed(event: TopicLifecycleEvent): Promise<void> {
@@ -327,13 +287,11 @@ export class TelegramCodexBridge {
       }
 
       console.error("Failed to interrupt turn", error);
-      await this.telegram.sendMessage(
-        event.chatId,
-        `Failed to interrupt the current turn: ${formatError(error)}`,
-        {
-          message_thread_id: event.topicId
-        }
-      );
+      await this.#messenger.sendMessage({
+        chatId: event.chatId,
+        topicId: event.topicId,
+        text: `Failed to interrupt the current turn: ${formatError(error)}`
+      });
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: "Failed to interrupt turn."
       });
@@ -356,13 +314,9 @@ export class TelegramCodexBridge {
       const threadId = await this.codex.createThread(title);
       const session = await this.database.activateSession(pending.id, threadId);
 
-      await this.telegram.sendMessage(
-        message.chatId,
-        `Created session topic "${title}". Continue in the new topic.`
-      );
-
-      await this.telegram.sendMessage(message.chatId, `Starting Codex session for "${title}"...`, {
-        message_thread_id: forumTopic.message_thread_id
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: `Created session topic "${title}". Continue in the new topic.`
       });
 
       await this.sendTurnForSession(session, {
@@ -371,13 +325,11 @@ export class TelegramCodexBridge {
       });
     } catch (error) {
       await this.database.markSessionErrored(pending.id);
-      await this.telegram.sendMessage(
-        message.chatId,
-        `Failed to create Codex session for "${title}": ${formatError(error)}`,
-        {
-          message_thread_id: forumTopic.message_thread_id
-        }
-      );
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: forumTopic.message_thread_id,
+        text: `Failed to create Codex session for "${title}": ${formatError(error)}`
+      });
     }
   }
 
@@ -399,20 +351,14 @@ export class TelegramCodexBridge {
       const threadId = await this.codex.createThread(title);
       const session = await this.database.activateSession(pending.id, threadId);
 
-      await this.telegram.sendMessage(message.chatId, `Starting Codex session for "${title}"...`, {
-        message_thread_id: message.topicId
-      });
-
       await this.sendTurnForSession(session, message);
     } catch (error) {
       await this.database.markSessionErrored(pending.id);
-      await this.telegram.sendMessage(
-        message.chatId,
-        `Failed to create Codex session for "${title}": ${formatError(error)}`,
-        {
-          message_thread_id: message.topicId
-        }
-      );
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: `Failed to create Codex session for "${title}": ${formatError(error)}`
+      });
     }
   }
 
@@ -426,7 +372,6 @@ export class TelegramCodexBridge {
     }
 
     await this.codex.ensureThreadLoaded(session.codexThreadId);
-    await this.sendChatActionBestEffort(message.chatId, message.topicId);
 
     const preparedInput = await this.materializeCodexInput(message);
     let turn: { id: string };
@@ -450,22 +395,20 @@ export class TelegramCodexBridge {
       topicId: message.topicId,
       threadId: session.codexThreadId,
       turnId: turn.id,
-      draftId: message.updateId,
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: Date.now(),
-      previewText: null,
-      previewKind: null,
-      lastDraftText: null,
-      lastDraftUpdateAt: 0,
-      lastChatActionAt: 0,
       lifecycle: "active",
-      draftState: {
-        pendingText: null,
-        pendingParseMode: undefined,
-        flushTimer: null,
-        retryTimer: null,
-        inFlight: null
-      }
+      statusHandle: this.#messenger.statusDraft({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        draftId: buildStableDraftId(`${turn.id}:status`)
+      }),
+      finalStream: this.#messenger.streamMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        draftId: buildStableDraftId(`${turn.id}:final`)
+      }),
+      commentaryStreams: new Map()
     };
     this.#activeTurns.set(turn.id, activeTurn);
     this.#runtime.registerTurn({
@@ -475,7 +418,7 @@ export class TelegramCodexBridge {
       turnId: turn.id,
       draftId: message.updateId
     });
-    await this.queueDraftRender(activeTurn, true);
+    await activeTurn.statusHandle.set(renderTelegramStatusDraft(activeTurn.statusDraft), true);
   }
 
   private async enqueueNotification(notification: ServerNotification): Promise<void> {
@@ -548,13 +491,8 @@ export class TelegramCodexBridge {
           return;
         }
 
-        if (update.startedAssistantText) {
-          await this.updateTurnStatus(activeTurn.turnId, buildStatusDraft("streaming"), true);
-        }
-
-        await this.database.appendTurnStream(activeTurn.turnId, update.draftText);
-        await this.maybeSendChatAction(activeTurn);
-        await this.maybeSendMessageDraft(activeTurn, update.draftText || "…", update.draftKind, update.startedAssistantText);
+        await this.database.appendTurnStream(activeTurn.turnId, update.finalText);
+        await this.handleAssistantRenderUpdate(activeTurn, update, "delta", update.startedAssistantText);
         return;
       }
       case "item/completed": {
@@ -581,12 +519,8 @@ export class TelegramCodexBridge {
           return;
         }
 
-        if (update.startedAssistantText) {
-          await this.updateTurnStatus(activeTurn.turnId, buildStatusDraft("streaming"), true);
-        }
-
-        await this.database.appendTurnStream(activeTurn.turnId, update.draftText);
-        await this.maybeSendMessageDraft(activeTurn, update.draftText || "…", update.draftKind, true);
+        await this.database.appendTurnStream(activeTurn.turnId, update.finalText);
+        await this.handleAssistantRenderUpdate(activeTurn, update, "completed", true);
         return;
       }
       case "turn/completed": {
@@ -619,7 +553,6 @@ export class TelegramCodexBridge {
     const finalText = readbackText.trim().length > 0 ? readbackText : streamedText;
     const finalBody = finalText || "(no assistant output)";
     const messageId = await this.publishFinalTurnText(activeTurn, finalBody);
-    await this.updateTurnStatus(turnId, buildStatusDraft("done"), true);
 
     await this.database.appendTurnStream(turnId, finalBody);
     await this.database.completeTurn(turnId, messageId, "completed");
@@ -643,7 +576,6 @@ export class TelegramCodexBridge {
     const fallbackOutput = readbackText.trim().length > 0 ? readbackText : streamedText;
     const text = [fallbackOutput, `\n\nCodex error: ${errorMessage}`].filter(Boolean).join("");
     const messageId = await this.publishFinalTurnText(activeTurn, text);
-    await this.updateTurnStatus(turnId, buildStatusDraft("failed"), true);
 
     await this.database.appendTurnStream(turnId, text);
     await this.database.completeTurn(turnId, messageId, "failed");
@@ -684,7 +616,6 @@ export class TelegramCodexBridge {
     if (finalText.trim().length > 0) {
       messageId = await this.publishFinalTurnText(activeTurn, finalText);
     }
-    await this.updateTurnStatus(activeTurn.turnId, buildStatusDraft("interrupted"), true);
 
     await this.database.appendTurnStream(activeTurn.turnId, finalText);
     await this.database.completeTurn(activeTurn.turnId, messageId, "interrupted");
@@ -716,13 +647,11 @@ export class TelegramCodexBridge {
         pendingSteers.mergedMessage
       );
       await this.syncQueuePreview(restoredQueue);
-      await this.telegram.sendMessage(
-        activeTurn.chatId,
-        `Interrupted the current turn, but failed to submit queued steer instructions: ${formatError(error)}`,
-        {
-          message_thread_id: activeTurn.topicId
-        }
-      );
+      await this.#messenger.sendMessage({
+        chatId: activeTurn.chatId,
+        topicId: activeTurn.topicId,
+        text: `Interrupted the current turn, but failed to submit queued steer instructions: ${formatError(error)}`
+      });
       return;
     }
 
@@ -776,15 +705,17 @@ export class TelegramCodexBridge {
       payloadJson: JSON.stringify(request.params)
     });
 
-    const message = await this.telegram.sendMessage(Number.parseInt(session.telegramChatId, 10), promptText, {
-      message_thread_id: session.telegramTopicId,
-      reply_markup: buildApprovalKeyboard(
+    const message = await this.#messenger.sendMessage({
+      chatId: Number.parseInt(session.telegramChatId, 10),
+      topicId: session.telegramTopicId,
+      text: promptText,
+      replyMarkup: buildApprovalKeyboard(
         pending.id,
         request.method === "item/commandExecution/requestApproval" ? request.params.availableDecisions ?? null : null
       )
     });
 
-    await this.database.updateServerRequestMessageId(pending.id, message.message_id);
+    await this.database.updateServerRequestMessageId(pending.id, message.messageId);
   }
 
   private async handleUserInputRequest(session: TopicSession, request: UserInputServerRequest): Promise<void> {
@@ -801,8 +732,10 @@ export class TelegramCodexBridge {
       "Reply in this topic. For one question, send plain text. For multiple questions, send JSON like {\"question_id\": \"answer\"}."
     ].join("\n");
 
-    const message = await this.telegram.sendMessage(Number.parseInt(session.telegramChatId, 10), promptText, {
-      message_thread_id: session.telegramTopicId
+    const message = await this.#messenger.sendMessage({
+      chatId: Number.parseInt(session.telegramChatId, 10),
+      topicId: session.telegramTopicId,
+      text: promptText
     });
 
     await this.database.createPendingRequest({
@@ -810,7 +743,7 @@ export class TelegramCodexBridge {
       method: request.method,
       telegramChatId: session.telegramChatId,
       telegramTopicId: session.telegramTopicId,
-      telegramMessageId: message.message_id,
+      telegramMessageId: message.messageId,
       codexThreadId: session.codexThreadId!,
       turnId: request.params.turnId,
       itemId: request.params.itemId,
@@ -833,8 +766,10 @@ export class TelegramCodexBridge {
 
     await this.codex.respondToUserInputRequest(parseRequestId(pending.requestIdJson), response);
     await this.database.resolveRequest(pending.requestIdJson, JSON.stringify(response));
-    await this.telegram.sendMessage(message.chatId, "Sent your answer to Codex.", {
-      message_thread_id: message.topicId
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      topicId: message.topicId,
+      text: "Sent your answer to Codex."
     });
     return true;
   }
@@ -907,91 +842,83 @@ export class TelegramCodexBridge {
 
     activeTurn.statusDraft = nextStatus;
     activeTurn.lastStatusUpdateAt = now;
-    await this.queueDraftRender(activeTurn, force);
+    await activeTurn.statusHandle.set(renderTelegramStatusDraft(nextStatus), force);
   }
 
-  private async clearTurnStatus(activeTurn: ActiveTurn): Promise<void> {
-    activeTurn.statusDraft = null;
-    await this.queueDraftRender(activeTurn, true);
-  }
-
-  private async clearTurnStatusById(turnId: string): Promise<void> {
-    const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn) {
-      return;
-    }
-
-    await this.clearTurnStatus(activeTurn);
-  }
-
-  private async maybeSendChatAction(activeTurn: ActiveTurn): Promise<void> {
-    const now = Date.now();
-    if (now - activeTurn.lastChatActionAt < 3000) {
-      return;
-    }
-
-    const sent = await this.sendChatActionBestEffort(activeTurn.chatId, activeTurn.topicId);
-    if (sent) {
-      activeTurn.lastChatActionAt = now;
-    }
-  }
-
-  private async maybeSendMessageDraft(
+  private async handleAssistantRenderUpdate(
     activeTurn: ActiveTurn,
-    text: string,
-    kind: "assistant" | "commentary" = "assistant",
-    force = false
+    update: AssistantRenderUpdate,
+    stage: "delta" | "completed",
+    forceDraft = false
   ): Promise<void> {
-    if (activeTurn.lifecycle !== "active") {
+    if (update.itemPhase === "commentary") {
+      const commentary = this.getOrCreateCommentaryStream(activeTurn, update.itemId);
+      commentary.text = update.itemText;
+      if (stage === "completed") {
+        await commentary.handle.finalize(buildRenderedCommentaryMessage(update.itemText));
+        activeTurn.commentaryStreams.delete(update.itemId);
+        return;
+      }
+
+      await commentary.handle.update(renderTelegramCommentaryDraft(update.itemText), forceDraft);
       return;
     }
 
-    activeTurn.previewText = text;
-    activeTurn.previewKind = kind;
-    await this.queueDraftRender(activeTurn, force);
+    if (update.draftKind === "assistant") {
+      await activeTurn.finalStream.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
+      return;
+    }
   }
 
-  private async replaceTurnStatusWithFinal(activeTurn: ActiveTurn, text: string): Promise<number> {
-    return this.sendChunkedText(activeTurn.chatId, activeTurn.topicId, text);
+  private getOrCreateCommentaryStream(
+    activeTurn: ActiveTurn,
+    itemId: string
+  ): { handle: TelegramStreamMessageHandle; text: string } {
+    const existing = activeTurn.commentaryStreams.get(itemId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = {
+      handle: this.#messenger.streamMessage({
+        chatId: activeTurn.chatId,
+        topicId: activeTurn.topicId,
+        draftId: buildStableDraftId(`${activeTurn.turnId}:commentary:${itemId}`)
+      }),
+      text: ""
+    };
+    activeTurn.commentaryStreams.set(itemId, created);
+    return created;
   }
 
   private async publishFinalTurnText(activeTurn: ActiveTurn, text: string): Promise<number> {
+    const outputs = buildRenderedAssistantMessages(text);
     if (this.#runtime.getTurn(activeTurn.turnId)?.hasAssistantText) {
-      return this.sendChunkedText(activeTurn.chatId, activeTurn.topicId, text);
+      const messageId = await activeTurn.finalStream.finalize(outputs);
+      if (messageId !== null) {
+        return messageId;
+      }
     }
 
-    return this.replaceTurnStatusWithFinal(activeTurn, text);
+    return this.sendRenderedMessages(activeTurn.chatId, activeTurn.topicId, outputs);
   }
 
-  private async queueDraftRender(activeTurn: ActiveTurn, force = false): Promise<void> {
-    const renderedPreview = renderTelegramTurnDraft(activeTurn.statusDraft, activeTurn.previewText, activeTurn.previewKind);
-    const now = Date.now();
-    if (!force && activeTurn.lastDraftText === renderedPreview.text && activeTurn.draftState.pendingText === null) {
-      return;
-    }
-
-    activeTurn.draftState.pendingText = renderedPreview.text;
-    activeTurn.draftState.pendingParseMode = renderedPreview.parse_mode;
-
-    const delayMs = force ? 0 : Math.max(0, 400 - (now - activeTurn.lastDraftUpdateAt));
-    this.scheduleDraftFlush(activeTurn, delayMs);
-  }
-
-  private async sendChunkedText(
+  private async sendRenderedMessages(
     chatId: number,
     topicId: number,
-    text: string
+    renderedMessages: TelegramRenderedMessage[]
   ): Promise<number> {
-    const chunks = chunkTelegramMessage(text).map((chunk) => renderTelegramAssistantText(chunk));
     let firstMessageId: number | null = null;
 
-    for (const chunk of chunks) {
-      const message = await this.telegram.sendMessage(chatId, chunk.text, {
-        message_thread_id: topicId,
-        ...withTelegramParseMode(chunk.parse_mode)
+    for (const rendered of renderedMessages) {
+      const message = await this.#messenger.sendMessage({
+        chatId,
+        topicId,
+        text: rendered.text,
+        parseMode: rendered.parseMode
       });
       if (firstMessageId === null) {
-        firstMessageId = message.message_id;
+        firstMessageId = message.messageId;
       }
     }
 
@@ -1008,161 +935,32 @@ export class TelegramCodexBridge {
   }
 
   private removeActiveTurn(turnId: string): void {
-    const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn) {
-      return;
-    }
-
-    this.clearDraftScheduling(activeTurn);
     this.#activeTurns.delete(turnId);
     this.#submitPendingSteersAfterInterrupt.delete(turnId);
   }
 
-  private scheduleDraftFlush(activeTurn: ActiveTurn, delayMs: number): void {
-    if (activeTurn.lifecycle !== "active") {
-      return;
-    }
-
-    if (activeTurn.draftState.inFlight) {
-      return;
-    }
-
-    if (activeTurn.draftState.retryTimer) {
-      return;
-    }
-
-    if (activeTurn.draftState.flushTimer) {
-      clearTimeout(activeTurn.draftState.flushTimer);
-    }
-
-    if (delayMs === 0) {
-      activeTurn.draftState.flushTimer = null;
-      activeTurn.draftState.inFlight = this.flushPendingDraft(activeTurn).finally(() => {
-        activeTurn.draftState.inFlight = null;
-        if (activeTurn.lifecycle === "active" && activeTurn.draftState.pendingText !== null) {
-          this.scheduleDraftFlush(activeTurn, 0);
-        }
-      });
-      return;
-    }
-
-    activeTurn.draftState.flushTimer = setTimeout(() => {
-      activeTurn.draftState.flushTimer = null;
-      activeTurn.draftState.inFlight = this.flushPendingDraft(activeTurn).finally(() => {
-        activeTurn.draftState.inFlight = null;
-        if (activeTurn.lifecycle === "active" && activeTurn.draftState.pendingText !== null) {
-          this.scheduleDraftFlush(activeTurn, 0);
-        }
-      });
-    }, delayMs);
-  }
-
-  private async flushPendingDraft(activeTurn: ActiveTurn): Promise<void> {
-    const pendingText = activeTurn.draftState.pendingText;
-    if (activeTurn.lifecycle !== "active" || pendingText === null) {
-      return;
-    }
-
-    activeTurn.draftState.pendingText = null;
-    const pendingParseMode = activeTurn.draftState.pendingParseMode;
-    activeTurn.draftState.pendingParseMode = undefined;
-
-    if (pendingText === activeTurn.lastDraftText) {
-      return;
-    }
-
-    try {
-      await this.sendDraftText(activeTurn, pendingText, pendingParseMode);
-      activeTurn.lastDraftText = pendingText;
-      activeTurn.lastDraftUpdateAt = Date.now();
-    } catch (error) {
-      if (isRetryAfterError(error)) {
-        activeTurn.draftState.pendingText = pendingText;
-        activeTurn.draftState.pendingParseMode = pendingParseMode;
-        const retryDelayMs = getRetryAfterDelayMs(error);
-        activeTurn.draftState.retryTimer = setTimeout(() => {
-          activeTurn.draftState.retryTimer = null;
-          if (activeTurn.draftState.pendingText !== null) {
-            this.scheduleDraftFlush(activeTurn, 0);
-          }
-        }, retryDelayMs);
-        return;
-      }
-
-      if (pendingParseMode) {
-        await this.sendDraftText(activeTurn, pendingText, undefined);
-        activeTurn.lastDraftText = pendingText;
-        activeTurn.lastDraftUpdateAt = Date.now();
-        return;
-      }
-
-      throw error;
-    }
-  }
-
-  private async sendDraftText(
-    activeTurn: ActiveTurn,
-    text: string,
-    parseMode?: TelegramParseMode
-  ): Promise<void> {
-    await this.telegram.sendMessageDraft(activeTurn.chatId, activeTurn.draftId, text, {
-      message_thread_id: activeTurn.topicId,
-      ...withTelegramParseMode(parseMode)
-    });
-  }
-
-  private clearDraftScheduling(activeTurn: ActiveTurn): void {
-    if (activeTurn.draftState.flushTimer) {
-      clearTimeout(activeTurn.draftState.flushTimer);
-      activeTurn.draftState.flushTimer = null;
-    }
-
-    if (activeTurn.draftState.retryTimer) {
-      clearTimeout(activeTurn.draftState.retryTimer);
-      activeTurn.draftState.retryTimer = null;
-    }
-  }
-
   private async beginTurnFinalization(activeTurn: ActiveTurn): Promise<void> {
     if (activeTurn.lifecycle === "finalizing") {
-      if (activeTurn.draftState.inFlight) {
-        await activeTurn.draftState.inFlight;
-      }
       return;
     }
 
     activeTurn.lifecycle = "finalizing";
-    activeTurn.draftState.pendingText = null;
-    activeTurn.draftState.pendingParseMode = undefined;
-    this.clearDraftScheduling(activeTurn);
+    await activeTurn.statusHandle.clear();
 
-    if (activeTurn.draftState.inFlight) {
-      await activeTurn.draftState.inFlight;
-    }
-
-    try {
-      if (activeTurn.lastDraftText !== null) {
-        await this.sendDraftText(activeTurn, "");
-        activeTurn.lastDraftText = "";
-        activeTurn.lastDraftUpdateAt = Date.now();
+    for (const [itemId, commentary] of activeTurn.commentaryStreams) {
+      if (commentary.text.trim().length > 0) {
+        await commentary.handle.finalize(buildRenderedCommentaryMessage(commentary.text));
+      } else {
+        await commentary.handle.clear();
       }
-    } catch (error) {
-      if (!isRetryAfterError(error)) {
-        throw error;
-      }
+      activeTurn.commentaryStreams.delete(itemId);
     }
-
-    activeTurn.draftState.pendingText = null;
-    activeTurn.draftState.pendingParseMode = undefined;
-    this.clearDraftScheduling(activeTurn);
   }
 
   private async trySteerTurn(activeTurn: ActiveTurn, message: UserTurnMessage): Promise<void> {
     if (message.topicId === null) {
       return;
     }
-
-    await this.sendChatActionBestEffort(message.chatId, message.topicId);
 
     const runtimeTurn = this.#runtime.getTurn(activeTurn.turnId);
     if (!runtimeTurn) {
@@ -1188,24 +986,20 @@ export class TelegramCodexBridge {
       await this.syncQueuePreview(queueState);
 
       if (classification.kind === "invalid_input") {
-        await this.telegram.sendMessage(
-          message.chatId,
-          classification.userMessage ?? `Codex rejected the follow-up: ${formatError(error)}`,
-          {
-            message_thread_id: message.topicId
-          }
-        );
+        await this.#messenger.sendMessage({
+          chatId: message.chatId,
+          topicId: message.topicId,
+          text: classification.userMessage ?? `Codex rejected the follow-up: ${formatError(error)}`
+        });
         return;
       }
 
       console.error("Failed to steer turn", error);
-      await this.telegram.sendMessage(
-        message.chatId,
-        `Failed to add the follow-up to the current turn: ${formatError(error)}`,
-        {
-          message_thread_id: message.topicId
-        }
-      );
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: `Failed to add the follow-up to the current turn: ${formatError(error)}`
+      });
       return;
     } finally {
       if (preparedInput) {
@@ -1286,8 +1080,13 @@ export class TelegramCodexBridge {
       : {
           message_thread_id: queueState.topicId
         };
-    const message = await this.telegram.sendMessage(queueState.chatId, previewText, options);
-    this.#queuePreviewMessageIds.set(key, message.message_id);
+    const message = await this.#messenger.sendMessage({
+      chatId: queueState.chatId,
+      topicId: queueState.topicId,
+      text: previewText,
+      ...(replyMarkup ? { replyMarkup } : {})
+    });
+    this.#queuePreviewMessageIds.set(key, message.messageId);
   }
 
   private async maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void> {
@@ -1310,25 +1109,20 @@ export class TelegramCodexBridge {
     await this.syncQueuePreview(this.#runtime.getQueueState(chatId, topicId));
   }
 
-  private async sendChatActionBestEffort(chatId: number, topicId: number): Promise<boolean> {
-    try {
-      await this.telegram.sendChatAction(chatId, "typing", {
-        message_thread_id: topicId
-      });
-      return true;
-    } catch (error) {
-      if (isRetryAfterError(error)) {
-        return false;
-      }
-
-      console.warn("Failed to send Telegram chat action", error);
-      return false;
-    }
-  }
 }
 
 function deriveTopicTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
+}
+
+function buildStableDraftId(seed: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 1) || 1;
 }
 
 function topicKey(chatId: number, topicId: number): string {
@@ -1466,10 +1260,6 @@ function buildDraftPreviewWithLimit(text: string, limit: number): string {
   return buildTruncatedPreview(text, limit, "…\n", "\n\n[preview truncated]");
 }
 
-function buildCommentaryDraftPreview(text: string): string {
-  return buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT);
-}
-
 function buildCommentaryDraftPreviewWithLimit(text: string, limit: number): string {
   return buildTruncatedPreview(text, limit, "...\n", "\n\n[commentary truncated]");
 }
@@ -1483,20 +1273,16 @@ function buildTruncatedPreview(text: string, limit: number, prefix: string, suff
   return `${prefix}${text.slice(-budget)}${suffix}`;
 }
 
-function buildCodeBlockContent(header: string, body: string | null): string {
-  return [header, "----------", body].filter((value): value is string => value !== null && value.length > 0).join("\n");
+function buildStatusText(statusDraft: TurnStatusDraft): string {
+  if (!statusDraft.details) {
+    return statusDraft.state;
+  }
+
+  return `\`\`\`kirbot\n${statusDraft.state}\n${statusDraft.details.replaceAll("```", "'''")}\n\`\`\``;
 }
 
-function buildStatusBlockContent(statusDraft: TurnStatusDraft): string {
-  return buildCodeBlockContent(`${statusDraft.state} ${statusDraft.emoji}`, statusDraft.details);
-}
-
-function buildCommentaryBlockContent(text: string): string {
-  return buildCodeBlockContent("thinking 🧠", text);
-}
-
-function buildCodeFence(content: string): string {
-  return `\`\`\`\n${content}\n\`\`\``;
+function buildCommentaryText(text: string): string {
+  return `\`\`\`kirbot\n${text}\n\`\`\``;
 }
 
 function chunkTelegramMessage(text: string): string[] {
@@ -1555,49 +1341,39 @@ function renderTelegramAssistantText(text: string): { text: string; parse_mode?:
   };
 }
 
-function renderTelegramTurnDraft(
-  statusDraft: TurnStatusDraft | null,
-  previewText: string | null,
-  previewKind: "assistant" | "commentary" | null
-): { text: string; parse_mode?: TelegramParseMode } {
+function renderTelegramStatusDraft(statusDraft: TurnStatusDraft | null): TelegramRenderedMessage | null {
+  return statusDraft ? renderTelegramAssistantText(buildStatusText(statusDraft)) : null;
+}
+
+function renderTelegramAssistantDraft(text: string): TelegramRenderedMessage {
   let budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT;
-  let rendered = renderTelegramTurnDraftWithLimit(statusDraft, previewText, previewKind, budget);
+  let rendered = renderTelegramAssistantText(buildDraftPreviewWithLimit(text, budget));
 
   for (let attempt = 0; attempt < 3 && rendered.text.length > TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT; attempt += 1) {
     const overflow = rendered.text.length - TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT;
     budget = Math.max(0, budget - overflow - 16);
-    rendered = renderTelegramTurnDraftWithLimit(statusDraft, previewText, previewKind, budget);
+    rendered = renderTelegramAssistantText(buildDraftPreviewWithLimit(text, budget));
   }
 
-  return rendered;
+  return toRenderedMessage(rendered);
 }
 
-function renderTelegramTurnDraftWithLimit(
-  statusDraft: TurnStatusDraft | null,
-  previewText: string | null,
-  previewKind: "assistant" | "commentary" | null,
-  limit: number
-): { text: string; parse_mode?: TelegramParseMode } {
-  const parts: string[] = [];
-  const statusMarkdown = statusDraft ? buildCodeFence(buildStatusBlockContent(statusDraft)) : null;
-  if (statusMarkdown) {
-    parts.push(statusMarkdown);
-  }
+function renderTelegramCommentaryDraft(text: string): TelegramRenderedMessage {
+  const budget = Math.max(0, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT - "```kirbot\n\n```".length);
+  return toRenderedMessage(renderTelegramAssistantText(buildCommentaryText(buildCommentaryDraftPreviewWithLimit(text, budget))));
+}
 
-  if (previewText && previewKind === "commentary") {
-    const reservedChars = parts.join("\n\n").length + (parts.length > 0 ? 2 : 0);
-    const fenceOverhead = "```\n\n```".length;
-    const commentaryHeaderOverhead = "thinking 🧠\n----------\n".length;
-    const bodyBudget = Math.max(0, limit - reservedChars - fenceOverhead - commentaryHeaderOverhead);
-    const commentaryPreview = buildCommentaryDraftPreviewWithLimit(previewText, bodyBudget);
-    parts.push(buildCodeFence(buildCommentaryBlockContent(commentaryPreview)));
-  } else if (previewText && previewKind === "assistant") {
-    const reservedChars = parts.join("\n\n").length + (parts.length > 0 ? 2 : 0);
-    const assistantBudget = Math.max(0, limit - reservedChars);
-    parts.push(buildDraftPreviewWithLimit(previewText, assistantBudget));
-  }
+function buildRenderedCommentaryMessage(text: string): TelegramRenderedMessage {
+  const budget = Math.max(0, TELEGRAM_MESSAGE_CHAR_LIMIT - "```kirbot\n\n```".length);
+  return toRenderedMessage(renderTelegramAssistantText(buildCommentaryText(buildCommentaryDraftPreviewWithLimit(text, budget))));
+}
 
-  return renderTelegramAssistantText(parts.join("\n\n"));
+function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
+  return chunkTelegramMessage(text).map((chunk) => toRenderedMessage(renderTelegramAssistantText(chunk)));
+}
+
+function toRenderedMessage(rendered: { text: string; parse_mode?: TelegramParseMode }): TelegramRenderedMessage {
+  return rendered.parse_mode ? { text: rendered.text, parseMode: rendered.parse_mode } : { text: rendered.text };
 }
 
 function markdownToTelegramHtml(text: string): string {
@@ -1691,10 +1467,6 @@ function escapeHtml(text: string): string {
 
 function escapeHtmlAttribute(text: string): string {
   return escapeHtml(text).replaceAll("\"", "&quot;");
-}
-
-function withTelegramParseMode(parseMode?: TelegramParseMode): { parse_mode?: TelegramParseMode } {
-  return parseMode ? { parse_mode: parseMode } : {};
 }
 
 function buildUserInputSignature(input: UserInput[]): string {
@@ -1819,23 +1591,6 @@ function classifyInterruptError(error: unknown): InterruptErrorClassification {
   return {
     kind: "fatal"
   };
-}
-
-function isRetryAfterError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "parameters" in error &&
-    typeof (error as { parameters?: unknown }).parameters === "object" &&
-    (error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after !== undefined
-  );
-}
-
-function getRetryAfterDelayMs(error: unknown): number {
-  const retryAfter = (error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after;
-  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter >= 0
-    ? Math.ceil(retryAfter * 1000)
-    : 1000;
 }
 
 function isTelegramMessageMissingError(error: unknown): boolean {
