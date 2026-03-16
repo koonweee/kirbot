@@ -1152,7 +1152,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(
       telegram.drafts.some(
-        (draft) => draft.text === "running\n<pre><code class=\"language-kirbot\">npm test</code></pre>"
+        (draft) => draft.text === "running: npm test"
       )
     ).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);

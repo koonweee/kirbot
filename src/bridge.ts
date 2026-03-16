@@ -1278,7 +1278,7 @@ function buildStatusText(statusDraft: TurnStatusDraft): string {
     return statusDraft.state;
   }
 
-  return `${statusDraft.state}\n\`\`\`kirbot\n${statusDraft.details.replaceAll("```", "'''")}\n\`\`\``;
+  return `${statusDraft.state}: ${statusDraft.details.replace(/\s+/g, " ").trim()}`;
 }
 
 function buildCommentaryText(text: string): string {
