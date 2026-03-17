@@ -30,7 +30,12 @@ Daily commands:
 npm run dev
 npm test
 npm run typecheck
+npm run restart
 ```
+
+`npm run restart` stops the previously started detached kirbot process from
+`.tmp/kirbot.pid`, rebuilds `dist/`, then starts a fresh detached process with
+logs in `.tmp/kirbot.stdout.log` and `.tmp/kirbot.stderr.log`.
 
 Codex upgrade commands:
 

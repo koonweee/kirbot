@@ -72,18 +72,39 @@ Run locally:
 npm run dev
 ```
 
-Build and run production output:
+Build the production output:
 
 ```bash
 npm run build
+```
+
+Run the built production output in the foreground:
+
+```bash
 npm start
 ```
+
+Rebuild and restart the detached production process:
+
+```bash
+npm run restart
+```
+
+`npm run restart` is idempotent for processes started by that script:
+
+- it stops the previously started kirbot process recorded in `.tmp/kirbot.pid`
+- rebuilds `dist/`
+- starts a fresh detached process
+- writes logs to `.tmp/kirbot.stdout.log` and `.tmp/kirbot.stderr.log`
+
+Build output and restart artifacts are gitignored under `dist/` and `.tmp/`.
 
 ## Development Commands
 
 ```bash
 npm test
 npm run typecheck
+npm run restart
 npm run verify:codex-types
 npm run generate:codex-types
 npm run verify:codex-upgrade

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
-const require = createRequire(__filename);
+const codexRequire = createRequire(__filename);
 
 type CodexPackageJson = {
   bin?: string | Record<string, string>;
@@ -14,7 +14,7 @@ export type CodexCliInvocation = {
 };
 
 export function resolvePinnedCodexExecutablePath(): string {
-  const packageJsonPath = require.resolve("@openai/codex/package.json");
+  const packageJsonPath = codexRequire.resolve("@openai/codex/package.json");
   const packageDir = dirname(packageJsonPath);
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as CodexPackageJson;
   const binPath =
