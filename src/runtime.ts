@@ -1,6 +1,6 @@
 import { CodexGateway, spawnCodexAppServer } from "./codex";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
-import { loadConfig, type AppConfig } from "./config";
+import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
 import { createConsoleLogTarget, createSourceLogger, type AppLogTarget, type LoggerLike } from "./logging";
 import { TemporaryImageStore } from "./media-store";
@@ -37,7 +37,7 @@ export type CreateKirbotRuntimeOptions = {
 };
 
 export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): Promise<KirbotRuntime> {
-  const config = options.config ?? loadConfig();
+  const config = options.config ?? (await import("./config")).loadConfig();
   const baseLogger = options.fallbackLogger ?? console;
   const logTarget = options.logTarget ?? createConsoleLogTarget(baseLogger);
   const appLogger = createSourceLogger(logTarget, "kirbot");
