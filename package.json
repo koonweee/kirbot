@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "check": "tsc --project tsconfig.json --noEmit",
-    "dev": "tsx watch src/index.ts",
+    "dev": "node --watch --watch-path=src --watch-path=KIRBOT.md --watch-path=.env --import tsx src/index.ts",
     "generate:codex-types": "node scripts/generate-codex-types.mjs",
     "start": "node --enable-source-maps dist/index.js",
     "test": "vitest run",
