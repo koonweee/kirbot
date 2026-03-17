@@ -190,6 +190,20 @@ describe("telegram-format", () => {
     });
   });
 
+  it("preserves spaced labels for manual preformatted text", () => {
+    expect(renderPreformattedText("prompt", "user prompt")).toEqual({
+      text: "prompt",
+      entities: [
+        {
+          type: "pre",
+          offset: 0,
+          length: 6,
+          language: "user prompt"
+        }
+      ]
+    });
+  });
+
   it("renders manual quotes as expandable by default", () => {
     expect(renderQuotedText("Queue preview")).toEqual({
       text: "Queue preview",

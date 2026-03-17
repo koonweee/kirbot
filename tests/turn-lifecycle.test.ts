@@ -35,10 +35,6 @@ class FakeTelegram implements TelegramApi {
     throw new Error("Not implemented");
   }
 
-  async getChat(): Promise<{ username?: string }> {
-    throw new Error("Not implemented");
-  }
-
   async sendMessage(
     chatId: number,
     text: string,
@@ -47,10 +43,6 @@ class FakeTelegram implements TelegramApi {
     this.messageCounter += 1;
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
     return { message_id: this.messageCounter };
-  }
-
-  async copyMessage(): Promise<{ message_id: number }> {
-    throw new Error("Not implemented");
   }
 
   async sendMessageDraft(

@@ -19,7 +19,7 @@ User experience:
 - The user sends a normal message in the root private chat or lobby.
 - kirbot creates a Telegram topic for that request.
 - kirbot creates a new Codex thread for that topic.
-- kirbot posts a link back to the new topic and copies the original root message into it when possible.
+- kirbot mirrors the initial prompt into the new topic in a labeled preformatted block when there is prompt text to show.
 - The first Codex turn starts immediately in the new topic.
 
 Owned by:
@@ -30,7 +30,7 @@ Owned by:
 
 Verified by:
 
-- lobby startup and deep-link behavior in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- lobby startup and initial-prompt mirroring behavior in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
 
 ## 2. Start A Session Inside An Existing Topic
 

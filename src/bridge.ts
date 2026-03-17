@@ -19,6 +19,7 @@ import { TemporaryImageStore, type PreparedImageFiles } from "./media-store";
 import { buildUserInputSignature } from "./bridge/input-signature";
 import { getNotificationTurnId } from "./bridge/notifications";
 import {
+  buildRenderedInitialPromptMessage,
   buildQueuePreviewKeyboard,
   deriveTopicTitle,
   renderQueuePreview
@@ -62,11 +63,6 @@ type PreparedCodexInput = {
 type ParsedSlashCommand = {
   command: string;
   argsText: string;
-};
-
-type RootSessionStartContext = {
-  topicLink: string | null;
-  rootMessageId: number;
 };
 
 type ThreadStartSettings = {
@@ -534,10 +530,6 @@ export class TelegramCodexBridge {
   private async startSessionFromRootMessage(message: UserTurnMessage): Promise<void> {
     const title = deriveTopicTitle(message.text);
     const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
-    const rootStart = {
-      topicLink: await this.tryBuildTopicDeepLink(message.chatId, forumTopic.message_thread_id),
-      rootMessageId: message.messageId
-    };
     await this.startSessionInTopic(
       {
         ...message,
@@ -545,8 +537,7 @@ export class TelegramCodexBridge {
       },
       title,
       {
-        rootStart,
-        copyRootMessageToTopic: true
+        initialPromptText: message.text
       }
     );
   }
@@ -559,20 +550,15 @@ export class TelegramCodexBridge {
       ...message,
       topicId: forumTopic.message_thread_id
     };
-    const rootStart = {
-      topicLink: await this.tryBuildTopicDeepLink(message.chatId, forumTopic.message_thread_id),
-      rootMessageId: message.messageId
-    };
 
     await this.startSessionInTopic(
       topicMessage,
       title,
       {
-        rootStart,
+        initialPromptText: trimmedPrompt,
         initialPreferredMode: "plan",
         postActivationTopicMessage: PLAN_MODE_ENABLED_TEXT,
         startInitialTurn: trimmedPrompt.length > 0,
-        copyRootMessageToTopic: trimmedPrompt.length > 0,
         ...(trimmedPrompt ? {
           firstTurnMessage: replaceMessageText(topicMessage, trimmedPrompt)
         } : {})
@@ -593,10 +579,9 @@ export class TelegramCodexBridge {
     message: UserTurnMessage,
     title: string,
     options?: {
-      rootStart?: RootSessionStartContext;
+      initialPromptText?: string;
       initialPreferredMode?: SessionMode;
       startInitialTurn?: boolean;
-      copyRootMessageToTopic?: boolean;
       firstTurnMessage?: UserTurnMessage;
       postActivationTopicMessage?: string;
     }
@@ -625,10 +610,7 @@ export class TelegramCodexBridge {
         ) ?? session;
       }
 
-      await this.maybeSendRootTopicLink(message.chatId, options?.rootStart?.topicLink);
-      if (options?.copyRootMessageToTopic) {
-        await this.maybeCopyRootMessageToTopic(message.chatId, message.topicId, options?.rootStart?.rootMessageId);
-      }
+      await this.maybeSendInitialPromptMessage(message.chatId, message.topicId, options?.initialPromptText);
 
       if (options?.postActivationTopicMessage) {
         await this.#messenger.sendMessage({
@@ -651,50 +633,25 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async tryBuildTopicDeepLink(chatId: number, topicId: number): Promise<string | null> {
-    try {
-      const chat = await this.telegram.getChat(chatId);
-      if (chat.username) {
-        return `https://t.me/${chat.username}/${topicId}`;
-      }
-
-      return buildPrivateTopicDeepLink(chatId, topicId);
-    } catch (error) {
-      console.error("Failed to build Telegram topic deep link", error);
-      return null;
-    }
-  }
-
-  private async maybeSendRootTopicLink(chatId: number, topicLink: string | null | undefined): Promise<void> {
-    if (!topicLink) {
-      return;
-    }
-
-    try {
-      await this.#messenger.sendMessage({
-        chatId,
-        text: topicLink
-      });
-    } catch (error) {
-      console.error("Failed to send Telegram topic deep link", error);
-    }
-  }
-
-  private async maybeCopyRootMessageToTopic(
+  private async maybeSendInitialPromptMessage(
     chatId: number,
     topicId: number,
-    rootMessageId: number | undefined
+    promptText: string | null | undefined
   ): Promise<void> {
-    if (rootMessageId === undefined) {
+    if (!promptText) {
       return;
     }
 
     try {
-      await this.telegram.copyMessage(chatId, chatId, rootMessageId, {
-        message_thread_id: topicId
+      const rendered = buildRenderedInitialPromptMessage(promptText);
+      await this.#messenger.sendMessage({
+        chatId,
+        topicId,
+        text: rendered.text,
+        ...(rendered.entities ? { entities: rendered.entities } : {})
       });
     } catch (error) {
-      console.error("Failed to copy root message into Telegram topic", error);
+      console.error("Failed to send initial prompt mirror into Telegram topic", error);
     }
   }
 
@@ -1170,15 +1127,6 @@ function buildPlanStatusDetails(
 
   const activeStep = plan.find((step) => step.status === "inProgress");
   return activeStep?.step ?? null;
-}
-
-function buildPrivateTopicDeepLink(chatId: number, topicId: number): string {
-  const chatIdText = String(chatId);
-  if (!chatIdText.startsWith("-100")) {
-    throw new Error(`Cannot derive private topic link for chat id ${chatId}`);
-  }
-
-  return `https://t.me/c/${chatIdText.slice(4)}/${topicId}`;
 }
 
 function topicKey(chatId: number, topicId: number): string {

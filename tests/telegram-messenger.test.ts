@@ -28,19 +28,10 @@ class FakeTelegram implements TelegramApi {
     return { message_thread_id: 1, name };
   }
 
-  async getChat(): Promise<{ username?: string }> {
-    return {};
-  }
-
   async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }> {
     this.messageCounter += 1;
     this.events.push(`message:${text}`);
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
-    return { message_id: this.messageCounter };
-  }
-
-  async copyMessage(): Promise<{ message_id: number }> {
-    this.messageCounter += 1;
     return { message_id: this.messageCounter };
   }
 

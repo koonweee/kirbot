@@ -176,6 +176,10 @@ export function buildRenderedCompletionFooter(details: CompletionFooterDetails):
   return renderPreformattedText(buildCompletionFooterText(details), "status");
 }
 
+export function buildRenderedInitialPromptMessage(text: string): TelegramRenderedMessage {
+  return renderPreformattedText(text, "user prompt");
+}
+
 export function buildRenderedPlanMessages(text: string): TelegramRenderedMessage[] {
   return buildHeaderedMarkdownMessages(text, "Plan");
 }
