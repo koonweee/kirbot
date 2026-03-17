@@ -1,9 +1,8 @@
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
-import type {
-  InlineKeyboardMarkup,
-  TelegramParseMode,
-  TelegramRenderedMessage
-} from "../telegram-messenger";
+import { chunkFormattedText, prependText } from "../telegram-format/chunk";
+import { renderMarkdownToFormattedText } from "../telegram-format/markdown";
+import { renderPreformattedText } from "../telegram-format/preformatted";
+import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
@@ -158,34 +157,31 @@ export function buildTurnControlKeyboard(turnId: string): InlineKeyboardMarkup {
 }
 
 export function renderTelegramStatusDraft(statusDraft: TurnStatusDraft | null): TelegramRenderedMessage | null {
-  return statusDraft ? renderTelegramAssistantText(buildStatusText(statusDraft)) : null;
+  return statusDraft ? { text: buildStatusText(statusDraft) } : null;
 }
 
 export function renderTelegramAssistantDraft(text: string): TelegramRenderedMessage {
-  let budget = TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT;
-  let rendered = renderTelegramAssistantText(buildDraftPreviewWithLimit(text, budget));
-
-  for (let attempt = 0; attempt < 3 && rendered.text.length > TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT; attempt += 1) {
-    const overflow = rendered.text.length - TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT;
-    budget = Math.max(0, budget - overflow - 16);
-    rendered = renderTelegramAssistantText(buildDraftPreviewWithLimit(text, budget));
-  }
-
-  return toRenderedMessage(rendered);
+  return renderMarkdownToFormattedText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT));
 }
 
 export function renderTelegramCommentaryDraft(text: string): TelegramRenderedMessage {
-  const budget = Math.max(0, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT - "```kirbot\n\n```".length);
-  return toRenderedMessage(renderTelegramAssistantText(buildCommentaryText(buildCommentaryDraftPreviewWithLimit(text, budget))));
+  return renderPreformattedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT), "kirbot");
 }
 
 export function buildRenderedCommentaryMessage(text: string): TelegramRenderedMessage {
-  const budget = Math.max(0, TELEGRAM_MESSAGE_CHAR_LIMIT - "```kirbot\n\n```".length);
-  return toRenderedMessage(renderTelegramAssistantText(buildCommentaryText(buildCommentaryDraftPreviewWithLimit(text, budget))));
+  return renderPreformattedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_MESSAGE_CHAR_LIMIT), "kirbot");
 }
 
 export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
-  return chunkTelegramMessage(text).map((chunk) => toRenderedMessage(renderTelegramAssistantText(chunk)));
+  const reservedHeaderChars = 32;
+  const formatted = renderMarkdownToFormattedText(text);
+  const chunks = chunkFormattedText(formatted, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
+
+  if (chunks.length === 1) {
+    return chunks;
+  }
+
+  return chunks.map((chunk, index) => prependText(`Part ${index + 1}/${chunks.length}\n\n`, chunk));
 }
 
 function truncateStatus(text: string): string {
@@ -233,161 +229,4 @@ function buildStatusText(statusDraft: TurnStatusDraft): string {
   }
 
   return `${statusDraft.state}: ${statusDraft.details.replace(/\s+/g, " ").trim()}`;
-}
-
-function buildCommentaryText(text: string): string {
-  return `\`\`\`kirbot\n${text}\n\`\`\``;
-}
-
-function chunkTelegramMessage(text: string): string[] {
-  const reservedHeaderChars = 32;
-  const rawChunks = splitTextForTelegram(text, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
-  if (rawChunks.length === 1) {
-    return rawChunks;
-  }
-
-  return rawChunks.map((chunk, index) => `Part ${index + 1}/${rawChunks.length}\n\n${chunk}`);
-}
-
-function splitTextForTelegram(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) {
-    return [text];
-  }
-
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > maxChars) {
-    const splitIndex = findChunkBoundary(remaining, maxChars);
-    chunks.push(remaining.slice(0, splitIndex).trimEnd());
-    remaining = remaining.slice(splitIndex).replace(/^\s+/, "");
-  }
-
-  if (remaining.length > 0) {
-    chunks.push(remaining);
-  }
-
-  return chunks.length > 0 ? chunks : [text];
-}
-
-function findChunkBoundary(text: string, maxChars: number): number {
-  const minPreferredIndex = Math.floor(maxChars * 0.6);
-  const window = text.slice(0, maxChars + 1);
-  const candidates = [window.lastIndexOf("\n\n"), window.lastIndexOf("\n"), window.lastIndexOf(" ")];
-
-  for (const index of candidates) {
-    if (index >= minPreferredIndex) {
-      return index;
-    }
-  }
-
-  return maxChars;
-}
-
-function renderTelegramAssistantText(text: string): { text: string; parse_mode?: TelegramParseMode } {
-  const rendered = markdownToTelegramHtml(text);
-  if (rendered === text) {
-    return { text };
-  }
-
-  return {
-    text: rendered,
-    parse_mode: "HTML"
-  };
-}
-
-function toRenderedMessage(rendered: { text: string; parse_mode?: TelegramParseMode }): TelegramRenderedMessage {
-  return rendered.parse_mode ? { text: rendered.text, parseMode: rendered.parse_mode } : { text: rendered.text };
-}
-
-function markdownToTelegramHtml(text: string): string {
-  const segments = splitMarkdownByFences(text);
-  const rendered = segments
-    .map((segment) =>
-      segment.type === "fence" ? renderTelegramCodeFence(segment.language, segment.content) : renderTelegramInlineMarkdown(segment.content)
-    )
-    .join("");
-
-  return rendered === escapeHtml(text) ? text : rendered;
-}
-
-function splitMarkdownByFences(
-  text: string
-): Array<{ type: "text"; content: string } | { type: "fence"; language: string; content: string }> {
-  const segments: Array<{ type: "text"; content: string } | { type: "fence"; language: string; content: string }> = [];
-  const pattern = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
-  let lastIndex = 0;
-
-  for (const match of text.matchAll(pattern)) {
-    const index = match.index ?? 0;
-    if (index > lastIndex) {
-      segments.push({
-        type: "text",
-        content: text.slice(lastIndex, index)
-      });
-    }
-
-    segments.push({
-      type: "fence",
-      language: (match[1] ?? "").trim(),
-      content: match[2] ?? ""
-    });
-    lastIndex = index + match[0].length;
-  }
-
-  if (lastIndex < text.length) {
-    segments.push({
-      type: "text",
-      content: text.slice(lastIndex)
-    });
-  }
-
-  return segments.length > 0 ? segments : [{ type: "text", content: text }];
-}
-
-function renderTelegramCodeFence(language: string, content: string): string {
-  const escapedCode = escapeHtml(content.replace(/\n$/, ""));
-  if (!language) {
-    return `<pre><code>${escapedCode}</code></pre>`;
-  }
-
-  return `<pre><code class="language-${escapeHtmlAttribute(language)}">${escapedCode}</code></pre>`;
-}
-
-function renderTelegramInlineMarkdown(text: string): string {
-  let html = "";
-  let index = 0;
-
-  while (index < text.length) {
-    if (text.startsWith("`", index)) {
-      const closingIndex = text.indexOf("`", index + 1);
-      if (closingIndex > index + 1 && !text.slice(index + 1, closingIndex).includes("\n")) {
-        html += `<code>${escapeHtml(text.slice(index + 1, closingIndex))}</code>`;
-        index = closingIndex + 1;
-        continue;
-      }
-    }
-
-    const strongDelimiter = text.startsWith("**", index) ? "**" : text.startsWith("__", index) ? "__" : null;
-    if (strongDelimiter) {
-      const closingIndex = text.indexOf(strongDelimiter, index + strongDelimiter.length);
-      if (closingIndex > index + strongDelimiter.length) {
-        html += `<b>${renderTelegramInlineMarkdown(text.slice(index + strongDelimiter.length, closingIndex))}</b>`;
-        index = closingIndex + strongDelimiter.length;
-        continue;
-      }
-    }
-
-    html += escapeHtml(text[index] ?? "");
-    index += 1;
-  }
-
-  return html;
-}
-
-function escapeHtml(text: string): string {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function escapeHtmlAttribute(text: string): string {
-  return escapeHtml(text).replaceAll("\"", "&quot;");
 }

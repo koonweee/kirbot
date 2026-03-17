@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MessageEntity } from "grammy/types";
 
 import { TelegramCodexBridge, type BridgeCodexApi } from "../src/bridge";
 import type { AppConfig } from "../src/config";
@@ -33,16 +34,15 @@ function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
 }
 
-function escapeHtml(text: string): string {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function codeBlock(text: string, language?: string): string {
-  if (language) {
-    return `<pre><code class="language-${escapeHtml(language)}">${escapeHtml(text)}</code></pre>`;
-  }
-
-  return `<pre><code>${escapeHtml(text)}</code></pre>`;
+function preformattedEntities(text: string, language?: string): MessageEntity[] {
+  return [
+    {
+      type: "pre",
+      offset: 0,
+      length: text.length,
+      ...(language ? { language } : {})
+    }
+  ];
 }
 
 function combinedDraft(...parts: string[]): string {
@@ -208,20 +208,20 @@ class FakeTelegram implements TelegramApi {
       message_thread_id?: number;
       reply_to_message_id?: number;
       reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      parse_mode?: "HTML";
+      entities?: MessageEntity[];
     };
   }> = [];
   drafts: Array<{
     chatId: number;
     draftId: number;
     text: string;
-    options?: { message_thread_id?: number; parse_mode?: "HTML" };
+    options?: { message_thread_id?: number; entities?: MessageEntity[] };
   }> = [];
   appliedDrafts: Array<{
     chatId: number;
     draftId: number;
     text: string;
-    options?: { message_thread_id?: number; parse_mode?: "HTML" };
+    options?: { message_thread_id?: number; entities?: MessageEntity[] };
   }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string }> = [];
   editOptions: Array<{
@@ -230,7 +230,7 @@ class FakeTelegram implements TelegramApi {
     options?: {
       message_thread_id?: number;
       reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      parse_mode?: "HTML";
+      entities?: MessageEntity[];
     };
   }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
@@ -249,7 +249,7 @@ class FakeTelegram implements TelegramApi {
       message_thread_id?: number;
       reply_to_message_id?: number;
       reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      parse_mode?: "HTML";
+      entities?: MessageEntity[];
     }
   ): Promise<{ message_id: number }> {
     this.messageCounter += 1;
@@ -265,7 +265,7 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     draftId: number,
     text: string,
-    options?: { message_thread_id?: number; parse_mode?: "HTML" }
+    options?: { message_thread_id?: number; entities?: MessageEntity[] }
   ): Promise<true> {
     this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     if (this.nextDraftError) {
@@ -304,7 +304,7 @@ class FakeTelegram implements TelegramApi {
     options?: {
       message_thread_id?: number;
       reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      parse_mode?: "HTML";
+      entities?: MessageEntity[];
     }
   ): Promise<unknown> {
     this.edits.push({ chatId, messageId, text });
@@ -606,7 +606,7 @@ describe("TelegramCodexBridge", () => {
     expect(turn.status).toBe("completed");
   });
 
-  it("formats assistant markdown as Telegram HTML for drafts and final messages", async () => {
+  it("formats assistant markdown as Telegram entities for drafts and final messages", async () => {
     codex.readTurnMessagesResult = "Use **bold** and `code`.\n\n```ts\nconst answer = 42;\n```";
 
     await bridge.handleUserTextMessage({
@@ -644,14 +644,21 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(
-      telegram.drafts.some((draft) => draft.text === "Use <b>bold</b> and <code>code</code>.")
+      telegram.drafts.some(
+        (draft) =>
+          draft.text === "Use bold and code." &&
+          draft.options?.entities?.some((entity) => entity.type === "bold") &&
+          draft.options.entities.some((entity) => entity.type === "code")
+      )
     ).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
-    expect(telegram.sentMessages.at(-1)?.text).toBe(
-      "Use <b>bold</b> and <code>code</code>.\n\n<pre><code class=\"language-ts\">const answer = 42;</code></pre>"
-    );
-    expect(telegram.sentMessages.at(-1)?.options?.parse_mode).toBe("HTML");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Use bold and code.\n\nconst answer = 42;");
+    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual([
+      { type: "bold", offset: 4, length: 4 },
+      { type: "code", offset: 13, length: 4 },
+      { type: "pre", offset: 20, length: 18, language: "ts" }
+    ]);
   });
 
   it("logs draft rejections and still delivers the final message", async () => {
@@ -700,12 +707,15 @@ describe("TelegramCodexBridge", () => {
       expect(warnSpy).toHaveBeenCalledWith(
         "Failed to send Telegram draft",
         expect.objectContaining({
-          parseMode: "HTML"
+          entityCount: 2
         }),
         expect.any(Error)
       );
-      expect(telegram.sentMessages.at(-1)?.text).toBe("Use <b>bold</b> and <code>code</code>.");
-      expect(telegram.sentMessages.at(-1)?.options?.parse_mode).toBe("HTML");
+      expect(telegram.sentMessages.at(-1)?.text).toBe("Use bold and code.");
+      expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual([
+        { type: "bold", offset: 4, length: 4 },
+        { type: "code", offset: 13, length: 4 }
+      ]);
     } finally {
       warnSpy.mockRestore();
     }
@@ -749,9 +759,9 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe(codeBlock("Inspecting the files", "kirbot"));
-    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBe("HTML");
-    expect(telegram.sentMessages.at(-1)?.text).not.toBe(codeBlock("Inspecting the files", "kirbot"));
+    expect(telegram.drafts.at(-1)?.text).toBe("Inspecting the files");
+    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(preformattedEntities("Inspecting the files", "kirbot"));
+    expect(telegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
     expect(telegram.appliedDrafts.length).toBeGreaterThan(initialDraftCount);
     expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking")).toBe(true);
 
@@ -782,7 +792,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 450));
 
     expect(telegram.drafts.at(-1)?.text).toBe("Here is the answer.");
-    expect(telegram.drafts.at(-1)?.options?.parse_mode).toBeUndefined();
+    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
 
     codex.emitNotification({
       method: "turn/completed",
@@ -798,7 +808,14 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.some((message) => message.text === codeBlock("Inspecting the files", "kirbot"))).toBe(true);
+    expect(telegram.sentMessages).toContainEqual(
+      expect.objectContaining({
+        text: "Inspecting the files",
+        options: expect.objectContaining({
+          entities: preformattedEntities("Inspecting the files", "kirbot")
+        })
+      })
+    );
     expect(telegram.sentMessages.at(-1)?.text).toBe("Here is the answer.");
   });
 
@@ -908,8 +925,13 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.length).toBeGreaterThan(0);
-    expect(telegram.drafts.some((draft) => draft.text.startsWith("<pre><code class=\"language-kirbot\">"))).toBe(true);
-    expect(telegram.drafts.some((draft) => draft.options?.parse_mode === "HTML")).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.options?.entities?.[0]?.type === "pre")).toBe(true);
+    expect(
+      telegram.drafts.some((draft) => {
+        const entity = draft.options?.entities?.[0];
+        return entity?.type === "pre" && "language" in entity && entity.language === "kirbot";
+      })
+    ).toBe(true);
   });
 
   it("persists one commentary message per commentary item on item completion", async () => {
@@ -1004,8 +1026,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.at(-2)?.text).toBe(codeBlock("Inspecting files", "kirbot"));
-    expect(telegram.sentMessages.at(-1)?.text).toBe(codeBlock("Planning edits", "kirbot"));
+    expect(telegram.sentMessages.at(-2)?.text).toBe("Inspecting files");
+    expect(telegram.sentMessages.at(-2)?.options?.entities).toEqual(preformattedEntities("Inspecting files", "kirbot"));
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Planning edits");
+    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(preformattedEntities("Planning edits", "kirbot"));
     expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking")).toBe(true);
   });
 

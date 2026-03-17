@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { MessageEntity } from "grammy/types";
 
 import {
   TelegramMessenger,
@@ -12,7 +13,7 @@ const EMPTY_DRAFT_TEXT = "";
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   rejectEmptyDrafts = false;
-  rejectHtmlDrafts = false;
+  rejectEntityDrafts = false;
   sentMessages: Array<{ chatId: number; text: string; options?: TelegramSendOptions }> = [];
   drafts: Array<{ chatId: number; draftId: number; text: string; options?: TelegramDraftOptions }> = [];
   chatActions: Array<{
@@ -42,7 +43,7 @@ class FakeTelegram implements TelegramApi {
     if (this.rejectEmptyDrafts && text === "") {
       throw new Error("text must be non-empty");
     }
-    if (this.rejectHtmlDrafts && options?.parse_mode === "HTML") {
+    if (this.rejectEntityDrafts && options?.entities?.length) {
       throw new Error("can't parse entities");
     }
     return true;
@@ -80,25 +81,26 @@ class FakeTelegram implements TelegramApi {
 }
 
 describe("TelegramMessenger", () => {
-  it("sends plain messages with topic and parse mode", async () => {
+  it("sends messages with topic and entities", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);
+    const entities: MessageEntity[] = [{ type: "bold", offset: 0, length: 5 }];
 
     const message = await messenger.sendMessage({
       chatId: 1,
       topicId: 2,
-      text: "<b>Hello</b>",
-      parseMode: "HTML"
+      text: "Hello",
+      entities
     });
 
     expect(message).toEqual({ messageId: 1 });
     expect(telegram.sentMessages).toEqual([
       {
         chatId: 1,
-        text: "<b>Hello</b>",
+        text: "Hello",
         options: {
           message_thread_id: 2,
-          parse_mode: "HTML"
+          entities
         }
       }
     ]);
@@ -240,29 +242,30 @@ describe("TelegramMessenger", () => {
     expect(telegram.chatActions).toHaveLength(1);
   });
 
-  it("logs draft send failures instead of retrying without parse mode", async () => {
+  it("logs draft send failures instead of mutating the entity payload", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const telegram = new FakeTelegram();
-    telegram.rejectHtmlDrafts = true;
+    telegram.rejectEntityDrafts = true;
     const messenger = new TelegramMessenger(telegram);
     const stream = messenger.streamMessage({
       chatId: 1,
       topicId: 2,
       draftId: 104
     });
+    const entities: MessageEntity[] = [{ type: "bold", offset: 4, length: 4 }];
 
     try {
-      await stream.update({ text: "Use <b>bold</b>", parseMode: "HTML" }, true);
+      await stream.update({ text: "Use bold", entities }, true);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(telegram.drafts).toHaveLength(1);
       expect(telegram.drafts[0]).toMatchObject({
         chatId: 1,
         draftId: 104,
-        text: "Use <b>bold</b>",
+        text: "Use bold",
         options: {
           message_thread_id: 2,
-          parse_mode: "HTML"
+          entities
         }
       });
       expect(warnSpy).toHaveBeenCalledWith(
@@ -271,7 +274,7 @@ describe("TelegramMessenger", () => {
           chatId: 1,
           topicId: 2,
           draftId: 104,
-          parseMode: "HTML"
+          entityCount: 1
         }),
         expect.any(Error)
       );
