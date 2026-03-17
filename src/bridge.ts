@@ -1,6 +1,6 @@
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
-import type { TopicLifecycleEvent, TopicSession, UserTurnInput, UserTurnMessage } from "./domain";
+import type { TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { RequestId } from "./generated/codex/RequestId";
@@ -18,31 +18,15 @@ import { buildUserInputSignature } from "./bridge/input-signature";
 import { getNotificationTurnId } from "./bridge/notifications";
 import {
   buildTurnControlKeyboard,
-  buildRenderedAssistantMessages,
-  buildRenderedCommentaryMessage,
   buildQueuePreviewKeyboard,
-  buildStableDraftId,
-  buildStatusDraft,
-  buildStatusDraftForItem,
   deriveTopicTitle,
-  isSameStatusDraft,
   renderQueuePreview,
   renderTurnControlMessage,
-  renderTelegramAssistantDraft,
-  renderTelegramCommentaryDraft,
-  renderTelegramStatusDraft,
-  type TurnStatusDraft
 } from "./bridge/presentation";
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
-import {
-  TelegramMessenger,
-  type InlineKeyboardMarkup,
-  type TelegramApi,
-  type TelegramRenderedMessage,
-  type TelegramStatusDraftHandle,
-  type TelegramStreamMessageHandle
-} from "./telegram-messenger";
-import { BridgeTurnRuntime, type AssistantRenderUpdate, type QueueStateSnapshot } from "./turn-runtime";
+import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
+import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
+import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
 
 export type CallbackQueryEvent = {
   callbackQueryId: string;
@@ -67,32 +51,15 @@ export interface BridgeCodexApi {
   onServerRequest(listener: (request: ServerRequest) => void): void;
 }
 
-type ActiveTurn = {
-  chatId: number;
-  topicId: number;
-  threadId: string;
-  turnId: string;
-  stopControlMessageId: number | null;
-  stopRequested: boolean;
-  statusDraft: TurnStatusDraft | null;
-  lastStatusUpdateAt: number;
-  lifecycle: "active" | "finalizing";
-  statusHandle: TelegramStatusDraftHandle;
-  finalStream: TelegramStreamMessageHandle;
-  commentaryStreams: Map<string, { handle: TelegramStreamMessageHandle; text: string }>;
-};
-
 type PreparedCodexInput = {
   input: UserInput[];
   images: PreparedImageFiles;
 };
 export class TelegramCodexBridge {
-  readonly #runtime = new BridgeTurnRuntime();
-  readonly #activeTurns = new Map<string, ActiveTurn>();
   readonly #queuePreviewMessageIds = new Map<string, number>();
-  readonly #submitPendingSteersAfterInterrupt = new Set<string>();
   readonly #notificationChains = new Map<string, Promise<void>>();
   readonly #messenger: TelegramMessenger;
+  readonly #lifecycle: TurnLifecycleCoordinator;
   readonly #requestCoordinator: BridgeRequestCoordinator;
 
   constructor(
@@ -103,12 +70,29 @@ export class TelegramCodexBridge {
     private readonly mediaStore: TemporaryImageStore
   ) {
     this.#messenger = new TelegramMessenger(telegram);
+    this.#lifecycle = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: this.#messenger,
+      telegram,
+      releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
+      appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
+      completePersistedTurn: (turnId, messageId, status) =>
+        this.database.completeTurn(turnId, messageId, status).then(() => undefined),
+      resolveTurnText: this.resolveTurnText.bind(this),
+      syncQueuePreview: this.syncQueuePreview.bind(this),
+      maybeSendNextQueuedFollowUp: this.maybeSendNextQueuedFollowUp.bind(this),
+      submitQueuedFollowUp: this.submitQueuedFollowUp.bind(this)
+    });
     this.#requestCoordinator = new BridgeRequestCoordinator(
       config,
       database,
       telegram,
       codex,
-      this.updateTurnStatus.bind(this)
+      (turnId, statusDraft, force, preserveDetails) =>
+        this.#lifecycle.updateStatus(turnId, statusDraft, {
+          ...(force !== undefined ? { force } : {}),
+          ...(preserveDetails !== undefined ? { preserveDetails } : {})
+        })
     );
     this.codex.onNotification((notification) => {
       void this.enqueueNotification(notification).catch((error) => {
@@ -257,7 +241,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const queueState = this.#runtime.getQueueState(event.chatId, event.topicId);
+    const queueState = this.#lifecycle.getQueueState(event.chatId, event.topicId);
     if (queueState.pendingSteers.length === 0) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: "No pending steer instructions to send."
@@ -265,7 +249,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    this.#submitPendingSteersAfterInterrupt.add(turnId);
+    this.#lifecycle.requestPendingSteerSubmissionAfterInterrupt(turnId);
 
     try {
       await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
@@ -273,16 +257,17 @@ export class TelegramCodexBridge {
         text: "Submitting queued steer instructions."
       });
     } catch (error) {
-      this.#submitPendingSteersAfterInterrupt.delete(turnId);
-
       const classification = classifyInterruptError(error);
       if (classification.kind === "stale_or_missing_active_turn") {
-        await this.finalizeInterruptedTurn(activeTurn, true);
+        this.#lifecycle.requestPendingSteerSubmissionAfterInterrupt(turnId);
+        await this.#lifecycle.finalizeInterruptedTurnById(activeTurn.threadId, activeTurn.turnId);
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "Previous turn already ended. Submitting queued steer instructions."
         });
         return;
       }
+
+      this.#lifecycle.clearPendingSteerSubmissionAfterInterrupt(turnId);
 
       console.error("Failed to interrupt turn", error);
       await this.#messenger.sendMessage({
@@ -296,7 +281,7 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async stopActiveTurn(activeTurn: ActiveTurn, event: CallbackQueryEvent): Promise<void> {
+  private async stopActiveTurn(activeTurn: TurnContext, event: CallbackQueryEvent): Promise<void> {
     if (activeTurn.stopRequested) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: "Interrupt already requested."
@@ -304,9 +289,9 @@ export class TelegramCodexBridge {
       return;
     }
 
-    activeTurn.stopRequested = true;
-    await this.updateTurnControlMessage(activeTurn, renderTurnControlMessage("stopping"));
-    await this.syncQueuePreview(this.#runtime.getQueueState(activeTurn.chatId, activeTurn.topicId));
+    this.#lifecycle.markStopRequested(activeTurn.turnId);
+    await this.#lifecycle.updateTurnControlMessage(activeTurn.turnId, renderTurnControlMessage("stopping"));
+    await this.syncQueuePreview(this.#lifecycle.getQueueState(activeTurn.chatId, activeTurn.topicId));
 
     try {
       await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
@@ -316,20 +301,20 @@ export class TelegramCodexBridge {
     } catch (error) {
       const classification = classifyInterruptError(error);
       if (classification.kind === "stale_or_missing_active_turn") {
-        await this.updateTurnControlMessage(activeTurn, renderTurnControlMessage("finishing"));
+        await this.#lifecycle.updateTurnControlMessage(activeTurn.turnId, renderTurnControlMessage("finishing"));
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "This turn is already finishing."
         });
         return;
       }
 
-      activeTurn.stopRequested = false;
-      await this.updateTurnControlMessage(
-        activeTurn,
+      this.#lifecycle.clearStopRequested(activeTurn.turnId);
+      await this.#lifecycle.updateTurnControlMessage(
+        activeTurn.turnId,
         renderTurnControlMessage("active"),
         buildTurnControlKeyboard(activeTurn.turnId)
       );
-      await this.syncQueuePreview(this.#runtime.getQueueState(activeTurn.chatId, activeTurn.topicId));
+      await this.syncQueuePreview(this.#lifecycle.getQueueState(activeTurn.chatId, activeTurn.topicId));
 
       console.error("Failed to interrupt turn", error);
       await this.#messenger.sendMessage({
@@ -414,34 +399,23 @@ export class TelegramCodexBridge {
     }
 
     await this.codex.ensureThreadLoaded(session.codexThreadId);
+    const turn = await this.submitPreparedInput(message, {
+      submit: (input) => this.codex.sendTurn(session.codexThreadId!, input)
+    });
 
-    const preparedInput = await this.materializeCodexInput(message);
-    try {
-      const turn = await this.codex.sendTurn(session.codexThreadId, preparedInput.input);
-      preparedInput.images.attachToTurn(turn.id);
+    await this.database.recordTurnStart({
+      telegramUpdateId: message.updateId,
+      telegramChatId: String(message.chatId),
+      telegramTopicId: message.topicId,
+      codexThreadId: session.codexThreadId,
+      codexTurnId: turn.id,
+      draftId: message.updateId
+    });
 
-      await this.database.recordTurnStart({
-        telegramUpdateId: message.updateId,
-        telegramChatId: String(message.chatId),
-        telegramTopicId: message.topicId,
-        codexThreadId: session.codexThreadId,
-        codexTurnId: turn.id,
-        draftId: message.updateId
-      });
-
-      const activeTurn = this.createActiveTurn(message, session.codexThreadId, turn.id);
-      this.#activeTurns.set(turn.id, activeTurn);
-      this.#runtime.registerTurn({
-        chatId: message.chatId,
-        topicId: message.topicId,
-        threadId: session.codexThreadId,
-        turnId: turn.id
-      });
-      await this.sendTurnControlMessage(activeTurn, message.messageId);
-      await activeTurn.statusHandle.set(renderTelegramStatusDraft(activeTurn.statusDraft), true);
-    } catch (error) {
-      await preparedInput.images.discard();
-      throw error;
+    const activeTurn = this.#lifecycle.activateTurn(message, session.codexThreadId, turn.id);
+    await this.#lifecycle.sendTurnControlMessage(turn.id, message.messageId);
+    if (activeTurn.statusDraft) {
+      await this.#lifecycle.publishCurrentStatus(turn.id, true);
     }
   }
 
@@ -468,191 +442,80 @@ export class TelegramCodexBridge {
   }
 
   private async handleNotification(notification: ServerNotification): Promise<void> {
-    switch (notification.method) {
-      case "turn/started": {
-        await this.updateTurnStatus(notification.params.turn.id, buildStatusDraft("thinking"));
-        return;
-      }
-      case "item/started": {
-        if (notification.params.item.type === "agentMessage") {
-          this.#runtime.registerAssistantItem(
+    const handlers: Partial<Record<ServerNotification["method"], () => Promise<void>>> = {
+      "turn/started": async () => {
+        if (notification.method === "turn/started") {
+          await this.#lifecycle.handleTurnStarted(notification.params.turn.id);
+        }
+      },
+      "item/started": async () => {
+        if (notification.method === "item/started") {
+          await this.#lifecycle.handleItemStarted(notification.params.turnId, notification.params.item);
+        }
+      },
+      "turn/plan/updated": async () => {
+        if (notification.method === "turn/plan/updated") {
+          await this.#lifecycle.handlePlanUpdated(notification.params.turnId);
+        }
+      },
+      "item/reasoning/summaryTextDelta": async () => {
+        if (notification.method === "item/reasoning/summaryTextDelta") {
+          await this.#lifecycle.handleReasoningDelta(notification.params.turnId);
+        }
+      },
+      "item/mcpToolCall/progress": async () => {
+        if (notification.method === "item/mcpToolCall/progress") {
+          await this.#lifecycle.handleToolProgress(notification.params.turnId);
+        }
+      },
+      "item/commandExecution/outputDelta": async () => {
+        if (notification.method === "item/commandExecution/outputDelta") {
+          await this.#lifecycle.handleCommandOutput(notification.params.turnId);
+        }
+      },
+      "item/fileChange/outputDelta": async () => {
+        if (notification.method === "item/fileChange/outputDelta") {
+          await this.#lifecycle.handleFileChangeOutput(notification.params.turnId);
+        }
+      },
+      "item/agentMessage/delta": async () => {
+        if (notification.method === "item/agentMessage/delta") {
+          await this.#lifecycle.handleAssistantDelta(
             notification.params.turnId,
-            notification.params.item.id,
-            notification.params.item.phase
+            notification.params.itemId,
+            notification.params.delta
           );
         }
-        await this.updateTurnStatus(notification.params.turnId, buildStatusDraftForItem(notification.params.item));
-        return;
-      }
-      case "turn/plan/updated": {
-        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("planning"));
-        return;
-      }
-      case "item/reasoning/summaryTextDelta": {
-        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("thinking"));
-        return;
-      }
-      case "item/mcpToolCall/progress": {
-        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("using tool"));
-        return;
-      }
-      case "item/commandExecution/outputDelta": {
-        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("running"), false, true);
-        return;
-      }
-      case "item/fileChange/outputDelta": {
-        await this.updateTurnStatus(notification.params.turnId, buildStatusDraft("editing"), false, true);
-        return;
-      }
-      case "item/agentMessage/delta": {
-        const activeTurn = this.#activeTurns.get(notification.params.turnId);
-        const update = this.#runtime.appendAssistantDelta(
-          notification.params.turnId,
-          notification.params.itemId,
-          notification.params.delta
-        );
-        if (!activeTurn || !update) {
+      },
+      "item/completed": async () => {
+        if (notification.method === "item/completed") {
+          await this.#lifecycle.handleItemCompleted(notification.params.turnId, notification.params.item);
+        }
+      },
+      "turn/completed": async () => {
+        if (notification.method !== "turn/completed") {
           return;
         }
 
-        await this.database.appendTurnStream(activeTurn.turnId, update.finalText);
-        await this.handleAssistantRenderUpdate(activeTurn, update, "delta", update.startedAssistantText);
-        return;
-      }
-      case "item/completed": {
-        if (notification.params.item.type === "userMessage") {
-          const queueState = this.#runtime.acknowledgeCommittedUserItem(notification.params.turnId, notification.params.item);
-          if (queueState) {
-            await this.syncQueuePreview(queueState);
-          }
-          return;
-        }
-
-        if (notification.params.item.type !== "agentMessage") {
-          return;
-        }
-
-        const activeTurn = this.#activeTurns.get(notification.params.turnId);
-        const update = this.#runtime.commitAssistantItem(
-          notification.params.turnId,
-          notification.params.item.id,
-          notification.params.item.text,
-          notification.params.item.phase
-        );
-        if (!activeTurn || !update) {
-          return;
-        }
-
-        await this.database.appendTurnStream(activeTurn.turnId, update.finalText);
-        await this.handleAssistantRenderUpdate(activeTurn, update, "completed", true);
-        return;
-      }
-      case "turn/completed": {
         if (notification.params.turn.status === "interrupted") {
-          await this.finalizeInterruptedTurnById(notification.params.threadId, notification.params.turn.id);
+          await this.#lifecycle.finalizeInterruptedTurnById(notification.params.threadId, notification.params.turn.id);
           return;
         }
 
-        await this.completeTurn(notification.params.threadId, notification.params.turn.id);
-        return;
+        await this.#lifecycle.completeTurn(notification.params.threadId, notification.params.turn.id);
+      },
+      error: async () => {
+        if (notification.method === "error") {
+          await this.#lifecycle.failTurn(
+            notification.params.threadId,
+            notification.params.turnId,
+            notification.params.error.message
+          );
+        }
       }
-      case "error": {
-        await this.failTurn(notification.params.threadId, notification.params.turnId, notification.params.error.message);
-        return;
-      }
-      default:
-        return;
-    }
-  }
+    };
 
-  private async completeTurn(threadId: string, turnId: string): Promise<void> {
-    const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn) {
-      return;
-    }
-
-    await this.beginTurnFinalization(activeTurn);
-    const finalText = await this.resolveTurnText(threadId, turnId);
-    const queueState = await this.finishTurn(activeTurn, "completed", finalText || "(no assistant output)");
-    if (queueState) {
-      await this.syncQueuePreview(queueState);
-      await this.maybeSendNextQueuedFollowUp(queueState.chatId, queueState.topicId);
-    }
-  }
-
-  private async failTurn(threadId: string, turnId: string, errorMessage: string): Promise<void> {
-    const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn) {
-      return;
-    }
-
-    await this.beginTurnFinalization(activeTurn);
-    const fallbackOutput = await this.resolveTurnText(threadId, turnId);
-    const text = [fallbackOutput, `\n\nCodex error: ${errorMessage}`].filter(Boolean).join("");
-    const queueState = await this.finishTurn(activeTurn, "failed", text);
-    if (queueState) {
-      await this.syncQueuePreview(queueState);
-      await this.maybeSendNextQueuedFollowUp(queueState.chatId, queueState.topicId);
-    }
-  }
-
-  private async finalizeInterruptedTurnById(threadId: string, turnId: string): Promise<void> {
-    const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn) {
-      this.#submitPendingSteersAfterInterrupt.delete(turnId);
-      return;
-    }
-
-    await this.finalizeInterruptedTurn(activeTurn, this.#submitPendingSteersAfterInterrupt.has(turnId), threadId);
-  }
-
-  private async finalizeInterruptedTurn(
-    activeTurn: ActiveTurn,
-    submitPendingSteers: boolean,
-    threadId = activeTurn.threadId
-  ): Promise<void> {
-    const pendingSteers = submitPendingSteers ? this.#runtime.drainPendingSteers(activeTurn.chatId, activeTurn.topicId) : null;
-    if (!submitPendingSteers) {
-      this.#runtime.movePendingSteersToQueued(activeTurn.chatId, activeTurn.topicId);
-    }
-
-    await this.beginTurnFinalization(activeTurn);
-    const finalText = await this.resolveTurnText(threadId, activeTurn.turnId);
-    const queueState = await this.finishTurn(activeTurn, "interrupted", finalText, false);
-
-    if (!queueState) {
-      return;
-    }
-
-    await this.syncQueuePreview(queueState);
-
-    if (!submitPendingSteers || !pendingSteers?.mergedMessage) {
-      return;
-    }
-
-    const session = await this.database.getSessionByTopic(activeTurn.chatId, activeTurn.topicId);
-    if (!session?.codexThreadId) {
-      return;
-    }
-
-    try {
-      await this.sendTurnForSession(session, pendingSteers.mergedMessage);
-    } catch (error) {
-      const restoredQueue = this.#runtime.prependQueuedFollowUp(
-        activeTurn.chatId,
-        activeTurn.topicId,
-        pendingSteers.mergedMessage
-      );
-      await this.syncQueuePreview(restoredQueue);
-      await this.#messenger.sendMessage({
-        chatId: activeTurn.chatId,
-        topicId: activeTurn.topicId,
-        text: `Interrupted the current turn, but failed to submit queued steer instructions: ${formatError(error)}`
-      });
-      return;
-    }
-
-    await this.syncQueuePreview(this.#runtime.getQueueState(activeTurn.chatId, activeTurn.topicId));
+    await handlers[notification.method]?.();
   }
 
   private async handleServerRequest(request: ServerRequest): Promise<void> {
@@ -663,291 +526,41 @@ export class TelegramCodexBridge {
     return this.#requestCoordinator.tryResolveUserInput(message);
   }
 
-  private async updateTurnStatus(
-    turnId: string,
-    statusDraft: TurnStatusDraft,
-    force = false,
-    preserveDetails = false
-  ): Promise<void> {
-    const activeTurn = this.#activeTurns.get(turnId);
-    if (!activeTurn) {
-      return;
-    }
-
-    const now = Date.now();
-    const nextStatus =
-      preserveDetails && activeTurn.statusDraft?.state === statusDraft.state && activeTurn.statusDraft.details
-        ? { ...statusDraft, details: activeTurn.statusDraft.details }
-        : statusDraft;
-    if (isSameStatusDraft(activeTurn.statusDraft, nextStatus)) {
-      return;
-    }
-
-    if (!force && now - activeTurn.lastStatusUpdateAt < 500) {
-      return;
-    }
-
-    activeTurn.statusDraft = nextStatus;
-    activeTurn.lastStatusUpdateAt = now;
-    await activeTurn.statusHandle.set(renderTelegramStatusDraft(nextStatus), force);
-  }
-
-  private async handleAssistantRenderUpdate(
-    activeTurn: ActiveTurn,
-    update: AssistantRenderUpdate,
-    stage: "delta" | "completed",
-    forceDraft = false
-  ): Promise<void> {
-    if (update.itemPhase === "commentary") {
-      const commentary = this.getOrCreateCommentaryStream(activeTurn, update.itemId);
-      commentary.text = update.itemText;
-      if (stage === "completed") {
-        await commentary.handle.finalize(buildRenderedCommentaryMessage(update.itemText));
-        activeTurn.commentaryStreams.delete(update.itemId);
-        return;
-      }
-
-      await commentary.handle.update(renderTelegramCommentaryDraft(update.itemText), forceDraft);
-      return;
-    }
-
-    if (update.draftKind === "assistant") {
-      await activeTurn.finalStream.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
-      return;
-    }
-  }
-
-  private getOrCreateCommentaryStream(
-    activeTurn: ActiveTurn,
-    itemId: string
-  ): { handle: TelegramStreamMessageHandle; text: string } {
-    const existing = activeTurn.commentaryStreams.get(itemId);
-    if (existing) {
-      return existing;
-    }
-
-    const created = {
-      handle: this.#messenger.streamMessage({
-        chatId: activeTurn.chatId,
-        topicId: activeTurn.topicId,
-        draftId: buildStableDraftId(`${activeTurn.turnId}:commentary:${itemId}`)
-      }),
-      text: ""
-    };
-    activeTurn.commentaryStreams.set(itemId, created);
-    return created;
-  }
-
-  private async publishFinalTurnText(activeTurn: ActiveTurn, text: string): Promise<number> {
-    const outputs = buildRenderedAssistantMessages(text);
-    if (this.#runtime.getTurn(activeTurn.turnId)?.hasAssistantText) {
-      const messageId = await activeTurn.finalStream.finalize(outputs);
-      if (messageId !== null) {
-        return messageId;
-      }
-    }
-
-    return this.sendRenderedMessages(activeTurn.chatId, activeTurn.topicId, outputs);
-  }
-
-  private async sendRenderedMessages(
-    chatId: number,
-    topicId: number,
-    renderedMessages: TelegramRenderedMessage[]
-  ): Promise<number> {
-    let firstMessageId: number | null = null;
-
-    for (const rendered of renderedMessages) {
-      const message = await this.#messenger.sendMessage({
-        chatId,
-        topicId,
-        text: rendered.text,
-        ...(rendered.parseMode ? { parseMode: rendered.parseMode } : {})
-      });
-      if (firstMessageId === null) {
-        firstMessageId = message.messageId;
-      }
-    }
-
-    if (firstMessageId === null) {
-      throw new Error("Failed to publish Telegram message chunks");
-    }
-
-    return firstMessageId;
-  }
-
-  private findActiveTurnByTopic(chatId: number, topicId: number): ActiveTurn | undefined {
-    const activeTurn = this.#runtime.getActiveTurnByTopic(chatId, topicId);
-    return activeTurn ? this.#activeTurns.get(activeTurn.turnId) : undefined;
-  }
-
-  private createActiveTurn(message: UserTurnMessage, threadId: string, turnId: string): ActiveTurn {
-    if (message.topicId === null) {
-      throw new Error("Cannot create an active turn without a Telegram topic id");
-    }
-
-    return {
-      chatId: message.chatId,
-      topicId: message.topicId,
-      threadId,
-      turnId,
-      stopControlMessageId: null,
-      stopRequested: false,
-      statusDraft: buildStatusDraft("thinking"),
-      lastStatusUpdateAt: Date.now(),
-      lifecycle: "active",
-      statusHandle: this.#messenger.statusDraft({
-        chatId: message.chatId,
-        topicId: message.topicId,
-        draftId: buildStableDraftId(`${turnId}:status`)
-      }),
-      finalStream: this.#messenger.streamMessage({
-        chatId: message.chatId,
-        topicId: message.topicId,
-        draftId: buildStableDraftId(`${turnId}:final`)
-      }),
-      commentaryStreams: new Map()
-    };
-  }
-
-  private removeActiveTurn(turnId: string): void {
-    this.#activeTurns.delete(turnId);
-    this.#submitPendingSteersAfterInterrupt.delete(turnId);
+  private findActiveTurnByTopic(chatId: number, topicId: number): TurnContext | undefined {
+    return this.#lifecycle.getActiveTurnByTopic(chatId, topicId);
   }
 
   private async resolveTurnText(threadId: string, turnId: string): Promise<string> {
-    const streamedText = this.#runtime.renderAssistantItems(turnId);
+    const streamedText = this.#lifecycle.renderAssistantItems(turnId);
     const readbackText = await this.codex.readTurnMessages(threadId, turnId);
     return readbackText.trim().length > 0 ? readbackText : streamedText;
   }
 
-  private async finishTurn(
-    activeTurn: ActiveTurn,
-    status: "completed" | "failed" | "interrupted",
-    text: string,
-    publishWhenEmpty = true
-  ): Promise<QueueStateSnapshot | null> {
-    let messageId: number | null = null;
-    if (text.trim().length > 0 || publishWhenEmpty) {
-      messageId = await this.publishFinalTurnText(activeTurn, text);
-    }
-
-    await this.database.appendTurnStream(activeTurn.turnId, text);
-    await this.database.completeTurn(activeTurn.turnId, messageId, status);
-    await this.mediaStore.releaseTurnFiles(activeTurn.turnId);
-    const queueState = this.#runtime.finalizeTurn(activeTurn.turnId);
-    this.removeActiveTurn(activeTurn.turnId);
-    return queueState;
-  }
-
-  private async beginTurnFinalization(activeTurn: ActiveTurn): Promise<void> {
-    if (activeTurn.lifecycle === "finalizing") {
-      return;
-    }
-
-    activeTurn.lifecycle = "finalizing";
-    await this.clearTurnControlMessage(activeTurn);
-    await activeTurn.statusHandle.clear();
-
-    for (const [itemId, commentary] of activeTurn.commentaryStreams) {
-      if (commentary.text.trim().length > 0) {
-        await commentary.handle.finalize(buildRenderedCommentaryMessage(commentary.text));
-      } else {
-        await commentary.handle.clear();
-      }
-      activeTurn.commentaryStreams.delete(itemId);
-    }
-  }
-
-  private async sendTurnControlMessage(activeTurn: ActiveTurn, replyToMessageId: number): Promise<void> {
-    try {
-      const message = await this.#messenger.sendMessage({
-        chatId: activeTurn.chatId,
-        topicId: activeTurn.topicId,
-        text: renderTurnControlMessage("active"),
-        replyToMessageId,
-        replyMarkup: buildTurnControlKeyboard(activeTurn.turnId)
-      });
-      activeTurn.stopControlMessageId = message.messageId;
-    } catch (error) {
-      console.warn("Failed to send turn control message", error);
-    }
-  }
-
-  private async updateTurnControlMessage(
-    activeTurn: ActiveTurn,
-    text: string,
-    replyMarkup?: InlineKeyboardMarkup
-  ): Promise<void> {
-    if (activeTurn.stopControlMessageId === null) {
-      return;
-    }
-
-    try {
-      const options = replyMarkup
-        ? {
-            message_thread_id: activeTurn.topicId,
-            reply_markup: replyMarkup
-          }
-        : {
-            message_thread_id: activeTurn.topicId
-          };
-      await this.telegram.editMessageText(activeTurn.chatId, activeTurn.stopControlMessageId, text, options);
-    } catch (error) {
-      if (isTelegramMessageMissingError(error)) {
-        activeTurn.stopControlMessageId = null;
-        return;
-      }
-      console.warn("Failed to update turn control message", error);
-    }
-  }
-
-  private async clearTurnControlMessage(activeTurn: ActiveTurn): Promise<void> {
-    if (activeTurn.stopControlMessageId === null) {
-      return;
-    }
-
-    try {
-      await this.telegram.deleteMessage(activeTurn.chatId, activeTurn.stopControlMessageId);
-    } catch (error) {
-      if (!isTelegramMessageMissingError(error)) {
-        console.warn("Failed to delete turn control message", error);
-      }
-    } finally {
-      activeTurn.stopControlMessageId = null;
-    }
-  }
-
-  private async trySteerTurn(activeTurn: ActiveTurn, message: UserTurnMessage): Promise<void> {
+  private async trySteerTurn(activeTurn: TurnContext, message: UserTurnMessage): Promise<void> {
     if (message.topicId === null) {
       return;
     }
 
-    const runtimeTurn = this.#runtime.getTurn(activeTurn.turnId);
-    if (!runtimeTurn) {
+    const pending = this.#lifecycle.queuePendingSteer(activeTurn.turnId, message);
+    if (!pending) {
       return;
     }
-
-    const pending = this.#runtime.queuePendingSteer(runtimeTurn, message);
     await this.syncQueuePreview(pending.queueState);
 
-    let preparedInput: PreparedCodexInput | null = null;
     try {
-      preparedInput = await this.materializeCodexInput(message);
-      await this.codex.steerTurn(activeTurn.threadId, activeTurn.turnId, preparedInput.input);
-      preparedInput.images.attachToTurn(activeTurn.turnId);
+      await this.submitPreparedInput(message, {
+        attachTurnId: activeTurn.turnId,
+        submit: (input) => this.codex.steerTurn(activeTurn.threadId, activeTurn.turnId, input)
+      });
     } catch (error) {
-      if (preparedInput) {
-        await preparedInput.images.discard();
-      }
       const classification = classifySteerError(error);
       if (classification.kind === "stale_or_missing_active_turn") {
-        const queueState = this.#runtime.movePendingSteerToQueued(message.chatId, message.topicId, pending.localId);
+        const queueState = this.#lifecycle.movePendingSteerToQueued(message.chatId, message.topicId, pending.localId);
         await this.syncQueuePreview(queueState);
         return;
       }
 
-      const queueState = this.#runtime.dropPendingSteer(message.chatId, message.topicId, pending.localId);
+      const queueState = this.#lifecycle.dropPendingSteer(message.chatId, message.topicId, pending.localId);
       await this.syncQueuePreview(queueState);
 
       if (classification.kind === "invalid_input") {
@@ -967,6 +580,37 @@ export class TelegramCodexBridge {
       });
       return;
     }
+  }
+
+  private async submitPreparedInput(
+    message: UserTurnMessage,
+    options: {
+      attachTurnId?: string;
+      submit(input: UserInput[]): Promise<{ id?: string; turnId?: string }>;
+    }
+  ): Promise<{ id: string }> {
+    const preparedInput = await this.materializeCodexInput(message);
+    try {
+      const result = await options.submit(preparedInput.input);
+      const resolvedTurnId = options.attachTurnId ?? result.id ?? result.turnId;
+      if (!resolvedTurnId) {
+        throw new Error("Codex submission did not return a turn id");
+      }
+      preparedInput.images.attachToTurn(resolvedTurnId);
+      return { id: resolvedTurnId };
+    } catch (error) {
+      await preparedInput.images.discard();
+      throw error;
+    }
+  }
+
+  private async submitQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): Promise<void> {
+    const session = await this.database.getSessionByTopic(chatId, topicId);
+    if (!session?.codexThreadId) {
+      return;
+    }
+
+    await this.sendTurnForSession(session, message);
   }
 
   private async materializeCodexInput(message: UserTurnMessage): Promise<PreparedCodexInput> {
@@ -1036,14 +680,6 @@ export class TelegramCodexBridge {
       }
     }
 
-    const options = replyMarkup
-      ? {
-          message_thread_id: queueState.topicId,
-          reply_markup: replyMarkup
-        }
-      : {
-          message_thread_id: queueState.topicId
-        };
     const message = await this.#messenger.sendMessage({
       chatId: queueState.chatId,
       topicId: queueState.topicId,
@@ -1058,7 +694,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const nextMessage = this.#runtime.peekNextQueuedFollowUp(chatId, topicId);
+    const nextMessage = this.#lifecycle.peekNextQueuedFollowUp(chatId, topicId);
     if (!nextMessage) {
       return;
     }
@@ -1069,27 +705,12 @@ export class TelegramCodexBridge {
     }
 
     await this.sendTurnForSession(session, nextMessage);
-    this.#runtime.shiftNextQueuedFollowUp(chatId, topicId);
-    await this.syncQueuePreview(this.#runtime.getQueueState(chatId, topicId));
+    this.#lifecycle.shiftNextQueuedFollowUp(chatId, topicId);
+    await this.syncQueuePreview(this.#lifecycle.getQueueState(chatId, topicId));
   }
 
 }
 
 function topicKey(chatId: number, topicId: number): string {
   return `${chatId}:${topicId}`;
-}
-
-function isTelegramMessageMissingError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const maybeTelegramError = error as { error_code?: unknown; description?: unknown };
-  return (
-    maybeTelegramError.error_code === 400 &&
-    typeof maybeTelegramError.description === "string" &&
-    (maybeTelegramError.description.toLowerCase().includes("message to edit not found") ||
-      maybeTelegramError.description.toLowerCase().includes("message to delete not found") ||
-      maybeTelegramError.description.toLowerCase().includes("not found"))
-  );
 }
