@@ -347,17 +347,12 @@ class TelegramDraftSession {
         return;
       }
 
-      if (pending.parseMode) {
-        await this.sendDraft({
-          text: pending.text
-        });
-        this.#state.lastText = pending.text;
-        this.#state.lastParseMode = undefined;
-        this.#state.lastUpdateAt = Date.now();
-        return;
-      }
-
-      throw error;
+      console.warn("Failed to send Telegram draft", {
+        chatId: this.chatId,
+        topicId: this.topicId,
+        draftId: this.draftId,
+        parseMode: pending.parseMode
+      }, error);
     }
   }
 

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TelegramCodexBridge, type BridgeCodexApi } from "../src/bridge";
 import type { AppConfig } from "../src/config";
@@ -652,6 +652,63 @@ describe("TelegramCodexBridge", () => {
       "Use <b>bold</b> and <code>code</code>.\n\n<pre><code class=\"language-ts\">const answer = 42;</code></pre>"
     );
     expect(telegram.sentMessages.at(-1)?.options?.parse_mode).toBe("HTML");
+  });
+
+  it("logs draft rejections and still delivers the final message", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      codex.readTurnMessagesResult = "Use **bold** and `code`.";
+
+      await bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 74,
+        updateId: 84,
+        userId: 42,
+        text: "Format this output"
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      telegram.nextDraftError = new Error("can't parse entities");
+
+      codex.emitNotification({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Use **bold** and `code`."
+        }
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "completed",
+            error: null
+          }
+        }
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "Failed to send Telegram draft",
+        expect.objectContaining({
+          parseMode: "HTML"
+        }),
+        expect.any(Error)
+      );
+      expect(telegram.sentMessages.at(-1)?.text).toBe("Use <b>bold</b> and <code>code</code>.");
+      expect(telegram.sentMessages.at(-1)?.options?.parse_mode).toBe("HTML");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("streams commentary in its own draft and persists it when the turn finalizes", async () => {
