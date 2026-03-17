@@ -9,7 +9,6 @@
     "build": "tsc --project tsconfig.json",
     "dev": "node --watch --watch-path=src --watch-path=KIRBOT.md --watch-path=.env --import tsx src/index.ts",
     "generate:codex-types": "node scripts/generate-codex-types.mjs",
-    "restart": "node scripts/restart-built-server.mjs",
     "start": "node --enable-source-maps dist/index.js",
     "test": "node scripts/run-vitest.mjs run",
     "test:watch": "node scripts/run-vitest.mjs",
