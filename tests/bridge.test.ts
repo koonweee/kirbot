@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -49,6 +49,10 @@ function combinedDraft(...parts: string[]): string {
   return parts.join("\n\n");
 }
 
+async function waitForAsyncNotifications(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
   ensuredThreads: string[] = [];
@@ -60,6 +64,7 @@ class FakeCodex implements BridgeCodexApi {
   userInputs: Array<{ id: string | number; answers: ToolRequestUserInputResponse["answers"] }> = [];
   unsupported: Array<{ id: string | number; message: string }> = [];
   readTurnMessagesResult = "";
+  nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
 
@@ -76,6 +81,12 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }> {
+    if (this.nextSendTurnError) {
+      const error = this.nextSendTurnError;
+      this.nextSendTurnError = null;
+      throw error;
+    }
+
     const turnId = `turn-${this.turns.length + 1}`;
     const turn = { threadId, text: flattenTextInput(input), turnId } as {
       threadId: string;
@@ -423,7 +434,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
-  it("downloads Telegram images into temp storage and forwards them as local images", async () => {
+  it("retains Telegram images until the turn completes", async () => {
     await bridge.handleUserMessage({
       chatId: -1001,
       topicId: 777,
@@ -455,6 +466,94 @@ describe("TelegramCodexBridge", () => {
     });
     expect(codex.turns[0]?.input[1]?.type).toBe("localImage");
     const localImage = codex.turns[0]?.input[1];
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : false).toBe(true);
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : true).toBe(false);
+  });
+
+  it("cleans up Telegram images immediately when turn submission fails", async () => {
+    codex.nextSendTurnError = new Error("turn start failed");
+
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Check this screenshot",
+      input: [
+        {
+          type: "text",
+          text: "Check this screenshot",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-1",
+          fileName: "screenshot.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(telegram.downloads).toEqual([{ fileId: "photo-1" }]);
+    expect(codex.turns).toHaveLength(0);
+    expect(readdirSync(config.telegram.mediaTempDir)).toEqual([]);
+    expect(telegram.sentMessages.at(-1)?.text).toContain("turn start failed");
+  });
+
+  it("releases retained Telegram images when the turn fails", async () => {
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Check this screenshot",
+      input: [
+        {
+          type: "text",
+          text: "Check this screenshot",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-1",
+          fileName: "screenshot.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    const localImage = codex.turns[0]?.input[1];
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : false).toBe(true);
+
+    codex.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        error: {
+          message: "vision failed"
+        }
+      }
+    } as ServerNotification);
+    await waitForAsyncNotifications();
+
     expect(localImage && "path" in localImage ? existsSync(localImage.path) : true).toBe(false);
   });
 
@@ -1279,6 +1378,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("Queued for current turn:\n- [Image]");
     const localImage = codex.steerCalls[0]?.input[0];
     expect(localImage?.type).toBe("localImage");
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : false).toBe(true);
 
     const previewMessageId = telegram.sentMessages.at(-1)?.messageId;
     codex.emitNotification({
@@ -1298,6 +1398,23 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
     );
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : false).toBe(true);
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(localImage && "path" in localImage ? existsSync(localImage.path) : true).toBe(false);
   });
 
   it("queues a follow-up for the next turn when steer loses the active-turn race", async () => {

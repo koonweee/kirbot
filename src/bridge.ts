@@ -13,7 +13,7 @@ import {
   classifySteerError,
   formatError
 } from "./bridge/error-handling";
-import { TemporaryImageStore } from "./media-store";
+import { TemporaryImageStore, type PreparedImageFiles } from "./media-store";
 import { buildUserInputSignature } from "./bridge/input-signature";
 import { getNotificationTurnId } from "./bridge/notifications";
 import {
@@ -82,6 +82,10 @@ type ActiveTurn = {
   commentaryStreams: Map<string, { handle: TelegramStreamMessageHandle; text: string }>;
 };
 
+type PreparedCodexInput = {
+  input: UserInput[];
+  images: PreparedImageFiles;
+};
 export class TelegramCodexBridge {
   readonly #runtime = new BridgeTurnRuntime();
   readonly #activeTurns = new Map<string, ActiveTurn>();
@@ -412,32 +416,33 @@ export class TelegramCodexBridge {
     await this.codex.ensureThreadLoaded(session.codexThreadId);
 
     const preparedInput = await this.materializeCodexInput(message);
-    let turn: { id: string };
     try {
-      turn = await this.codex.sendTurn(session.codexThreadId, preparedInput.input);
-    } finally {
-      await this.cleanupPreparedCodexInput(preparedInput);
+      const turn = await this.codex.sendTurn(session.codexThreadId, preparedInput.input);
+      preparedInput.images.attachToTurn(turn.id);
+
+      await this.database.recordTurnStart({
+        telegramUpdateId: message.updateId,
+        telegramChatId: String(message.chatId),
+        telegramTopicId: message.topicId,
+        codexThreadId: session.codexThreadId,
+        codexTurnId: turn.id,
+        draftId: message.updateId
+      });
+
+      const activeTurn = this.createActiveTurn(message, session.codexThreadId, turn.id);
+      this.#activeTurns.set(turn.id, activeTurn);
+      this.#runtime.registerTurn({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        threadId: session.codexThreadId,
+        turnId: turn.id
+      });
+      await this.sendTurnControlMessage(activeTurn, message.messageId);
+      await activeTurn.statusHandle.set(renderTelegramStatusDraft(activeTurn.statusDraft), true);
+    } catch (error) {
+      await preparedInput.images.discard();
+      throw error;
     }
-
-    await this.database.recordTurnStart({
-      telegramUpdateId: message.updateId,
-      telegramChatId: String(message.chatId),
-      telegramTopicId: message.topicId,
-      codexThreadId: session.codexThreadId,
-      codexTurnId: turn.id,
-      draftId: message.updateId
-    });
-
-    const activeTurn = this.createActiveTurn(message, session.codexThreadId, turn.id);
-    this.#activeTurns.set(turn.id, activeTurn);
-    this.#runtime.registerTurn({
-      chatId: message.chatId,
-      topicId: message.topicId,
-      threadId: session.codexThreadId,
-      turnId: turn.id
-    });
-    await this.sendTurnControlMessage(activeTurn, message.messageId);
-    await activeTurn.statusHandle.set(renderTelegramStatusDraft(activeTurn.statusDraft), true);
   }
 
   private async enqueueNotification(notification: ServerNotification): Promise<void> {
@@ -829,6 +834,7 @@ export class TelegramCodexBridge {
 
     await this.database.appendTurnStream(activeTurn.turnId, text);
     await this.database.completeTurn(activeTurn.turnId, messageId, status);
+    await this.mediaStore.releaseTurnFiles(activeTurn.turnId);
     const queueState = this.#runtime.finalizeTurn(activeTurn.turnId);
     this.removeActiveTurn(activeTurn.turnId);
     return queueState;
@@ -925,11 +931,15 @@ export class TelegramCodexBridge {
     const pending = this.#runtime.queuePendingSteer(runtimeTurn, message);
     await this.syncQueuePreview(pending.queueState);
 
-    let preparedInput: { input: UserInput[]; tempPaths: string[] } | null = null;
+    let preparedInput: PreparedCodexInput | null = null;
     try {
       preparedInput = await this.materializeCodexInput(message);
       await this.codex.steerTurn(activeTurn.threadId, activeTurn.turnId, preparedInput.input);
+      preparedInput.images.attachToTurn(activeTurn.turnId);
     } catch (error) {
+      if (preparedInput) {
+        await preparedInput.images.discard();
+      }
       const classification = classifySteerError(error);
       if (classification.kind === "stale_or_missing_active_turn") {
         const queueState = this.#runtime.movePendingSteerToQueued(message.chatId, message.topicId, pending.localId);
@@ -956,14 +966,10 @@ export class TelegramCodexBridge {
         text: `Failed to add the follow-up to the current turn: ${formatError(error)}`
       });
       return;
-    } finally {
-      if (preparedInput) {
-        await this.cleanupPreparedCodexInput(preparedInput);
-      }
     }
   }
 
-  private async materializeCodexInput(message: UserTurnMessage): Promise<{ input: UserInput[]; tempPaths: string[] }> {
+  private async materializeCodexInput(message: UserTurnMessage): Promise<PreparedCodexInput> {
     const input: UserInput[] = [];
     const tempPaths: string[] = [];
 
@@ -984,11 +990,10 @@ export class TelegramCodexBridge {
     }
 
     message.submittedInputSignature = buildUserInputSignature(input);
-    return { input, tempPaths };
-  }
-
-  private async cleanupPreparedCodexInput(preparedInput: { input: UserInput[]; tempPaths: string[] }): Promise<void> {
-    await Promise.all(preparedInput.tempPaths.map((path) => this.mediaStore.deleteFile(path)));
+    return {
+      input,
+      images: this.mediaStore.prepareImageFiles(tempPaths)
+    };
   }
 
   private async syncQueuePreview(queueState: QueueStateSnapshot): Promise<void> {
