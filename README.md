@@ -1,6 +1,6 @@
 # kirbot
 
-<img src="./kirbot.png" alt="kirbot" width="256" />
+<img src="./kirbot.png" alt="kirbot" width="128" />
 
 kirbot is a Telegram bot that connects a private Telegram chat in threaded mode to a Codex app server session. It lets approved Telegram users start Codex conversations from Telegram, continue them in-thread, and handle Codex approvals or input requests without leaving Telegram.
 
