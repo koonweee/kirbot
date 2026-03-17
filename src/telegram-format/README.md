@@ -18,4 +18,4 @@ It centralizes Markdown rendering, manual entity producers, UTF-16 offset handli
 | List item | `list` / `listItem` | plain text with list prefix |
 | Thematic break | `thematicBreak` | plain text `---` |
 | Raw HTML | `html` | literal text |
-| `||spoiler||` | no supported mdast mapping in this module | literal text |
+| `\|\|spoiler\|\|` | no supported mdast mapping in this module | literal text |
