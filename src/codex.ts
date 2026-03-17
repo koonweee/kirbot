@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 
 import type { AppConfig } from "./config";
+import type { CollaborationMode } from "./generated/codex/CollaborationMode";
+import type { ReasoningEffort } from "./generated/codex/ReasoningEffort";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { RequestId } from "./generated/codex/RequestId";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
@@ -18,6 +20,11 @@ import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import { resolvePinnedCodexInvocation } from "./codex-cli";
 import { CodexRpcClient, type SpawnedAppServer, type WebSocketRpcTransport } from "./rpc";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
+
+export type ThreadStartSettings = {
+  model: string;
+  reasoningEffort: ReasoningEffort | null;
+};
 
 export type AppServerOptions = {
   url: string;
@@ -65,7 +72,7 @@ export type UserInputServerRequest = {
 
 export class CodexGateway {
   readonly #loadedThreads = new Set<string>();
-  readonly #threadModels = new Map<string, string>();
+  readonly #threadSettings = new Map<string, ThreadStartSettings>();
 
   constructor(
     private readonly client: CodexRpcClient,
@@ -74,16 +81,20 @@ export class CodexGateway {
     this.client.on("notification", (notification: ServerNotification) => {
       if (notification.method === "thread/archived" || notification.method === "thread/closed") {
         this.#loadedThreads.delete(notification.params.threadId);
-        this.#threadModels.delete(notification.params.threadId);
+        this.#threadSettings.delete(notification.params.threadId);
       }
 
       if (notification.method === "model/rerouted") {
-        this.#threadModels.set(notification.params.threadId, notification.params.toModel);
+        const existing = this.#threadSettings.get(notification.params.threadId);
+        this.#threadSettings.set(notification.params.threadId, {
+          model: notification.params.toModel,
+          reasoningEffort: existing?.reasoningEffort ?? null
+        });
       }
     });
     this.client.on("transportClosed", () => {
       this.#loadedThreads.clear();
-      this.#threadModels.clear();
+      this.#threadSettings.clear();
     });
   }
 
@@ -100,7 +111,7 @@ export class CodexGateway {
     });
   }
 
-  async createThread(title: string): Promise<{ threadId: string; model: string }> {
+  async createThread(title: string): Promise<{ threadId: string } & ThreadStartSettings> {
     const response = await this.client.startThread({
       cwd: this.config.defaultCwd,
       model: this.config.model ?? null,
@@ -119,21 +130,27 @@ export class CodexGateway {
     });
 
     this.#loadedThreads.add(response.thread.id);
-    this.#threadModels.set(response.thread.id, response.model);
+    this.#threadSettings.set(response.thread.id, {
+      model: response.model,
+      reasoningEffort: response.reasoningEffort
+    });
     await this.client.setThreadName({
       threadId: response.thread.id,
       name: title
     });
     return {
       threadId: response.thread.id,
-      model: response.model
+      model: response.model,
+      reasoningEffort: response.reasoningEffort
     };
   }
 
-  async ensureThreadLoaded(threadId: string): Promise<{ model: string }> {
+  async ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings> {
     if (this.#loadedThreads.has(threadId)) {
+      const settings = this.#threadSettings.get(threadId);
       return {
-        model: this.#threadModels.get(threadId) ?? this.config.model ?? "unknown-model"
+        model: settings?.model ?? this.config.model ?? "unknown-model",
+        reasoningEffort: settings?.reasoningEffort ?? null
       };
     }
 
@@ -142,16 +159,21 @@ export class CodexGateway {
       persistExtendedHistory: false
     });
     this.#loadedThreads.add(threadId);
-    this.#threadModels.set(threadId, response.model);
+    this.#threadSettings.set(threadId, {
+      model: response.model,
+      reasoningEffort: response.reasoningEffort
+    });
     return {
-      model: response.model
+      model: response.model,
+      reasoningEffort: response.reasoningEffort
     };
   }
 
-  async sendTurn(threadId: string, input: UserInput[]): Promise<Turn> {
+  async sendTurn(threadId: string, input: UserInput[], collaborationMode?: CollaborationMode | null): Promise<Turn> {
     const response = await this.client.startTurn({
       threadId,
-      input
+      input,
+      ...(collaborationMode ? { collaborationMode } : {})
     });
 
     return response.turn;
@@ -187,6 +209,8 @@ export class CodexGateway {
     if (!turn) {
       return {
         text: "",
+        assistantText: "",
+        planText: "",
         changedFiles: 0,
         cwd: response.thread.cwd,
         branch: response.thread.gitInfo?.branch ?? null
@@ -196,14 +220,21 @@ export class CodexGateway {
     const agentMessages = turn.items.filter(
       (item): item is Extract<(typeof turn.items)[number], { type: "agentMessage" }> => item.type === "agentMessage"
     );
+    const planItems = turn.items.filter(
+      (item): item is Extract<(typeof turn.items)[number], { type: "plan" }> => item.type === "plan"
+    );
     const finalAnswerText = agentMessages
       .filter((item) => item.phase === "final_answer")
       .map((item) => item.text)
       .join("\n\n");
+    const assistantText =
+      finalAnswerText.trim().length > 0 ? finalAnswerText : agentMessages.map((item) => item.text).join("\n\n");
+    const planText = planItems.map((item) => item.text).join("\n\n");
 
     return {
-      text:
-        finalAnswerText.trim().length > 0 ? finalAnswerText : agentMessages.map((item) => item.text).join("\n\n"),
+      text: assistantText.trim().length > 0 ? assistantText : planText,
+      assistantText,
+      planText,
       changedFiles: countChangedFiles(turn.items),
       cwd: response.thread.cwd,
       branch: response.thread.gitInfo?.branch ?? null
