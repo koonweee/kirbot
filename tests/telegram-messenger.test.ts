@@ -14,6 +14,7 @@ class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   rejectEmptyDrafts = false;
   rejectEntityDrafts = false;
+  events: string[] = [];
   sentMessages: Array<{ chatId: number; text: string; options?: TelegramSendOptions }> = [];
   drafts: Array<{ chatId: number; draftId: number; text: string; options?: TelegramDraftOptions }> = [];
   chatActions: Array<{
@@ -29,6 +30,7 @@ class FakeTelegram implements TelegramApi {
 
   async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }> {
     this.messageCounter += 1;
+    this.events.push(`message:${text}`);
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
     return { message_id: this.messageCounter };
   }
@@ -39,6 +41,7 @@ class FakeTelegram implements TelegramApi {
     text: string,
     options?: TelegramDraftOptions
   ): Promise<true> {
+    this.events.push(`draft:${text}`);
     this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     if (this.rejectEmptyDrafts && text === "") {
       throw new Error("text must be non-empty");
@@ -159,6 +162,7 @@ describe("TelegramMessenger", () => {
         }
       }
     ]);
+    expect(telegram.events).toEqual(["draft:Working", "draft:", "message:Done"]);
     expect(telegram.chatActions).toEqual([
       {
         chatId: 1,
@@ -193,6 +197,30 @@ describe("TelegramMessenger", () => {
         }
       }
     ]);
+  });
+
+  it("clears a pending draft before publishing the final message", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+    const stream = messenger.streamMessage({
+      chatId: 1,
+      topicId: 2,
+      draftId: 105
+    });
+
+    await stream.update({ text: "Working" }, true);
+    await stream.update({ text: "Working more" });
+    await stream.finalize({ text: "Done" });
+
+    expect(telegram.events).toEqual(["draft:Working", "draft:", "message:Done"]);
+    expect(telegram.drafts.at(-1)).toEqual({
+      chatId: 1,
+      draftId: 105,
+      text: EMPTY_DRAFT_TEXT,
+      options: {
+        message_thread_id: 2
+      }
+    });
   });
 
   it("throttles repeated chat actions for the same stream handle", async () => {

@@ -194,6 +194,7 @@ class FakeTelegram implements TelegramApi {
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
+  events: string[] = [];
   chatActions: Array<{
     chatId: number;
     action: "typing" | "upload_document";
@@ -253,6 +254,7 @@ class FakeTelegram implements TelegramApi {
     }
   ): Promise<{ message_id: number }> {
     this.messageCounter += 1;
+    this.events.push(`message:${text}`);
     this.sentMessages.push(
       options
         ? { messageId: this.messageCounter, chatId, text, options }
@@ -267,6 +269,7 @@ class FakeTelegram implements TelegramApi {
     text: string,
     options?: { message_thread_id?: number; entities?: MessageEntity[] }
   ): Promise<true> {
+    this.events.push(`draft:${text}`);
     this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     if (this.nextDraftError) {
       const error = this.nextDraftError;
@@ -1151,6 +1154,59 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(telegram.appliedDrafts.some((draft) => draft.text === "Retry me")).toBe(true);
+  });
+
+  it("clears the assistant draft before sending the final persisted message", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 10,
+      updateId: 25,
+      userId: 42,
+      text: "Explain the fix"
+    });
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Hello"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: " world"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.events).toContain("draft:Hello");
+    expect(telegram.events.indexOf("draft:")).toBeGreaterThan(telegram.events.indexOf("draft:Hello"));
+    expect(telegram.events.indexOf("message:Hello world")).toBeGreaterThan(telegram.events.indexOf("draft:"));
+    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Hello world");
   });
 
   it("renders multiple assistant items with separators instead of concatenating them", async () => {

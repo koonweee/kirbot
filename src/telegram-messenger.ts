@@ -192,6 +192,9 @@ export class TelegramStreamMessageHandle {
     const outputs = Array.isArray(rendered) ? rendered : [rendered];
     let firstMessageId: number | null = null;
 
+    await this.#session.clear();
+    await this.#session.close();
+
     for (const output of outputs) {
       const message = await this.telegram.sendMessage(this.chatId, output.text, {
         message_thread_id: this.topicId,
@@ -202,8 +205,6 @@ export class TelegramStreamMessageHandle {
       }
     }
 
-    await this.#session.clear();
-    await this.#session.close();
     return firstMessageId;
   }
 
@@ -270,9 +271,16 @@ class TelegramDraftSession {
       return;
     }
 
+    this.#state.pending = null;
     this.cancelTimers();
     if (this.#state.inFlight) {
       await this.#state.inFlight;
+    }
+
+    if (this.#state.lastText === null) {
+      this.#state.lastEntities = undefined;
+      this.#state.lastUpdateAt = Date.now();
+      return;
     }
 
     await this.clearDraftBestEffort();
