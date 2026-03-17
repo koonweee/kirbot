@@ -1,6 +1,7 @@
 import type { UserInput } from "./generated/codex/v2/UserInput";
 
 export type SessionStatus = "provisioning" | "active" | "archived" | "errored";
+export type SessionMode = "default" | "plan";
 
 export type UserTurnInput =
   | Extract<UserInput, { type: "text" }>
@@ -20,6 +21,7 @@ export type TopicSession = {
   createdByUserId: number;
   title: string;
   status: SessionStatus;
+  preferredMode: SessionMode;
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
@@ -36,6 +38,8 @@ export type TurnMessageRecord = {
   finalMessageId: number | null;
   streamText: string;
   status: "streaming" | "completed" | "failed" | "interrupted";
+  resolvedAssistantText: string;
+  resolvedPlanText: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -51,6 +55,7 @@ export type PendingServerRequest = {
   turnId: string | null;
   itemId: string | null;
   payloadJson: string;
+  stateJson: string | null;
   responseJson: string | null;
   status: "pending" | "resolved" | "expired";
   createdAt: string;

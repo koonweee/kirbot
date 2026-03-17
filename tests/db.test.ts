@@ -31,13 +31,19 @@ describe("BridgeDatabase", () => {
     });
 
     expect(pending.status).toBe("provisioning");
+    expect(pending.preferredMode).toBe("default");
 
     const active = await database.activateSession(pending.id, "thread-1");
     expect(active.status).toBe("active");
     expect(active.codexThreadId).toBe("thread-1");
+    expect(active.preferredMode).toBe("default");
+
+    const updatedMode = await database.updateSessionPreferredMode(-1001, 22, "plan");
+    expect(updatedMode?.preferredMode).toBe("plan");
 
     const lookup = await database.getSessionByCodexThreadId("thread-1");
     expect(lookup?.telegramTopicId).toBe(22);
+    expect(lookup?.preferredMode).toBe("plan");
 
     const archived = await database.archiveSessionByTopic(-1001, 22);
     expect(archived?.status).toBe("archived");
@@ -57,10 +63,14 @@ describe("BridgeDatabase", () => {
     });
 
     expect(pending.status).toBe("pending");
+    expect(pending.stateJson).toBeNull();
 
     await database.updateServerRequestMessageId(pending.id, 99);
     const updated = await database.getServerRequestById(pending.id);
     expect(updated?.telegramMessageId).toBe(99);
+
+    const withState = await database.updateRequestState(JSON.stringify(77), JSON.stringify({ currentQuestionId: "q1" }));
+    expect(withState.stateJson).toBe(JSON.stringify({ currentQuestionId: "q1" }));
 
     const resolved = await database.resolveRequest(JSON.stringify(77), JSON.stringify({ decision: "accept" }));
     expect(resolved.status).toBe("resolved");
@@ -86,5 +96,38 @@ describe("BridgeDatabase", () => {
     const expired = await database.getPendingRequest(JSON.stringify(78));
     expect(expired.status).toBe("expired");
     expect(expired.responseJson).toBe(JSON.stringify({ reason: "startup" }));
+  });
+
+  it("stores resolved assistant and plan text and can fetch the latest completed turn for a topic", async () => {
+    await database.recordTurnStart({
+      telegramUpdateId: 1,
+      telegramChatId: "-1001",
+      telegramTopicId: 22,
+      codexThreadId: "thread-1",
+      codexTurnId: "turn-1",
+      draftId: 10
+    });
+    await database.completeTurn("turn-1", 100, "completed", {
+      assistantText: "",
+      planText: "Plan A"
+    });
+
+    await database.recordTurnStart({
+      telegramUpdateId: 2,
+      telegramChatId: "-1001",
+      telegramTopicId: 22,
+      codexThreadId: "thread-1",
+      codexTurnId: "turn-2",
+      draftId: 11
+    });
+    await database.completeTurn("turn-2", 101, "completed", {
+      assistantText: "Implemented",
+      planText: "Plan B"
+    });
+
+    const latest = await database.getLatestCompletedTurnByTopic(-1001, 22);
+    expect(latest?.codexTurnId).toBe("turn-2");
+    expect(latest?.resolvedAssistantText).toBe("Implemented");
+    expect(latest?.resolvedPlanText).toBe("Plan B");
   });
 });

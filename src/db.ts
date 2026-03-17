@@ -4,7 +4,13 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { Generated, Kysely, Selectable, SqliteDialect } from "kysely";
 
-import type { PendingServerRequest, SessionStatus, TopicSession, TurnMessageRecord } from "./domain";
+import type {
+  PendingServerRequest,
+  SessionMode,
+  SessionStatus,
+  TopicSession,
+  TurnMessageRecord
+} from "./domain";
 
 type TimestampString = string;
 
@@ -17,6 +23,7 @@ type TopicSessionsTable = {
   created_by_user_id: number;
   title: string;
   status: SessionStatus;
+  preferred_mode: SessionMode;
   created_at: TimestampString;
   updated_at: TimestampString;
   archived_at: TimestampString | null;
@@ -33,6 +40,8 @@ type TurnMessagesTable = {
   final_message_id: number | null;
   stream_text: string;
   status: "streaming" | "completed" | "failed" | "interrupted";
+  resolved_assistant_text: string;
+  resolved_plan_text: string;
   created_at: TimestampString;
   updated_at: TimestampString;
 };
@@ -48,6 +57,7 @@ type ServerRequestsTable = {
   turn_id: string | null;
   item_id: string | null;
   payload_json: string;
+  state_json: string | null;
   response_json: string | null;
   status: "pending" | "resolved" | "expired";
   created_at: TimestampString;
@@ -80,6 +90,7 @@ function mapTopicSession(row: Selectable<TopicSessionsTable>): TopicSession {
     createdByUserId: row.created_by_user_id,
     title: row.title,
     status: row.status,
+    preferredMode: row.preferred_mode,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at
@@ -98,6 +109,8 @@ function mapTurnMessage(row: Selectable<TurnMessagesTable>): TurnMessageRecord {
     finalMessageId: row.final_message_id,
     streamText: row.stream_text,
     status: row.status,
+    resolvedAssistantText: row.resolved_assistant_text,
+    resolvedPlanText: row.resolved_plan_text,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -115,6 +128,7 @@ function mapServerRequest(row: Selectable<ServerRequestsTable>): PendingServerRe
     turnId: row.turn_id,
     itemId: row.item_id,
     payloadJson: row.payload_json,
+    stateJson: row.state_json,
     responseJson: row.response_json,
     status: row.status,
     createdAt: row.created_at,
@@ -124,13 +138,14 @@ function mapServerRequest(row: Selectable<ServerRequestsTable>): PendingServerRe
 
 export class BridgeDatabase {
   readonly kysely: Kysely<DatabaseSchema>;
+  readonly #sqlite: InstanceType<typeof Database>;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    const sqlite = new Database(path);
-    sqlite.pragma("journal_mode = WAL");
+    this.#sqlite = new Database(path);
+    this.#sqlite.pragma("journal_mode = WAL");
     this.kysely = new Kysely<DatabaseSchema>({
-      dialect: new SqliteDialect({ database: sqlite })
+      dialect: new SqliteDialect({ database: this.#sqlite })
     });
   }
 
@@ -146,6 +161,7 @@ export class BridgeDatabase {
       .addColumn("created_by_user_id", "integer", (column) => column.notNull())
       .addColumn("title", "text", (column) => column.notNull())
       .addColumn("status", "text", (column) => column.notNull())
+      .addColumn("preferred_mode", "text", (column) => column.notNull().defaultTo("default"))
       .addColumn("created_at", "text", (column) => column.notNull())
       .addColumn("updated_at", "text", (column) => column.notNull())
       .addColumn("archived_at", "text")
@@ -180,6 +196,8 @@ export class BridgeDatabase {
       .addColumn("final_message_id", "integer")
       .addColumn("stream_text", "text", (column) => column.notNull())
       .addColumn("status", "text", (column) => column.notNull())
+      .addColumn("resolved_assistant_text", "text", (column) => column.notNull().defaultTo(""))
+      .addColumn("resolved_plan_text", "text", (column) => column.notNull().defaultTo(""))
       .addColumn("created_at", "text", (column) => column.notNull())
       .addColumn("updated_at", "text", (column) => column.notNull())
       .execute();
@@ -205,6 +223,7 @@ export class BridgeDatabase {
       .addColumn("turn_id", "text")
       .addColumn("item_id", "text")
       .addColumn("payload_json", "text", (column) => column.notNull())
+      .addColumn("state_json", "text")
       .addColumn("response_json", "text")
       .addColumn("status", "text", (column) => column.notNull())
       .addColumn("created_at", "text", (column) => column.notNull())
@@ -225,6 +244,11 @@ export class BridgeDatabase {
       .addColumn("telegram_update_id", "integer", (column) => column.primaryKey())
       .addColumn("processed_at", "text", (column) => column.notNull())
       .execute();
+
+    this.ensureColumn("topic_sessions", "preferred_mode", "TEXT NOT NULL DEFAULT 'default'");
+    this.ensureColumn("turn_messages", "resolved_assistant_text", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("turn_messages", "resolved_plan_text", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("server_requests", "state_json", "TEXT");
   }
 
   async close(): Promise<void> {
@@ -262,6 +286,7 @@ export class BridgeDatabase {
         created_by_user_id: input.createdByUserId,
         title: input.title,
         status: "provisioning",
+        preferred_mode: "default",
         created_at: timestamp,
         updated_at: timestamp,
         archived_at: null
@@ -357,6 +382,24 @@ export class BridgeDatabase {
     return rows.map(mapTopicSession);
   }
 
+  async updateSessionPreferredMode(chatId: number, topicId: number, preferredMode: SessionMode): Promise<TopicSession | undefined> {
+    const existing = await this.getSessionByTopic(chatId, topicId);
+    if (!existing) {
+      return undefined;
+    }
+
+    await this.kysely
+      .updateTable("topic_sessions")
+      .set({
+        preferred_mode: preferredMode,
+        updated_at: now()
+      })
+      .where("id", "=", existing.id)
+      .execute();
+
+    return this.getSessionById(existing.id);
+  }
+
   async recordTurnStart(input: {
     telegramUpdateId: number;
     telegramChatId: string;
@@ -378,6 +421,8 @@ export class BridgeDatabase {
         final_message_id: null,
         stream_text: "",
         status: "streaming",
+        resolved_assistant_text: "",
+        resolved_plan_text: "",
         created_at: timestamp,
         updated_at: timestamp
       })
@@ -407,7 +452,11 @@ export class BridgeDatabase {
   async completeTurn(
     turnId: string,
     finalMessageId: number | null,
-    status: "completed" | "failed" | "interrupted"
+    status: "completed" | "failed" | "interrupted",
+    resolvedText?: {
+      assistantText: string;
+      planText: string;
+    }
   ): Promise<TurnMessageRecord | undefined> {
     const existing = await this.getTurnByIdOptional(turnId);
     if (!existing) {
@@ -419,6 +468,12 @@ export class BridgeDatabase {
       .set({
         final_message_id: finalMessageId,
         status,
+        ...(resolvedText
+          ? {
+              resolved_assistant_text: resolvedText.assistantText,
+              resolved_plan_text: resolvedText.planText
+            }
+          : {}),
         updated_at: now()
       })
       .where("codex_turn_id", "=", turnId)
@@ -442,6 +497,20 @@ export class BridgeDatabase {
       .selectFrom("turn_messages")
       .selectAll()
       .where("codex_turn_id", "=", turnId)
+      .executeTakeFirst();
+
+    return row ? mapTurnMessage(row) : undefined;
+  }
+
+  async getLatestCompletedTurnByTopic(chatId: number, topicId: number): Promise<TurnMessageRecord | undefined> {
+    const row = await this.kysely
+      .selectFrom("turn_messages")
+      .selectAll()
+      .where("telegram_chat_id", "=", String(chatId))
+      .where("telegram_topic_id", "=", topicId)
+      .where("status", "=", "completed")
+      .orderBy("updated_at", "desc")
+      .orderBy("id", "desc")
       .executeTakeFirst();
 
     return row ? mapTurnMessage(row) : undefined;
@@ -472,6 +541,7 @@ export class BridgeDatabase {
         turn_id: input.turnId,
         item_id: input.itemId,
         payload_json: input.payloadJson,
+        state_json: null,
         response_json: null,
         status: "pending",
         created_at: timestamp,
@@ -487,6 +557,7 @@ export class BridgeDatabase {
           turn_id: input.turnId,
           item_id: input.itemId,
           payload_json: input.payloadJson,
+          state_json: null,
           response_json: null,
           status: "pending",
           updated_at: timestamp
@@ -521,6 +592,19 @@ export class BridgeDatabase {
 
     const row = await query.orderBy("created_at", "desc").executeTakeFirst();
     return row ? mapServerRequest(row) : undefined;
+  }
+
+  async updateRequestState(requestIdJson: string, stateJson: string | null): Promise<PendingServerRequest> {
+    await this.kysely
+      .updateTable("server_requests")
+      .set({
+        state_json: stateJson,
+        updated_at: now()
+      })
+      .where("request_id_json", "=", requestIdJson)
+      .execute();
+
+    return this.getPendingRequest(requestIdJson);
   }
 
   async resolveRequest(requestIdJson: string, responseJson: string): Promise<PendingServerRequest> {
@@ -595,5 +679,14 @@ export class BridgeDatabase {
       })
       .where("id", "=", id)
       .execute();
+  }
+
+  private ensureColumn(tableName: string, columnName: string, definition: string): void {
+    const columns = this.#sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === columnName)) {
+      return;
+    }
+
+    this.#sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
 }
