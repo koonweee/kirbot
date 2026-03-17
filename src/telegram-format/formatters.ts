@@ -2,6 +2,10 @@ import { TelegramEntityBuilder } from "./entity-builder";
 import type { FormattedText } from "./types";
 
 export type QuoteKind = "blockquote" | "expandable_blockquote";
+const UNSUPPORTED_LINK_PROTOCOLS = new Set(["data:", "file:", "javascript:"]);
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+const RELATIVE_PATH_PREFIX = /^(?:\.{1,2}\/|~\/)/;
+const REPO_RELATIVE_FILE_PATH = /^(?:[^/\s]+\/)+[^/\s]+\.[A-Za-z0-9]+$/;
 
 export function annotateFormattedText(
   formatted: FormattedText,
@@ -42,6 +46,15 @@ export function codeFormattedText(formatted: FormattedText): FormattedText {
 }
 
 export function linkFormattedText(formatted: FormattedText, url: string): FormattedText {
+  const targetKind = classifyLinkTarget(url);
+  if (targetKind === "path") {
+    return codeFormattedText(formatted);
+  }
+
+  if (targetKind === "invalid") {
+    return formatted;
+  }
+
   return annotateFormattedText(formatted, { type: "text_link", url });
 }
 
@@ -87,4 +100,45 @@ export function renderPreformattedText(text: string, language?: string): Formatt
 
 export function renderQuotedText(text: string, options: { kind?: QuoteKind } = {}): FormattedText {
   return quoteFormattedText({ text }, options);
+}
+
+function isTelegramLinkUrl(url: string): boolean {
+  if (!/^[A-Za-z][A-Za-z\d+.-]*:/.test(url)) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return !UNSUPPORTED_LINK_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function classifyLinkTarget(url: string): "telegram-url" | "path" | "invalid" {
+  if (isTelegramLinkUrl(url)) {
+    return "telegram-url";
+  }
+
+  if (isPathLikeLinkTarget(url)) {
+    return "path";
+  }
+
+  return "invalid";
+}
+
+function isPathLikeLinkTarget(url: string): boolean {
+  if (url.startsWith("/")) {
+    return true;
+  }
+
+  if (WINDOWS_ABSOLUTE_PATH.test(url) || RELATIVE_PATH_PREFIX.test(url)) {
+    return true;
+  }
+
+  if (url.startsWith("file:")) {
+    return true;
+  }
+
+  return REPO_RELATIVE_FILE_PATH.test(url);
 }

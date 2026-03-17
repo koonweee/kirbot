@@ -12,10 +12,18 @@ It centralizes Markdown rendering, manual entity producers, UTF-16 offset handli
 | `~~strike~~` | `delete` | `strikethrough` |
 | `` `code` `` | `inlineCode` | `code` |
 | Fenced / indented code block | `code` | `pre` |
-| `[label](url)` | `link` | `text_link` |
+| `[label](https://example.com)` | `link` | `text_link` |
+| `[label](/abs/path/to/file)` or `[label](src/path/file.md)` | `link` | `code` |
+| `[label](invalid target)` | `link` | plain text label |
 | Hard line break | `break` | newline in plain text |
 | Plain text | `text` | plain text |
 | List item | `list` / `listItem` | plain text with list prefix |
 | Thematic break | `thematicBreak` | plain text `---` |
 | Raw HTML | `html` | literal text |
 | `\|\|spoiler\|\|` | literal spoiler delimiters in text | `spoiler` |
+
+Markdown link handling is target-sensitive:
+
+- valid Telegram-safe URLs stay clickable via `text_link`
+- local filesystem paths and repo-relative file paths render their label as inline `code`
+- other invalid or malformed targets fall back to an unannotated plain text label

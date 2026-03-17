@@ -59,6 +59,42 @@ describe("telegram-format", () => {
     });
   });
 
+  it("drops markdown links whose targets are not valid Telegram URLs", () => {
+    expect(
+      renderMarkdownToFormattedText(
+        "In plans there is [plan-mode-telegram-ux-prompt.md](/home/jtkw/kirbot/plans/plan-mode-telegram-ux-prompt.md)."
+      )
+    ).toEqual({
+      text: "In plans there is plan-mode-telegram-ux-prompt.md.",
+      entities: [
+        {
+          type: "code",
+          offset: 18,
+          length: 31
+        }
+      ]
+    });
+  });
+
+  it("renders repo-relative markdown link targets as inline code", () => {
+    expect(renderMarkdownToFormattedText("Open [telegram-format docs](src/telegram-format/README.md).")).toEqual({
+      text: "Open telegram-format docs.",
+      entities: [
+        {
+          type: "code",
+          offset: 5,
+          length: 20
+        }
+      ]
+    });
+  });
+
+  it("drops malformed markdown link targets that are not path-like", () => {
+    expect(renderMarkdownToFormattedText("Open [broken](javascript:alert(1)).")).toEqual({
+      text: "Open broken."
+    });
+  });
+
   it("renders blockquotes and fenced code blocks", () => {
     expect(renderMarkdownToFormattedText("> quoted **text**\n\n```ts\nconst answer = 42;\n```")).toEqual({
       text: "quoted text\n\nconst answer = 42;",
@@ -220,6 +256,25 @@ describe("telegram-format", () => {
           url: "https://example.com"
         }
       ]
+    });
+  });
+
+  it("drops manual links whose targets are not valid Telegram URLs", () => {
+    expect(renderLinkedText("plan-mode-telegram-ux-prompt.md", "/home/jtkw/kirbot/plans/plan-mode-telegram-ux-prompt.md")).toEqual({
+      text: "plan-mode-telegram-ux-prompt.md",
+      entities: [
+        {
+          type: "code",
+          offset: 0,
+          length: 31
+        }
+      ]
+    });
+  });
+
+  it("drops malformed manual links that are not path-like", () => {
+    expect(renderLinkedText("broken", "not a valid target")).toEqual({
+      text: "broken"
     });
   });
 
