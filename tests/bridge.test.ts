@@ -349,8 +349,7 @@ describe("TelegramCodexBridge", () => {
     config = {
       telegram: {
         botToken: "token",
-        chatId: -1001,
-        allowedUserIds: new Set([42]),
+        userId: 42,
         mediaTempDir: join(tempDir, "telegram-media")
       },
       database: {
@@ -404,6 +403,20 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getSessionByTopic(-1001, 101);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+  });
+
+  it("ignores messages from users other than the configured Telegram user", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 99,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
   });
 
   it("creates a Codex session inside an unmapped existing topic", async () => {
@@ -1698,7 +1711,8 @@ describe("TelegramCodexBridge", () => {
       callbackQueryId: "callback-stop",
       data: "turn:turn-1:stop",
       chatId: -1001,
-      topicId: 777
+      topicId: 777,
+      userId: 42
     });
 
     expect(codex.interruptCalls).toEqual([{ threadId: "thread-1", turnId: "turn-1" }]);
@@ -1760,7 +1774,8 @@ describe("TelegramCodexBridge", () => {
       callbackQueryId: "callback-send-now",
       data: "turn:turn-1:sendNow",
       chatId: -1001,
-      topicId: 777
+      topicId: 777,
+      userId: 42
     });
 
     expect(codex.interruptCalls).toEqual([{ threadId: "thread-1", turnId: "turn-1" }]);
@@ -1887,7 +1902,8 @@ describe("TelegramCodexBridge", () => {
       callbackQueryId: "callback-stale-interrupt",
       data: "turn:turn-1:sendNow",
       chatId: -1001,
-      topicId: 777
+      topicId: 777,
+      userId: 42
     });
 
     expect(codex.turns).toEqual([
@@ -1930,7 +1946,8 @@ describe("TelegramCodexBridge", () => {
       callbackQueryId: "callback-failed-interrupt",
       data: "turn:turn-1:sendNow",
       chatId: -1001,
-      topicId: 777
+      topicId: 777,
+      userId: 42
     });
 
     expect(codex.turns).toHaveLength(1);
@@ -1961,7 +1978,8 @@ describe("TelegramCodexBridge", () => {
       callbackQueryId: "callback-send-now-429",
       data: "turn:turn-1:sendNow",
       chatId: -1001,
-      topicId: 777
+      topicId: 777,
+      userId: 42
     });
 
     telegram.nextChatActionError = {
@@ -2029,13 +2047,35 @@ describe("TelegramCodexBridge", () => {
       callbackQueryId: "callback-1",
       data: `req:${pending.id}:accept`,
       chatId: -1001,
-      topicId: 101
+      topicId: 101,
+      userId: 42
     });
 
     expect(codex.commandApprovals).toEqual([{ id: 88, decision: "accept" }]);
     const resolved = await database.getPendingRequest(JSON.stringify(88));
     expect(resolved.status).toBe("resolved");
     expect(telegram.edits.at(-1)?.text).toContain("accept");
+  });
+
+  it("ignores callback queries from users other than the configured Telegram user", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 401,
+      updateId: 501,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-stop-unauthorized",
+      data: "turn:turn-1:stop",
+      chatId: -1001,
+      topicId: 777,
+      userId: 99
+    });
+
+    expect(codex.interruptCalls).toHaveLength(0);
   });
 });
 

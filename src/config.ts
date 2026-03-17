@@ -21,8 +21,7 @@ const optionalEnvString = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_CHAT_ID: z.string().min(1),
-  TELEGRAM_ALLOWED_USER_IDS: z.string().min(1),
+  TELEGRAM_USER_ID: z.coerce.number().int(),
   TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
@@ -45,14 +44,6 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.parse(process.env);
-
-function parseIntegerList(value: string): number[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => Number.parseInt(entry, 10));
-}
 
 function expandHomePath(value: string): string {
   if (value === "~") {
@@ -82,8 +73,7 @@ function parseJsonConfig(
 export type AppConfig = {
   telegram: {
     botToken: string;
-    chatId: number;
-    allowedUserIds: Set<number>;
+    userId: number;
     mediaTempDir: string;
   };
   database: {
@@ -105,13 +95,10 @@ export type AppConfig = {
 };
 
 export function loadConfig(): AppConfig {
-  const allowedUserIds = new Set(parseIntegerList(parsed.TELEGRAM_ALLOWED_USER_IDS));
-
   return {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
-      chatId: Number.parseInt(parsed.TELEGRAM_CHAT_ID, 10),
-      allowedUserIds,
+      userId: parsed.TELEGRAM_USER_ID,
       mediaTempDir: parsed.TELEGRAM_MEDIA_TMP_DIR
         ? expandHomePath(parsed.TELEGRAM_MEDIA_TMP_DIR)
         : defaultTelegramMediaTempDir()

@@ -2,7 +2,7 @@
 
 <img src="./kirbot.png" alt="kirbot" width="128" />
 
-kirbot is a Telegram bot that connects a private Telegram chat in threaded mode to a Codex app server session. It lets approved Telegram users start Codex conversations from Telegram, continue them in-thread, and handle Codex approvals or input requests without leaving Telegram.
+kirbot is a Telegram bot that connects a Telegram chat to a Codex app server session. It lets a single configured Telegram user start Codex conversations from Telegram, continue them in-thread, and handle Codex approvals or input requests without leaving Telegram.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ Prerequisites:
 
 - Node.js 22 or newer
 - A Telegram bot token
-- A private Telegram chat configured for threaded use
+- The Telegram user ID allowed to use the bot
 - A running `codex app-server`, or permission for kirbot to spawn it
 
 Install dependencies:
@@ -45,8 +45,7 @@ cp .env.example .env
 Required configuration:
 
 - `TELEGRAM_BOT_TOKEN`: Telegram bot token
-- `TELEGRAM_CHAT_ID`: target private Telegram chat ID
-- `TELEGRAM_ALLOWED_USER_IDS`: comma-separated Telegram user IDs allowed to use the bot
+- `TELEGRAM_USER_ID`: Telegram user ID allowed to use the bot; in a private chat, this is also the chat ID
 
 Codex-related configuration:
 

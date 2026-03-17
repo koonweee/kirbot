@@ -33,6 +33,7 @@ export type CallbackQueryEvent = {
   data: string;
   chatId: number;
   topicId: number | null;
+  userId: number;
 };
 
 export interface BridgeCodexApi {
@@ -122,11 +123,7 @@ export class TelegramCodexBridge {
   }
 
   async handleUserMessage(message: UserTurnMessage): Promise<void> {
-    if (message.chatId !== this.config.telegram.chatId) {
-      return;
-    }
-
-    if (!this.config.telegram.allowedUserIds.has(message.userId)) {
+    if (message.userId !== this.config.telegram.userId) {
       return;
     }
 
@@ -191,6 +188,10 @@ export class TelegramCodexBridge {
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
+    if (event.userId !== this.config.telegram.userId) {
+      return;
+    }
+
     if (await this.#requestCoordinator.handleCallbackQuery(event)) {
       return;
     }

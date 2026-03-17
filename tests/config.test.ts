@@ -14,13 +14,13 @@ describe("loadConfig", () => {
     process.env = {
       ...originalEnv,
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_CHAT_ID: "-1001234567890",
-      TELEGRAM_ALLOWED_USER_IDS: "123"
+      TELEGRAM_USER_ID: "123"
     };
 
     const { loadConfig } = await import("../src/config");
     const config = loadConfig();
 
+    expect(config.telegram.userId).toBe(123);
     expect(config.codex.baseInstructions).toBeUndefined();
     expect(config.codex.developerInstructions).toBe(readFileSync("KIRBOT.md", "utf8"));
   });
@@ -29,14 +29,14 @@ describe("loadConfig", () => {
     process.env = {
       ...originalEnv,
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_CHAT_ID: "-1001234567890",
-      TELEGRAM_ALLOWED_USER_IDS: "123",
+      TELEGRAM_USER_ID: "123",
       CODEX_BASE_INSTRUCTIONS_FILE: "/tmp/legacy-ignored.md"
     };
 
     const { loadConfig } = await import("../src/config");
     const config = loadConfig();
 
+    expect(config.telegram.userId).toBe(123);
     expect(config.codex.baseInstructions).toBeUndefined();
     expect(config.codex.developerInstructions).toBe(readFileSync("KIRBOT.md", "utf8"));
   });

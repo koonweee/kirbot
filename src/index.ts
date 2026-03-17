@@ -166,8 +166,9 @@ async function main(): Promise<void> {
     await bridge.handleCallbackQuery({
       callbackQueryId: context.callbackQuery.id,
       data: context.callbackQuery.data,
-      chatId: context.chat?.id ?? config.telegram.chatId,
-      topicId
+      chatId: context.chat?.id ?? config.telegram.userId,
+      topicId,
+      userId: context.callbackQuery.from.id
     });
   });
 
