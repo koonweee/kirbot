@@ -24,13 +24,16 @@ class ScriptedCodex implements BridgeCodexApi {
   tokenUsage: ServerNotification | null = null;
   createdThreadIds: string[] = [];
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
+  snapshotDelayMs = 0;
 
   #notificationListeners = new Set<(notification: ServerNotification) => void>();
   #requestListeners = new Set<(request: ServerRequest) => void>();
   #pendingTurnId: string | null = null;
   #pendingThreadId: string | null = null;
 
-  constructor(private readonly behavior: "complete" | "commandApproval" = "complete") {}
+  constructor(
+    private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" = "complete"
+  ) {}
 
   async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: null }> {
     const threadId = `thread-${this.createdThreadIds.length + 1}`;
@@ -74,6 +77,36 @@ class ScriptedCodex implements BridgeCodexApi {
           }
         } as ServerNotification);
       }, 0);
+    } else if (this.behavior === "lateCommandApprovalDuringCompletion") {
+      this.#pendingThreadId = threadId;
+      this.#pendingTurnId = turnId;
+      setTimeout(() => {
+        this.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: {
+              id: turnId,
+              status: "completed"
+            }
+          }
+        } as ServerNotification);
+      }, 0);
+      setTimeout(() => {
+        this.emitRequest({
+          method: "item/commandExecution/requestApproval",
+          id: "approval-1",
+          params: {
+            threadId,
+            turnId,
+            itemId: "item-1",
+            command: "npm test",
+            cwd: "/workspace",
+            reason: "Need approval",
+            availableDecisions: ["accept", "decline", "cancel"]
+          }
+        } as ServerRequest);
+      }, 10);
     } else {
       this.#pendingThreadId = threadId;
       this.#pendingTurnId = turnId;
@@ -106,6 +139,10 @@ class ScriptedCodex implements BridgeCodexApi {
   async archiveThread(): Promise<void> {}
 
   async readTurnSnapshot(): Promise<ResolvedTurnSnapshot> {
+    if (this.snapshotDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.snapshotDelayMs));
+    }
+
     return {
       text: this.finalText,
       assistantText: this.finalText,
@@ -292,6 +329,32 @@ describe("Telegram harness", () => {
     expect(transcript.topics[0]?.messages.some((message) => message.text === "Approved result")).toBe(true);
     expect(transcript.topics[0]?.messages.some((message) => message.text.includes('Resolved item/commandExecution/requestApproval with "accept".'))).toBe(true);
     expect(harness.getTelegramEvents().some((event) => event.type === "telegram.answerCallbackQuery")).toBe(true);
+  });
+
+  it("does not recreate the status draft when a late approval request arrives during turn finalization", async () => {
+    const codex = new ScriptedCodex("lateCommandApprovalDuringCompletion");
+    codex.finalText = "Final answer";
+    codex.snapshotDelayMs = 150;
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Repro stuck status");
+    await waitForCondition(() => {
+      const transcript = harness.getTranscript();
+      return (
+        transcript.topics[0]?.messages.some((message) => message.text === "Final answer") === true &&
+        transcript.topics[0]?.messages.some((message) => message.text.includes("Codex requested command approval.")) === true
+      );
+    });
+
+    const transcript = harness.getTranscript();
+    expect(transcript.drafts).toEqual([]);
+
+    const draftEvents = harness
+      .getTelegramEvents()
+      .filter((event) => event.type === "telegram.sendMessageDraft")
+      .map((event) => event.text);
+    expect(draftEvents).toEqual(["thinking · 0s", ""]);
   });
 
   it("shows codex-cli-aligned context left in the harness transcript footer", async () => {
