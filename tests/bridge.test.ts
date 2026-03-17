@@ -411,7 +411,6 @@ describe("TelegramCodexBridge", () => {
         path: join(tempDir, "bridge.sqlite")
       },
       codex: {
-        appServerUrl: "ws://127.0.0.1:8787",
         defaultCwd: "/workspace",
         model: undefined,
         modelProvider: undefined,

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
+import { createInterface, type Interface } from "node:readline";
 
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { ClientRequest } from "./generated/codex/ClientRequest";
 import type { InitializeParams } from "./generated/codex/InitializeParams";
@@ -115,71 +116,97 @@ export interface RpcTransport {
   onError(listener: (error: Error) => void): void;
 }
 
-export class WebSocketRpcTransport implements RpcTransport {
-  #websocket: WebSocket | null = null;
+export class StdioRpcTransport implements RpcTransport {
+  #lineReader: Interface | null = null;
+  #closed = false;
+  #connected = false;
   readonly #messageListeners = new Set<(message: unknown) => void>();
   readonly #closeListeners = new Set<() => void>();
   readonly #errorListeners = new Set<(error: Error) => void>();
-
-  constructor(private readonly url: string) {}
-
-  async connect(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const websocket = new WebSocket(this.url);
-      this.#websocket = websocket;
-
-      websocket.addEventListener("open", () => resolve(), { once: true });
-      websocket.addEventListener(
-        "error",
-        (event) => {
-          reject(new Error(`Failed to connect to Codex app server at ${this.url}: ${String(event.type)}`));
-        },
-        { once: true }
-      );
-
-      websocket.addEventListener("message", async (event) => {
-        const payload =
-          typeof event.data === "string"
-            ? event.data
-            : event.data instanceof Blob
-              ? await event.data.text()
-              : Buffer.from(event.data as ArrayBuffer).toString("utf8");
-        const message = JSON.parse(payload) as RpcEnvelope;
-        for (const listener of this.#messageListeners) {
-          listener(message);
-        }
-      });
-
-      websocket.addEventListener("close", () => {
-        for (const listener of this.#closeListeners) {
-          listener();
-        }
-      });
-
-      websocket.addEventListener("error", () => {
-        const error = new Error("Codex app server WebSocket emitted an error event");
-        for (const listener of this.#errorListeners) {
-          listener(error);
-        }
-      });
-    });
-  }
-
-  async close(): Promise<void> {
-    if (!this.#websocket) {
+  readonly #handleStdoutLine = (line: string) => {
+    if (line.trim().length === 0) {
       return;
     }
 
-    this.#websocket.close();
-    this.#websocket = null;
+    try {
+      const message = JSON.parse(line) as RpcEnvelope;
+      for (const listener of this.#messageListeners) {
+        listener(message);
+      }
+    } catch (error) {
+      this.#emitError(
+        new Error(
+          `Codex app server transport received invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+        )
+      );
+      this.#handleClose();
+    }
+  };
+  readonly #handleChildExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (this.#closed) {
+      return;
+    }
+
+    this.#emitError(
+      new Error(
+        `Codex app server exited unexpectedly${signal ? ` with signal ${signal}` : code !== null ? ` with code ${code}` : ""}`
+      )
+    );
+    this.#handleClose();
+  };
+  readonly #handleChildError = (error: Error) => {
+    if (this.#closed) {
+      return;
+    }
+
+    this.#emitError(error);
+    this.#handleClose();
+  };
+
+  constructor(private readonly child: ChildProcessWithoutNullStreams) {}
+
+  async connect(): Promise<void> {
+    if (this.#connected) {
+      return;
+    }
+
+    this.#connected = true;
+    this.#lineReader = createInterface({
+      input: this.child.stdout,
+      crlfDelay: Infinity
+    });
+    this.#lineReader.on("line", this.#handleStdoutLine);
+    this.#lineReader.on("close", () => this.#handleClose());
+
+    this.child.once("exit", this.#handleChildExit);
+    this.child.once("error", this.#handleChildError);
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) {
+      return;
+    }
+
+    this.child.stdin.end();
+    this.#handleClose();
   }
 
   async send(message: unknown): Promise<void> {
-    if (!this.#websocket || this.#websocket.readyState !== WebSocket.OPEN) {
+    if (!this.#connected || this.#closed || this.child.stdin.destroyed || !this.child.stdin.writable) {
       throw new Error("Codex app server transport is not connected");
     }
 
-    this.#websocket.send(JSON.stringify(message));
+    const payload = `${JSON.stringify(message)}\n`;
+    await new Promise<void>((resolve, reject) => {
+      this.child.stdin.write(payload, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
   }
 
   onMessage(listener: (message: unknown) => void): void {
@@ -192,6 +219,28 @@ export class WebSocketRpcTransport implements RpcTransport {
 
   onError(listener: (error: Error) => void): void {
     this.#errorListeners.add(listener);
+  }
+
+  #emitError(error: Error): void {
+    for (const listener of this.#errorListeners) {
+      listener(error);
+    }
+  }
+
+  #handleClose(): void {
+    if (this.#closed) {
+      return;
+    }
+
+    this.#closed = true;
+    this.#lineReader?.removeAllListeners();
+    this.#lineReader?.close();
+    this.child.removeListener("exit", this.#handleChildExit);
+    this.child.removeListener("error", this.#handleChildError);
+
+    for (const listener of this.#closeListeners) {
+      listener();
+    }
   }
 }
 
@@ -219,7 +268,12 @@ export class CodexRpcClient extends EventEmitter {
   }
 
   async initialize(params: InitializeParams): Promise<InitializeResponse> {
-    return this.call("initialize", params);
+    const response = await this.call("initialize", params);
+    await this.transport.send({
+      jsonrpc: "2.0",
+      method: "initialized"
+    });
+    return response;
   }
 
   async startThread(params: ThreadStartParams): Promise<ThreadStartResponse> {
@@ -329,6 +383,6 @@ export class CodexRpcClient extends EventEmitter {
 }
 
 export type SpawnedAppServer = {
-  process: ChildProcess;
+  process: ChildProcessWithoutNullStreams;
   stop: () => Promise<void>;
 };

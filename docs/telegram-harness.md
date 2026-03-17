@@ -12,8 +12,7 @@ The harness keeps these parts real:
 - bridge/session/turn orchestration
 - SQLite persistence
 - media-store lifecycle
-- Codex app server and RPC path by default, but on a harness-specific localhost
-  port
+- Codex app server and RPC path by default over a harness-owned stdio child
 
 The harness replaces only Telegram transport:
 
@@ -49,8 +48,8 @@ Default behavior:
   the normal app database
 - the harness creates an isolated empty Codex workspace under that temp
   directory instead of reusing the normal `CODEX_DEFAULT_CWD`
-- the harness allocates its own localhost Codex app-server URL instead of
-  inheriting the normal `CODEX_APP_SERVER_URL`
+- the harness uses its own stdio-managed Codex app-server child instead of
+  sharing any live kirbot transport state
 - Codex runs for real unless the caller injects a test double through the
   library API
 - startup command-menu sync is skipped because the harness is focused on
@@ -59,8 +58,7 @@ Default behavior:
 This makes `npm run harness:telegram` safe to run next to a live kirbot
 development or production process by default. The harness still exercises real
 Codex behavior, but it does not share the live bridge database, media temp
-directory, app-server port, or Codex workspace unless a caller explicitly opts
-into that.
+directory, or Codex workspace unless a caller explicitly opts into that.
 
 ## Library Usage
 
@@ -95,8 +93,6 @@ Primary API:
 
 Optional creation overrides:
 
-- `codexAppServerUrl`: use an explicit Codex app-server URL instead of the
-  harness-allocated localhost port
 - `workspaceMode: "empty" | "inherit"`: choose between the default isolated
   empty workspace and the configured `CODEX_DEFAULT_CWD`
 - `workspaceDir`: use an explicit workspace path instead of the default harness

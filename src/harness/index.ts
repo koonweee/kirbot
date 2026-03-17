@@ -1,5 +1,4 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,7 +16,6 @@ export type CreateTelegramHarnessOptions = {
   config?: AppConfig;
   stateDir?: string;
   codexApi?: BridgeCodexApi;
-  codexAppServerUrl?: string;
   workspaceMode?: "empty" | "inherit";
   workspaceDir?: string;
 };
@@ -70,7 +68,7 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       ...(options.codexApi ? { codexApi: options.codexApi } : {})
     });
     harnessLogger.info(
-      `Started harness with state dir ${stateDir} (codex=${config.codex.appServerUrl}, cwd=${config.codex.defaultCwd})`
+      `Started harness with state dir ${stateDir} (codex=stdio, cwd=${config.codex.defaultCwd})`
     );
     return runtime;
   };
@@ -185,16 +183,13 @@ async function buildHarnessConfig(
   stateDir: string,
   options: Pick<
     CreateTelegramHarnessOptions,
-    "codexApi" | "codexAppServerUrl" | "workspaceMode" | "workspaceDir"
+    "codexApi" | "workspaceMode" | "workspaceDir"
   >
 ): Promise<AppConfig> {
   const { workspaceDir, createWorkspaceDir } = resolveHarnessWorkspaceDir(baseConfig, stateDir, options);
   if (createWorkspaceDir) {
     mkdirSync(workspaceDir, { recursive: true });
   }
-  const appServerUrl =
-    options.codexAppServerUrl ??
-    (options.codexApi ? buildHarnessAppServerUrl(0) : buildHarnessAppServerUrl(await allocateLocalPort()));
 
   return {
     ...baseConfig,
@@ -207,7 +202,6 @@ async function buildHarnessConfig(
     },
     codex: {
       ...baseConfig.codex,
-      appServerUrl,
       defaultCwd: workspaceDir
     }
   };
@@ -236,46 +230,6 @@ function resolveHarnessWorkspaceDir(
     workspaceDir: join(stateDir, "workspace"),
     createWorkspaceDir: true
   };
-}
-
-function buildHarnessAppServerUrl(port: number): string {
-  return `ws://127.0.0.1:${port}`;
-}
-
-async function allocateLocalPort(): Promise<number> {
-  const server = createServer();
-  let listening = false;
-
-  try {
-    const port = await new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        listening = true;
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("Could not determine allocated localhost port for harness Codex app server"));
-          return;
-        }
-
-        resolve(address.port);
-      });
-    });
-
-    return port;
-  } finally {
-    if (listening) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
-      });
-    }
-  }
 }
 
 function buildUserMessage(

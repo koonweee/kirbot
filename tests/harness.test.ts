@@ -224,7 +224,7 @@ describe("Telegram harness", () => {
 
     const startupLog = getHarnessStartupLog(harness);
     expect(startupLog).toContain(`state dir ${tempDir}`);
-    expect(startupLog).not.toContain("codex=ws://127.0.0.1:8787");
+    expect(startupLog).toContain("codex=stdio");
     expect(startupLog).toContain(`cwd=${join(tempDir, "workspace")}`);
     expect(readdirSync(join(tempDir, "workspace"))).toEqual([]);
   });
@@ -244,14 +244,13 @@ describe("Telegram harness", () => {
     expect(getHarnessStartupLog(harness)).toContain("cwd=/workspace");
   });
 
-  it("respects explicit Codex app-server and workspace overrides", async () => {
+  it("respects explicit workspace overrides", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
     const workspaceDir = join(tempDir, "custom-workspace");
     const harness = await createTelegramHarness({
       config: createConfig(tempDir),
       stateDir: tempDir,
       codexApi: new ScriptedCodex("complete"),
-      codexAppServerUrl: "ws://127.0.0.1:9123",
       workspaceDir
     });
     harnesses.push(harness);
@@ -259,7 +258,7 @@ describe("Telegram harness", () => {
     await harness.start();
 
     const startupLog = getHarnessStartupLog(harness);
-    expect(startupLog).toContain("codex=ws://127.0.0.1:9123");
+    expect(startupLog).toContain("codex=stdio");
     expect(startupLog).toContain(`cwd=${workspaceDir}`);
     expect(readdirSync(workspaceDir)).toEqual([]);
   });
@@ -417,7 +416,6 @@ function createConfig(tempDir: string): AppConfig {
       path: join(tempDir, "bridge.sqlite")
     },
     codex: {
-      appServerUrl: "ws://127.0.0.1:8787",
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
