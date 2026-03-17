@@ -18,7 +18,7 @@ import type { Turn } from "./generated/codex/v2/Turn";
 import type { TurnSteerResponse } from "./generated/codex/v2/TurnSteerResponse";
 import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import { resolvePinnedCodexInvocation } from "./codex-cli";
-import { CodexRpcClient, type SpawnedAppServer } from "./rpc";
+import { CodexRpcClient, type AppServerEvent, type SpawnedAppServer } from "./rpc";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 import type { LoggerLike } from "./logging";
 
@@ -84,20 +84,6 @@ export class CodexGateway {
     private readonly client: CodexRpcClient,
     private readonly config: AppConfig["codex"]
   ) {
-    this.client.on("notification", (notification: ServerNotification) => {
-      if (notification.method === "thread/archived" || notification.method === "thread/closed") {
-        this.#loadedThreads.delete(notification.params.threadId);
-        this.#threadSettings.delete(notification.params.threadId);
-      }
-
-      if (notification.method === "model/rerouted") {
-        const existing = this.#threadSettings.get(notification.params.threadId);
-        this.#threadSettings.set(notification.params.threadId, {
-          model: notification.params.toModel,
-          reasoningEffort: existing?.reasoningEffort ?? null
-        });
-      }
-    });
     this.client.on("transportClosed", () => {
       this.#loadedThreads.clear();
       this.#threadSettings.clear();
@@ -271,12 +257,30 @@ export class CodexGateway {
     });
   }
 
-  onNotification(listener: (notification: ServerNotification) => void): void {
-    this.client.on("notification", listener);
+  async nextEvent(): Promise<AppServerEvent | null> {
+    const event = await this.client.nextEvent();
+    if (!event || event.kind !== "notification") {
+      return event;
+    }
+
+    this.handleNotificationSideEffects(event.notification);
+    return event;
   }
 
-  onServerRequest(listener: (request: ServerRequest) => void): void {
-    this.client.on("serverRequest", listener);
+  private handleNotificationSideEffects(notification: ServerNotification): void {
+    if (notification.method === "thread/archived" || notification.method === "thread/closed") {
+      this.#loadedThreads.delete(notification.params.threadId);
+      this.#threadSettings.delete(notification.params.threadId);
+      return;
+    }
+
+    if (notification.method === "model/rerouted") {
+      const existing = this.#threadSettings.get(notification.params.threadId);
+      this.#threadSettings.set(notification.params.threadId, {
+        model: notification.params.toModel,
+        reasoningEffort: existing?.reasoningEffort ?? null
+      });
+    }
   }
 }
 

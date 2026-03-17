@@ -91,6 +91,28 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
+export type AppServerEvent =
+  | {
+      kind: "notification";
+      notification: ServerNotification;
+    }
+  | {
+      kind: "serverRequest";
+      request: ServerRequest;
+    };
+
+const KNOWN_SERVER_REQUEST_METHODS = new Set<string>([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/tool/requestUserInput",
+  "mcpServer/elicitation/request",
+  "item/permissions/requestApproval",
+  "item/tool/call",
+  "account/chatgptAuthTokens/refresh",
+  "applyPatchApproval",
+  "execCommandApproval"
+]);
+
 export class JsonRpcMethodError extends Error {
   readonly code: number;
   readonly data?: unknown;
@@ -247,14 +269,25 @@ export class StdioRpcTransport implements RpcTransport {
 export class CodexRpcClient extends EventEmitter {
   #requestId = 1;
   readonly #pending = new Map<RequestId, PendingRequest>();
+  readonly #eventQueue: AppServerEvent[] = [];
+  readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
+  #closed = false;
+  #initializeState:
+    | {
+        requestId: RequestId;
+        bufferedEvents: AppServerEvent[];
+      }
+    | null = null;
 
   constructor(private readonly transport: RpcTransport) {
     super();
 
     this.transport.onMessage((message) => this.#handleMessage(message as RpcEnvelope));
     this.transport.onClose(() => {
+      this.#closed = true;
       this.emit("transportClosed");
       this.#rejectAllPending(new Error("Codex app server transport closed"));
+      this.#resolvePendingEventWaiters(null);
     });
     this.transport.onError((error) => this.emit("transportError", error));
   }
@@ -267,13 +300,46 @@ export class CodexRpcClient extends EventEmitter {
     await this.transport.close();
   }
 
-  async initialize(params: InitializeParams): Promise<InitializeResponse> {
-    const response = await this.call("initialize", params);
-    await this.transport.send({
-      jsonrpc: "2.0",
-      method: "initialized"
+  async nextEvent(): Promise<AppServerEvent | null> {
+    const event = this.#eventQueue.shift();
+    if (event) {
+      return event;
+    }
+
+    if (this.#closed) {
+      return null;
+    }
+
+    return new Promise<AppServerEvent | null>((resolve) => {
+      this.#eventWaiters.push(resolve);
     });
-    return response;
+  }
+
+  async initialize(params: InitializeParams): Promise<InitializeResponse> {
+    const requestId = this.#requestId++;
+    this.#initializeState = {
+      requestId,
+      bufferedEvents: []
+    };
+
+    try {
+      const response = await this.#callWithId("initialize", requestId, params);
+      await this.transport.send({
+        jsonrpc: "2.0",
+        method: "initialized"
+      });
+
+      const bufferedEvents = this.#initializeState?.bufferedEvents ?? [];
+      this.#initializeState = null;
+      for (const event of bufferedEvents) {
+        this.#enqueueEvent(event);
+      }
+
+      return response;
+    } catch (error) {
+      this.#initializeState = null;
+      throw error;
+    }
   }
 
   async startThread(params: ThreadStartParams): Promise<ThreadStartResponse> {
@@ -329,32 +395,22 @@ export class CodexRpcClient extends EventEmitter {
     params: SupportedMethodMap[TMethod]["params"]
   ): Promise<SupportedMethodMap[TMethod]["result"]> {
     const id = this.#requestId++;
-    const request = {
-      jsonrpc: "2.0",
-      method,
-      id,
-      params
-    } satisfies { jsonrpc: "2.0"; method: TMethod; id: number; params: SupportedMethodMap[TMethod]["params"] };
-
-    await this.transport.send(request);
-
-    return new Promise<SupportedMethodMap[TMethod]["result"]>((resolve, reject) => {
-      this.#pending.set(id, {
-        method,
-        resolve: (result) => resolve(result as SupportedMethodMap[TMethod]["result"]),
-        reject
-      });
-    });
+    return this.#callWithId(method, id, params);
   }
 
   #handleMessage(message: RpcEnvelope): void {
-    if ("method" in message && "id" in message) {
-      this.emit("serverRequest", message as ServerRequest);
-      return;
-    }
-
     if ("method" in message) {
-      this.emit("notification", message as ServerNotification);
+      const event = this.#classifyEvent(message);
+      if (!event) {
+        return;
+      }
+
+      if (this.#initializeState) {
+        this.#initializeState.bufferedEvents.push(event);
+        return;
+      }
+
+      this.#enqueueEvent(event);
       return;
     }
 
@@ -379,6 +435,86 @@ export class CodexRpcClient extends EventEmitter {
     }
 
     this.#pending.clear();
+  }
+
+  #callWithId<TMethod extends keyof SupportedMethodMap>(
+    method: TMethod,
+    id: RequestId,
+    params: SupportedMethodMap[TMethod]["params"]
+  ): Promise<SupportedMethodMap[TMethod]["result"]> {
+    const request = {
+      jsonrpc: "2.0",
+      method,
+      id,
+      params
+    } satisfies { jsonrpc: "2.0"; method: TMethod; id: RequestId; params: SupportedMethodMap[TMethod]["params"] };
+
+    return new Promise<SupportedMethodMap[TMethod]["result"]>((resolve, reject) => {
+      this.#pending.set(id, {
+        method,
+        resolve: (result) => resolve(result as SupportedMethodMap[TMethod]["result"]),
+        reject
+      });
+
+      void this.transport.send(request).catch((error) => {
+        const pending = this.#pending.get(id);
+        if (!pending) {
+          return;
+        }
+
+        this.#pending.delete(id);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  #classifyEvent(message: Extract<RpcEnvelope, { method: string }>): AppServerEvent | null {
+    if ("id" in message) {
+      const method = String(message.method);
+      if (!KNOWN_SERVER_REQUEST_METHODS.has(method)) {
+        if (this.#initializeState) {
+          void this.respondError(message.id as RequestId, {
+            code: -32601,
+            message: `unsupported remote app-server request \`${method}\``
+          }).catch((error) => {
+            this.emit("transportError", error instanceof Error ? error : new Error(String(error)));
+          });
+        }
+        return null;
+      }
+
+      return {
+        kind: "serverRequest",
+        request: message as ServerRequest
+      };
+    }
+
+    return {
+      kind: "notification",
+      notification: message as ServerNotification
+    };
+  }
+
+  #enqueueEvent(event: AppServerEvent): void {
+    if (event.kind === "notification") {
+      this.emit("notification", event.notification);
+    } else {
+      this.emit("serverRequest", event.request);
+    }
+
+    const waiter = this.#eventWaiters.shift();
+    if (waiter) {
+      waiter(event);
+      return;
+    }
+
+    this.#eventQueue.push(event);
+  }
+
+  #resolvePendingEventWaiters(event: AppServerEvent | null): void {
+    while (this.#eventWaiters.length > 0) {
+      this.#eventWaiters.shift()?.(event);
+    }
   }
 }
 
