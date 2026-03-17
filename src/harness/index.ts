@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import type { AppConfig } from "../config";
-import { loadConfig } from "../config";
 import { createSourceLogger, type AppLogEntry, type AppLogTarget } from "../logging";
 import { createKirbotRuntime, type KirbotRuntime } from "../runtime";
 import type { BridgeCodexApi } from "../bridge";
@@ -43,7 +42,7 @@ export type TelegramHarness = {
 };
 
 export async function createTelegramHarness(options: CreateTelegramHarnessOptions = {}): Promise<TelegramHarness> {
-  const baseConfig = options.config ?? loadConfig();
+  const baseConfig = options.config ?? (await import("../config")).loadConfig();
   const stateDir = options.stateDir ?? mkdtempSync(join(tmpdir(), "kirbot-telegram-harness-"));
   const config = buildHarnessConfig(baseConfig, stateDir);
   const logTarget = new BufferingLogTarget();
