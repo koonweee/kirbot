@@ -9,6 +9,7 @@ Before making cross-cutting changes, use the repo docs to recover the intended
 mental model:
 
 - [README.md](/home/jtkw/kirbot/README.md)
+- [GLOSSARY.md](/home/jtkw/kirbot/GLOSSARY.md)
 - [docs/architecture.md](/home/jtkw/kirbot/docs/architecture.md)
 - [docs/user-flows.md](/home/jtkw/kirbot/docs/user-flows.md)
 - [docs/engineering-guide.md](/home/jtkw/kirbot/docs/engineering-guide.md)
