@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { chunkFormattedText, prependText } from "../src/telegram-format/chunk";
 import { buildFormattedText, TelegramEntityBuilder } from "../src/telegram-format/entity-builder";
-import { boldFormattedText, renderLinkedText } from "../src/telegram-format/formatters";
+import { boldFormattedText, renderLinkedText, renderSpoilerText } from "../src/telegram-format/formatters";
 import { renderMarkdownToFormattedText } from "../src/telegram-format/markdown";
 import { renderPreformattedText, renderQuotedText } from "../src/telegram-format/preformatted";
 
@@ -83,9 +83,47 @@ describe("telegram-format", () => {
     });
   });
 
-  it("keeps unsupported spoiler syntax literal", () => {
+  it("renders markdown spoilers as spoiler entities", () => {
     expect(renderMarkdownToFormattedText("Use ||spoiler|| later")).toEqual({
-      text: "Use ||spoiler|| later"
+      text: "Use spoiler later",
+      entities: [
+        {
+          type: "spoiler",
+          offset: 4,
+          length: 7
+        }
+      ]
+    });
+  });
+
+  it("preserves nested entities inside spoilers", () => {
+    expect(renderMarkdownToFormattedText("**||bold||**")).toEqual({
+      text: "bold",
+      entities: [
+        {
+          type: "bold",
+          offset: 0,
+          length: 4
+        },
+        {
+          type: "spoiler",
+          offset: 0,
+          length: 4
+        }
+      ]
+    });
+  });
+
+  it("keeps spoiler markers literal inside inline code", () => {
+    expect(renderMarkdownToFormattedText("`||code||`")).toEqual({
+      text: "||code||",
+      entities: [
+        {
+          type: "code",
+          offset: 0,
+          length: 8
+        }
+      ]
     });
   });
 
@@ -180,6 +218,19 @@ describe("telegram-format", () => {
           offset: 0,
           length: 4,
           url: "https://example.com"
+        }
+      ]
+    });
+  });
+
+  it("renders manual spoilers through the shared formatter path", () => {
+    expect(renderSpoilerText("hidden")).toEqual({
+      text: "hidden",
+      entities: [
+        {
+          type: "spoiler",
+          offset: 0,
+          length: 6
         }
       ]
     });

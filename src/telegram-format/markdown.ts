@@ -51,7 +51,7 @@ export function renderMarkdownToFormattedText(markdown: string): FormattedText {
   });
   const builder = new TelegramEntityBuilder();
   renderBlockSequence(builder, tree.children, "\n\n");
-  return builder.build();
+  return applySpoilerEntities(builder.build());
 }
 
 function renderBlockSequence(
@@ -251,4 +251,83 @@ function isPhrasingContent(node: RootContent | BlockContent | PhrasingContent): 
     node.type === "imageReference" ||
     node.type === "footnoteReference"
   );
+}
+
+function applySpoilerEntities(formatted: FormattedText): FormattedText {
+  const delimiterPositions = findSpoilerDelimiterPositions(formatted);
+  if (delimiterPositions.length < 2) {
+    return formatted;
+  }
+
+  const pairedDelimiters = delimiterPositions.slice(0, delimiterPositions.length - (delimiterPositions.length % 2));
+  const removed = new Uint8Array(formatted.text.length);
+  const spoilerRanges: Array<{ start: number; end: number }> = [];
+
+  for (let index = 0; index < pairedDelimiters.length; index += 2) {
+    const start = pairedDelimiters[index]!;
+    const end = pairedDelimiters[index + 1]!;
+    removed[start] = 1;
+    removed[start + 1] = 1;
+    removed[end] = 1;
+    removed[end + 1] = 1;
+    spoilerRanges.push({ start: start + 2, end });
+  }
+
+  const removedPrefixCounts = new Uint32Array(formatted.text.length + 1);
+  for (let index = 0; index < formatted.text.length; index += 1) {
+    removedPrefixCounts[index + 1] = removedPrefixCounts[index]! + removed[index]!;
+  }
+
+  const builder = new TelegramEntityBuilder();
+  builder.appendText(
+    formatted.text
+      .split("")
+      .filter((_, index) => removed[index] === 0)
+      .join("")
+  );
+
+  for (const entity of formatted.entities ?? []) {
+    const offset = entity.offset - removedPrefixCounts[entity.offset]!;
+    const length =
+      entity.length -
+      (removedPrefixCounts[entity.offset + entity.length]! - removedPrefixCounts[entity.offset]!);
+
+    if (length > 0) {
+      builder.annotate({ offset, length }, { ...entity, offset, length });
+    }
+  }
+
+  for (const range of spoilerRanges) {
+    const offset = range.start - removedPrefixCounts[range.start]!;
+    const end = range.end - removedPrefixCounts[range.end]!;
+    if (end > offset) {
+      builder.annotate({ offset, length: end - offset }, { type: "spoiler" });
+    }
+  }
+
+  return builder.build();
+}
+
+function findSpoilerDelimiterPositions(formatted: FormattedText): number[] {
+  const protectedRanges = (formatted.entities ?? []).filter((entity) => entity.type === "code" || entity.type === "pre");
+  const positions: number[] = [];
+
+  for (let index = 0; index < formatted.text.length - 1; index += 1) {
+    if (formatted.text[index] !== "|" || formatted.text[index + 1] !== "|") {
+      continue;
+    }
+
+    if (isWithinProtectedRange(index, protectedRanges) || isWithinProtectedRange(index + 1, protectedRanges)) {
+      continue;
+    }
+
+    positions.push(index);
+    index += 1;
+  }
+
+  return positions;
+}
+
+function isWithinProtectedRange(index: number, ranges: Array<{ offset: number; length: number }>): boolean {
+  return ranges.some((range) => index >= range.offset && index < range.offset + range.length);
 }

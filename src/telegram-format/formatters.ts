@@ -8,6 +8,7 @@ export function annotateFormattedText(
   annotation:
     | { type: "bold" }
     | { type: "italic" }
+    | { type: "spoiler" }
     | { type: "strikethrough" }
     | { type: "code" }
     | { type: "text_link"; url: string }
@@ -30,6 +31,10 @@ export function italicFormattedText(formatted: FormattedText): FormattedText {
 
 export function strikethroughFormattedText(formatted: FormattedText): FormattedText {
   return annotateFormattedText(formatted, { type: "strikethrough" });
+}
+
+export function spoilerFormattedText(formatted: FormattedText): FormattedText {
+  return annotateFormattedText(formatted, { type: "spoiler" });
 }
 
 export function codeFormattedText(formatted: FormattedText): FormattedText {
@@ -62,6 +67,10 @@ export function renderItalicText(text: string): FormattedText {
 
 export function renderStrikethroughText(text: string): FormattedText {
   return strikethroughFormattedText({ text });
+}
+
+export function renderSpoilerText(text: string): FormattedText {
+  return spoilerFormattedText({ text });
 }
 
 export function renderCodeText(text: string): FormattedText {
