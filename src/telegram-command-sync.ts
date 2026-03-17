@@ -66,3 +66,11 @@ export class TelegramCommandSync {
     await this.telegram.setMyCommands(commands, { scope });
   }
 }
+
+export async function initializeTelegramCommandSyncFailOpen(commandSync: Pick<TelegramCommandSync, "initialize">): Promise<void> {
+  try {
+    await commandSync.initialize();
+  } catch (error) {
+    console.warn("Telegram command sync failed during startup; continuing without updating command menus.", error);
+  }
+}

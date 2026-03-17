@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TelegramCommandSync, type TelegramCommandApi } from "../src/telegram-command-sync";
+import {
+  TelegramCommandSync,
+  initializeTelegramCommandSyncFailOpen,
+  type TelegramCommandApi
+} from "../src/telegram-command-sync";
 
 class FakeTelegramCommandApi implements TelegramCommandApi {
   setMyCommandsCalls: Array<{
@@ -141,5 +145,26 @@ describe("TelegramCommandSync", () => {
         }
       }
     ]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("logs and continues when startup command sync fails", async () => {
+    const warning = new Error("setMyCommands timed out");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const commandSync = {
+      initialize: async () => {
+        throw warning;
+      }
+    };
+
+    await expect(initializeTelegramCommandSyncFailOpen(commandSync)).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Telegram command sync failed during startup; continuing without updating command menus.",
+      warning
+    );
   });
 });

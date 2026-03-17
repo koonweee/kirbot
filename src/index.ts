@@ -7,7 +7,11 @@ import { loadConfig } from "./config";
 import { BridgeDatabase } from "./db";
 import { TemporaryImageStore } from "./media-store";
 import { CodexRpcClient, WebSocketRpcTransport } from "./rpc";
-import { TelegramCommandSync, type TelegramCommandApi } from "./telegram-command-sync";
+import {
+  TelegramCommandSync,
+  initializeTelegramCommandSyncFailOpen,
+  type TelegramCommandApi
+} from "./telegram-command-sync";
 import type { TelegramApi } from "./telegram-messenger";
 
 async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30): Promise<void> {
@@ -91,7 +95,7 @@ async function main(): Promise<void> {
     console.error("Telegram bot update handling failed", error.error);
   });
 
-  await commandSync.initialize();
+  await initializeTelegramCommandSyncFailOpen(commandSync);
 
   bot.on("message:text", async (context) => {
     if (!context.message.from) {
