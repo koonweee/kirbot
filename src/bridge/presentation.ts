@@ -2,7 +2,7 @@ import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import { chunkFormattedText, prependText } from "../telegram-format/chunk";
 import { renderMarkdownToFormattedText } from "../telegram-format/markdown";
-import { renderPreformattedText } from "../telegram-format/preformatted";
+import { renderPreformattedText, renderQuotedText } from "../telegram-format/preformatted";
 import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
 
@@ -165,11 +165,11 @@ export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
 }
 
 export function renderTelegramCommentaryDraft(text: string): TelegramRenderedMessage {
-  return renderPreformattedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT), "kirbot");
+  return renderQuotedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT));
 }
 
 export function buildRenderedCommentaryMessage(text: string): TelegramRenderedMessage {
-  return renderPreformattedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_MESSAGE_CHAR_LIMIT), "kirbot");
+  return renderQuotedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_MESSAGE_CHAR_LIMIT));
 }
 
 export function buildRenderedCompletionFooter(details: CompletionFooterDetails): TelegramRenderedMessage {

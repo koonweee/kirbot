@@ -47,6 +47,16 @@ function preformattedEntities(text: string, language?: string): MessageEntity[] 
   ];
 }
 
+function quoteEntities(text: string, type: "blockquote" | "expandable_blockquote" = "expandable_blockquote"): MessageEntity[] {
+  return [
+    {
+      type,
+      offset: 0,
+      length: text.length
+    }
+  ];
+}
+
 function combinedDraft(...parts: string[]): string {
   return parts.join("\n\n");
 }
@@ -1090,7 +1100,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.at(-1)?.text).toBe("Inspecting the files");
-    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(preformattedEntities("Inspecting the files", "kirbot"));
+    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(quoteEntities("Inspecting the files"));
     expect(telegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
     expect(telegram.appliedDrafts.length).toBeGreaterThan(initialDraftCount);
     expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
@@ -1142,7 +1152,7 @@ describe("TelegramCodexBridge", () => {
       expect.objectContaining({
         text: "Inspecting the files",
         options: expect.objectContaining({
-          entities: preformattedEntities("Inspecting the files", "kirbot")
+          entities: quoteEntities("Inspecting the files")
         })
       })
     );
@@ -1218,7 +1228,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts.at(-1)?.text).toContain("[preview truncated]");
   });
 
-  it("windows oversized commentary drafts inside a code block", async () => {
+  it("windows oversized commentary drafts inside an expandable quote block", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1255,13 +1265,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.length).toBeGreaterThan(0);
-    expect(telegram.drafts.some((draft) => draft.options?.entities?.[0]?.type === "pre")).toBe(true);
-    expect(
-      telegram.drafts.some((draft) => {
-        const entity = draft.options?.entities?.[0];
-        return entity?.type === "pre" && "language" in entity && entity.language === "kirbot";
-      })
-    ).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.options?.entities?.[0]?.type === "expandable_blockquote")).toBe(true);
   });
 
   it("persists one commentary message per commentary item on item completion", async () => {
@@ -1357,9 +1361,9 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.sentMessages.at(-2)?.text).toBe("Inspecting files");
-    expect(telegram.sentMessages.at(-2)?.options?.entities).toEqual(preformattedEntities("Inspecting files", "kirbot"));
+    expect(telegram.sentMessages.at(-2)?.options?.entities).toEqual(quoteEntities("Inspecting files"));
     expect(telegram.sentMessages.at(-1)?.text).toBe("Planning edits");
-    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(preformattedEntities("Planning edits", "kirbot"));
+    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(quoteEntities("Planning edits"));
     expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
   });
 
@@ -1536,7 +1540,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.filter((message) => message.text === "Inspecting files")).toHaveLength(1);
     expect(
       telegram.sentMessages.find((message) => message.text === "Inspecting files")?.options?.entities
-    ).toEqual(preformattedEntities("Inspecting files", "kirbot"));
+    ).toEqual(quoteEntities("Inspecting files"));
     expect(telegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")).toHaveLength(1);
   });
 
