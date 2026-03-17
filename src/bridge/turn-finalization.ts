@@ -191,11 +191,13 @@ export class TurnFinalizer {
   }
 
   private buildCompletionFooterDetails(context: TurnContext, snapshot: ResolvedTurnSnapshot): CompletionFooterDetails {
+    const contextLeftPercent = computeContextLeftPercent(context.tokenUsage);
     return {
       model: context.model,
+      reasoningEffort: context.reasoningEffort,
       durationMs: Math.max(0, Date.now() - context.startedAtMs),
       changedFiles: snapshot.changedFiles,
-      contextLeftPercent: computeContextLeftPercent(context.tokenUsage),
+      contextLeftPercent,
       cwd: snapshot.cwd,
       branch: snapshot.branch
     };

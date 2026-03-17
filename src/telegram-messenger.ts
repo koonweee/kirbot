@@ -18,9 +18,22 @@ export type TelegramDraftOptions = {
 
 export type TelegramChatAction = "typing" | "upload_document";
 
+export type TelegramChat = {
+  username?: string;
+};
+
 export interface TelegramApi {
   createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }>;
+  getChat(chatId: number): Promise<TelegramChat>;
   sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }>;
+  copyMessage(
+    chatId: number,
+    fromChatId: number,
+    messageId: number,
+    options?: {
+      message_thread_id?: number;
+    }
+  ): Promise<{ message_id: number }>;
   sendMessageDraft(chatId: number, draftId: number, text: string, options?: TelegramDraftOptions): Promise<true>;
   sendChatAction(
     chatId: number,

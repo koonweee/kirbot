@@ -1,4 +1,5 @@
 import type { UserTurnMessage } from "../domain";
+import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
 import {
@@ -31,7 +32,13 @@ export class TurnLifecycleCoordinator {
     this.#finalizer = new TurnFinalizer(deps);
   }
 
-  activateTurn(message: UserTurnMessage, threadId: string, turnId: string, model: string | null): TurnContext {
+  activateTurn(
+    message: UserTurnMessage,
+    threadId: string,
+    turnId: string,
+    model: string | null,
+    reasoningEffort: ReasoningEffort | null = null
+  ): TurnContext {
     if (message.topicId === null) {
       throw new Error("Cannot create an active turn without a Telegram topic id");
     }
@@ -63,6 +70,7 @@ export class TurnLifecycleCoordinator {
       planStreams: new Map(),
       publishedPlanMessages: 0,
       model,
+      reasoningEffort,
       tokenUsage: null
     };
 

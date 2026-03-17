@@ -1,5 +1,6 @@
 import type { TurnStatusDraft } from "./presentation";
 import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
+import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import type { TelegramStatusDraftHandle, TelegramStreamMessageHandle } from "../telegram-messenger";
 
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
@@ -33,6 +34,7 @@ export type TurnContext = {
   planStreams: Map<string, PlanStreamState>;
   publishedPlanMessages: number;
   model: string | null;
+  reasoningEffort: ReasoningEffort | null;
   tokenUsage: ThreadTokenUsage | null;
 };
 
