@@ -27,6 +27,15 @@ export type TurnStatusDraft = {
   details: string | null;
 };
 
+export type CompletionFooterDetails = {
+  model: string | null;
+  durationMs: number;
+  changedFiles: number;
+  contextLeftPercent: number | null;
+  cwd: string | null;
+  branch: string | null;
+};
+
 export function deriveTopicTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
 }
@@ -138,8 +147,11 @@ export function buildQueuePreviewKeyboard(
   };
 }
 
-export function renderTelegramStatusDraft(statusDraft: TurnStatusDraft | null): TelegramRenderedMessage | null {
-  return statusDraft ? { text: buildStatusText(statusDraft) } : null;
+export function renderTelegramStatusDraft(
+  statusDraft: TurnStatusDraft | null,
+  elapsedMs: number | null = null
+): TelegramRenderedMessage | null {
+  return statusDraft ? { text: buildStatusText(statusDraft, elapsedMs) } : null;
 }
 
 export function renderTelegramAssistantDraft(text: string): TelegramRenderedMessage {
@@ -152,6 +164,10 @@ export function renderTelegramCommentaryDraft(text: string): TelegramRenderedMes
 
 export function buildRenderedCommentaryMessage(text: string): TelegramRenderedMessage {
   return renderPreformattedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_MESSAGE_CHAR_LIMIT), "kirbot");
+}
+
+export function buildRenderedCompletionFooter(details: CompletionFooterDetails): TelegramRenderedMessage {
+  return buildRenderedCommentaryMessage(buildCompletionFooterText(details));
 }
 
 export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
@@ -205,10 +221,68 @@ function buildTruncatedPreview(text: string, limit: number, prefix: string, suff
   return `${prefix}${text.slice(-budget)}${suffix}`;
 }
 
-function buildStatusText(statusDraft: TurnStatusDraft): string {
+function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null): string {
+  const parts: string[] = [];
+
   if (!statusDraft.details) {
-    return statusDraft.state;
+    parts.push(statusDraft.state);
+  } else {
+    parts.push(`${statusDraft.state}: ${statusDraft.details.replace(/\s+/g, " ").trim()}`);
   }
 
-  return `${statusDraft.state}: ${statusDraft.details.replace(/\s+/g, " ").trim()}`;
+  if (elapsedMs !== null) {
+    parts.push(formatElapsedDuration(elapsedMs));
+  }
+
+  return parts.join(" · ");
+}
+
+function buildCompletionFooterText(details: CompletionFooterDetails): string {
+  const fileLabel = details.changedFiles === 1 ? "file" : "files";
+  const contextLeft =
+    typeof details.contextLeftPercent === "number" ? `${details.contextLeftPercent}% left` : "?% left";
+  const cwd = shortenHomePath(details.cwd);
+  const branch = details.branch?.trim() ? details.branch : "no-branch";
+  const model = details.model?.trim() ? details.model : "unknown-model";
+
+  return [
+    model,
+    formatElapsedDuration(details.durationMs, true),
+    `${details.changedFiles} ${fileLabel}`,
+    contextLeft,
+    cwd,
+    branch
+  ].join(" • ");
+}
+
+function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = false): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+
+  if (allowLessThanOneSecond && totalSeconds === 0) {
+    return "<1s";
+  }
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function shortenHomePath(value: string | null): string {
+  if (!value) {
+    return "(unknown cwd)";
+  }
+
+  if (value === process.env.HOME) {
+    return "~";
+  }
+
+  if (process.env.HOME && value.startsWith(`${process.env.HOME}/`)) {
+    return `~${value.slice(process.env.HOME.length)}`;
+  }
+
+  return value;
 }

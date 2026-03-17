@@ -1,7 +1,9 @@
 import type { UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
-  buildRenderedCommentaryMessage
+  buildRenderedCommentaryMessage,
+  buildRenderedCompletionFooter,
+  type CompletionFooterDetails
 } from "./presentation";
 import type { TelegramApi, TelegramMessenger, TelegramRenderedMessage } from "../telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../turn-runtime";
@@ -12,6 +14,13 @@ import {
   transitionTurnPhase
 } from "./turn-context";
 
+export type ResolvedTurnSnapshot = {
+  text: string;
+  changedFiles: number;
+  cwd: string | null;
+  branch: string | null;
+};
+
 export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
   messenger: TelegramMessenger;
@@ -19,7 +28,7 @@ export type TurnLifecycleDependencies = {
   releaseTurnFiles(turnId: string): Promise<void>;
   appendTurnStream(turnId: string, streamText: string): Promise<void>;
   completePersistedTurn(turnId: string, messageId: number | null, status: TerminalTurnStatus): Promise<void>;
-  resolveTurnText(threadId: string, turnId: string): Promise<string>;
+  resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
   maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void>;
   submitQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): Promise<void>;
@@ -32,6 +41,7 @@ export type FinalizationPolicy = {
   scheduleNextQueuedFollowUp: boolean;
   submitPendingSteers: boolean;
   movePendingSteersToQueued: boolean;
+  publishFooter: boolean;
   buildFinalText(resolvedText: string): string;
 };
 
@@ -56,12 +66,16 @@ export class TurnFinalizer {
     }
 
     await this.beginFinalization(context);
-    const resolvedText = await this.deps.resolveTurnText(policy.threadId, context.turnId);
-    const finalText = policy.buildFinalText(resolvedText);
+    const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
+    const finalText = policy.buildFinalText(snapshot.text);
     const messageId =
       finalText.trim().length > 0 || policy.publishWhenEmpty
         ? await this.publishFinalTurnText(context, finalText)
         : null;
+
+    if (policy.publishFooter) {
+      await this.publishCompletionFooter(context, snapshot);
+    }
 
     await this.deps.appendTurnStream(context.turnId, finalText);
     await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus);
@@ -108,6 +122,10 @@ export class TurnFinalizer {
     }
 
     transitionTurnPhase(context, "finalizing");
+    if (context.statusElapsedTimer) {
+      clearInterval(context.statusElapsedTimer);
+      context.statusElapsedTimer = null;
+    }
     await context.statusHandle.clear();
 
     for (const [itemId, commentary] of context.commentaryStreams) {
@@ -130,6 +148,27 @@ export class TurnFinalizer {
     }
 
     return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
+  }
+
+  private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {
+    const rendered = buildRenderedCompletionFooter(this.buildCompletionFooterDetails(context, snapshot));
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text: rendered.text,
+      ...(rendered.entities ? { entities: rendered.entities } : {})
+    });
+  }
+
+  private buildCompletionFooterDetails(context: TurnContext, snapshot: ResolvedTurnSnapshot): CompletionFooterDetails {
+    return {
+      model: context.model,
+      durationMs: Math.max(0, Date.now() - context.startedAtMs),
+      changedFiles: snapshot.changedFiles,
+      contextLeftPercent: computeContextLeftPercent(context.tokenUsage),
+      cwd: snapshot.cwd,
+      branch: snapshot.branch
+    };
   }
 
   private async sendRenderedMessages(
@@ -157,6 +196,15 @@ export class TurnFinalizer {
 
     return firstMessageId;
   }
+}
+
+function computeContextLeftPercent(tokenUsage: TurnContext["tokenUsage"]): number | null {
+  if (!tokenUsage?.modelContextWindow || tokenUsage.modelContextWindow <= 0) {
+    return null;
+  }
+
+  const remainingRatio = 1 - tokenUsage.total.totalTokens / tokenUsage.modelContextWindow;
+  return Math.max(0, Math.round(remainingRatio * 100));
 }
 
 function formatError(error: unknown): string {

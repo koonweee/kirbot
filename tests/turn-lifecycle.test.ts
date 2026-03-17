@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
 import type { UserTurnMessage } from "../src/domain";
@@ -87,7 +87,11 @@ class FakeTelegram implements TelegramApi {
   }
 }
 
-function createHarness(resolveTurnText = ""): {
+function createHarness(
+  resolvedSnapshot:
+    | string
+    | { text: string; changedFiles?: number; cwd?: string | null; branch?: string | null } = { text: "" }
+): {
   coordinator: TurnLifecycleCoordinator;
   telegram: FakeTelegram;
   appendCalls: string[];
@@ -106,6 +110,15 @@ function createHarness(resolveTurnText = ""): {
   const queueSyncs: QueueStateSnapshot[] = [];
   const nextQueuedCalls: Array<{ chatId: number; topicId: number }> = [];
   const queuedFollowUps: Array<{ chatId: number; topicId: number; message: UserTurnMessage }> = [];
+  const snapshot =
+    typeof resolvedSnapshot === "string"
+      ? { text: resolvedSnapshot, changedFiles: 0, cwd: "/workspace", branch: "main" }
+      : {
+          text: resolvedSnapshot.text,
+          changedFiles: resolvedSnapshot.changedFiles ?? 0,
+          cwd: resolvedSnapshot.cwd ?? "/workspace",
+          branch: resolvedSnapshot.branch ?? "main"
+        };
 
   const coordinator = new TurnLifecycleCoordinator({
     runtime,
@@ -120,7 +133,12 @@ function createHarness(resolveTurnText = ""): {
     completePersistedTurn: async (turnId, messageId, status) => {
       completionCalls.push({ turnId, messageId, status });
     },
-    resolveTurnText: async () => resolveTurnText,
+    resolveTurnSnapshot: async () => ({
+      text: snapshot.text,
+      changedFiles: snapshot.changedFiles,
+      cwd: snapshot.cwd,
+      branch: snapshot.branch
+    }),
     syncQueuePreview: async (queueState) => {
       queueSyncs.push(queueState);
     },
@@ -147,7 +165,7 @@ function createHarness(resolveTurnText = ""): {
 describe("TurnLifecycleCoordinator", () => {
   it("finalizes completed turns through one shared terminal path", async () => {
     const harness = createHarness("Final answer");
-    const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1");
+    const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
@@ -167,7 +185,7 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("ignores duplicate terminal notifications once a turn has been finalized", async () => {
     const harness = createHarness("Final answer");
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
     await harness.coordinator.failTurn("thread-1", "turn-1", "late error");
@@ -183,7 +201,7 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("clears leftover pending steers on completion instead of requeueing them", async () => {
     const harness = createHarness("Final answer");
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
     harness.coordinator.queuePendingSteer("turn-1", message("Follow up", 2));
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
@@ -198,7 +216,7 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("submits merged pending steers when an interrupted turn is finalized with send-now intent", async () => {
     const harness = createHarness("");
-    const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1");
+    const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
     harness.coordinator.queuePendingSteer("turn-1", message("First steer", 2));
     harness.coordinator.queuePendingSteer("turn-1", message("Second steer", 3));
@@ -221,7 +239,7 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("maps committed user items back to pending steers and syncs the queue preview", async () => {
     const harness = createHarness();
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
     harness.coordinator.queuePendingSteer("turn-1", message("Follow up", 2));
 
     await harness.coordinator.handleItemCompleted("turn-1", {
@@ -242,5 +260,74 @@ describe("TurnLifecycleCoordinator", () => {
       pendingSteers: [],
       queuedFollowUps: []
     });
+  });
+
+  it("keeps elapsed time current every 3 seconds without resetting the timer on status changes", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const harness = createHarness();
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+      await harness.coordinator.publishCurrentStatus("turn-1", true);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await harness.coordinator.handleItemStarted("turn-1", {
+        type: "commandExecution",
+        id: "item-1",
+        command: "npm test",
+        cwd: "/workspace",
+        processId: null,
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null
+      });
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 2s");
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 3s");
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 2,
+      cwd: "/home/tester/kirbot",
+      branch: "feature/footer"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    harness.coordinator.handleThreadTokenUsageUpdated("turn-1", {
+      total: {
+        totalTokens: 250,
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 150,
+        reasoningOutputTokens: 0
+      },
+      last: {
+        totalTokens: 250,
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 150,
+        reasoningOutputTokens: 0
+      },
+      modelContextWindow: 1000
+    });
+    harness.coordinator.handleModelRerouted("turn-1", "gpt-5");
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5 • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
+    );
   });
 });

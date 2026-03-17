@@ -17,6 +17,7 @@ import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileC
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import { JsonRpcMethodError } from "../src/rpc";
 import type { TelegramApi } from "../src/telegram-messenger";
+import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 
 const EMPTY_DRAFT_TEXT = "";
 
@@ -49,8 +50,17 @@ function combinedDraft(...parts: string[]): string {
   return parts.join("\n\n");
 }
 
+function getFinalAnswerMessage(telegram: FakeTelegram) {
+  const last = telegram.sentMessages.at(-1);
+  if (last?.text.includes(" • ") && last.text.includes("% left")) {
+    return telegram.sentMessages.at(-2);
+  }
+
+  return last;
+}
+
 async function waitForAsyncNotifications(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
 class FakeCodex implements BridgeCodexApi {
@@ -64,6 +74,8 @@ class FakeCodex implements BridgeCodexApi {
   userInputs: Array<{ id: string | number; answers: ToolRequestUserInputResponse["answers"] }> = [];
   unsupported: Array<{ id: string | number; message: string }> = [];
   readTurnMessagesResult = "";
+  readTurnSnapshotResult: Partial<ResolvedTurnSnapshot> = {};
+  model = "gpt-5-codex";
   nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
@@ -71,13 +83,19 @@ class FakeCodex implements BridgeCodexApi {
   #notificationListeners = new Set<(notification: ServerNotification) => void>();
   #requestListeners = new Set<(request: ServerRequest) => void>();
 
-  async createThread(title: string): Promise<string> {
+  async createThread(title: string): Promise<{ threadId: string; model: string }> {
     this.createdThreads.push(title);
-    return "thread-1";
+    return {
+      threadId: "thread-1",
+      model: this.model
+    };
   }
 
-  async ensureThreadLoaded(threadId: string): Promise<void> {
+  async ensureThreadLoaded(threadId: string): Promise<{ model: string }> {
     this.ensuredThreads.push(threadId);
+    return {
+      model: this.model
+    };
   }
 
   async sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }> {
@@ -138,8 +156,14 @@ class FakeCodex implements BridgeCodexApi {
 
   async archiveThread(): Promise<void> {}
 
-  async readTurnMessages(): Promise<string> {
-    return this.readTurnMessagesResult;
+  async readTurnSnapshot(): Promise<ResolvedTurnSnapshot> {
+    return {
+      text: this.readTurnMessagesResult,
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main",
+      ...this.readTurnSnapshotResult
+    };
   }
 
   async respondToCommandApproval(
@@ -460,7 +484,7 @@ describe("TelegramCodexBridge", () => {
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(telegram.drafts.at(-1)?.text).toBe("thinking");
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
@@ -614,7 +638,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(telegram.drafts.at(-1)?.text).toBe("thinking");
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -642,7 +666,8 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
     expect(telegram.deletions).toEqual([]);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Working on it");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex • <1s • 0 files • ?% left • /workspace • main");
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
 
     const turn = await database.getTurnById("turn-1");
@@ -696,8 +721,8 @@ describe("TelegramCodexBridge", () => {
     ).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Use bold and code.\n\nconst answer = 42;");
-    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual([
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Use bold and code.\n\nconst answer = 42;");
+    expect(getFinalAnswerMessage(telegram)?.options?.entities).toEqual([
       { type: "bold", offset: 4, length: 4 },
       { type: "code", offset: 13, length: 4 },
       { type: "pre", offset: 20, length: 18, language: "ts" }
@@ -754,8 +779,8 @@ describe("TelegramCodexBridge", () => {
         }),
         expect.any(Error)
       );
-      expect(telegram.sentMessages.at(-1)?.text).toBe("Use bold and code.");
-      expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual([
+      expect(getFinalAnswerMessage(telegram)?.text).toBe("Use bold and code.");
+      expect(getFinalAnswerMessage(telegram)?.options?.entities).toEqual([
         { type: "bold", offset: 4, length: 4 },
         { type: "code", offset: 13, length: 4 }
       ]);
@@ -806,7 +831,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts.at(-1)?.options?.entities).toEqual(preformattedEntities("Inspecting the files", "kirbot"));
     expect(telegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
     expect(telegram.appliedDrafts.length).toBeGreaterThan(initialDraftCount);
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking")).toBe(true);
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
 
     codex.emitNotification({
       method: "item/started",
@@ -859,7 +884,7 @@ describe("TelegramCodexBridge", () => {
         })
       })
     );
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Here is the answer.");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Here is the answer.");
   });
 
   it("chunks long final assistant output into multiple Telegram messages", async () => {
@@ -1073,7 +1098,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-2)?.options?.entities).toEqual(preformattedEntities("Inspecting files", "kirbot"));
     expect(telegram.sentMessages.at(-1)?.text).toBe("Planning edits");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(preformattedEntities("Planning edits", "kirbot"));
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking")).toBe(true);
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {
@@ -1233,7 +1258,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.events.indexOf("draft:")).toBeGreaterThan(telegram.events.indexOf("draft:Hello"));
     expect(telegram.events.indexOf("message:Hello world")).toBeGreaterThan(telegram.events.indexOf("draft:"));
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Hello world");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello world");
   });
 
   it("renders multiple assistant items with separators instead of concatenating them", async () => {
@@ -1282,7 +1307,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("That setup\n\nYes makes sense");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("That setup\n\nYes makes sense");
   });
 
   it("reconciles streamed assistant text with the full completed item text", async () => {
@@ -1341,7 +1366,7 @@ describe("TelegramCodexBridge", () => {
       telegram.drafts.some((draft) => draft.text === "Start from the inside.")
     ).toBe(true);
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Start from the inside.");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
   });
 
   it("uses Codex thread readback as the final message when streamed text is out of order", async () => {
@@ -1392,7 +1417,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Hello from the inside.");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello from the inside.");
 
     const turn = await database.getTurnById("turn-1");
     expect(turn.streamText).toBe("Hello from the inside.");
@@ -1433,7 +1458,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(
       telegram.drafts.some(
-        (draft) => draft.text === "running: npm test"
+        (draft) => draft.text === "running: npm test · 0s"
       )
     ).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
@@ -1465,7 +1490,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Completed without streamed deltas");
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Completed without streamed deltas");
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
   });
 
