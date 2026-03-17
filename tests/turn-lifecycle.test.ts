@@ -306,20 +306,20 @@ describe("TurnLifecycleCoordinator", () => {
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
     harness.coordinator.handleThreadTokenUsageUpdated("turn-1", {
       total: {
-        totalTokens: 250,
-        inputTokens: 100,
+        totalTokens: 17000,
+        inputTokens: 12000,
         cachedInputTokens: 0,
-        outputTokens: 150,
+        outputTokens: 5000,
         reasoningOutputTokens: 0
       },
       last: {
-        totalTokens: 250,
-        inputTokens: 100,
+        totalTokens: 17000,
+        inputTokens: 12000,
         cachedInputTokens: 0,
-        outputTokens: 150,
+        outputTokens: 5000,
         reasoningOutputTokens: 0
       },
-      modelContextWindow: 1000
+      modelContextWindow: 32000
     });
     harness.coordinator.handleModelRerouted("turn-1", "gpt-5");
 
