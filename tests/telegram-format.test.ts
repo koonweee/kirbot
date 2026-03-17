@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { chunkFormattedText, prependText } from "../src/telegram-format/chunk";
 import { buildFormattedText, TelegramEntityBuilder } from "../src/telegram-format/entity-builder";
 import { renderMarkdownToFormattedText } from "../src/telegram-format/markdown";
-import { renderPreformattedText } from "../src/telegram-format/preformatted";
+import { renderPreformattedText, renderQuotedText } from "../src/telegram-format/preformatted";
 
 describe("telegram-format", () => {
   it("supports manual entity annotations over plain text", () => {
@@ -110,6 +110,32 @@ describe("telegram-format", () => {
           offset: 0,
           length: 9,
           language: "kirbot"
+        }
+      ]
+    });
+  });
+
+  it("renders manual quotes as expandable by default", () => {
+    expect(renderQuotedText("Queue preview")).toEqual({
+      text: "Queue preview",
+      entities: [
+        {
+          type: "expandable_blockquote",
+          offset: 0,
+          length: 13
+        }
+      ]
+    });
+  });
+
+  it("renders manual quotes as regular blockquotes when requested", () => {
+    expect(renderQuotedText("Queue preview", { kind: "blockquote" })).toEqual({
+      text: "Queue preview",
+      entities: [
+        {
+          type: "blockquote",
+          offset: 0,
+          length: 13
         }
       ]
     });
