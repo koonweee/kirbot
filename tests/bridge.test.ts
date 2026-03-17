@@ -502,6 +502,46 @@ describe("TelegramCodexBridge", () => {
     expect(turn.status).toBe("completed");
   });
 
+  it("publishes failed turn output through the shared terminal finalizer", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 12,
+      updateId: 33,
+      userId: 42,
+      text: "Explain the failure"
+    });
+
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Partial output"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        error: {
+          message: "boom"
+        }
+      }
+    } as ServerNotification);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Partial output\n\nCodex error: boom");
+
+    const turn = await database.getTurnById("turn-1");
+    expect(turn.status).toBe("failed");
+    expect(turn.streamText).toBe("Partial output\n\nCodex error: boom");
+  });
+
   it("formats assistant markdown as Telegram HTML for drafts and final messages", async () => {
     codex.readTurnMessagesResult = "Use **bold** and `code`.\n\n```ts\nconst answer = 42;\n```";
 

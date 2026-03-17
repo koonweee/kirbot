@@ -50,7 +50,7 @@ type DraftSessionState = {
   retryTimer: NodeJS.Timeout | null;
   inFlight: Promise<void> | null;
   lastText: string | null;
-  lastParseMode?: TelegramParseMode;
+  lastParseMode: TelegramParseMode | undefined;
   lastUpdateAt: number;
   lastChatActionAt: number;
   closed: boolean;
@@ -217,6 +217,7 @@ class TelegramDraftSession {
     retryTimer: null,
     inFlight: null,
     lastText: null,
+    lastParseMode: undefined,
     lastUpdateAt: 0,
     lastChatActionAt: 0,
     closed: false
