@@ -10,6 +10,7 @@ class FakeTransport implements RpcTransport {
   #messageListener: ((message: unknown) => void) | null = null;
   #closeListener: (() => void) | null = null;
   #errorListener: ((error: Error) => void) | null = null;
+  onSend: ((message: unknown) => Promise<void> | void) | null = null;
 
   async connect(): Promise<void> {}
 
@@ -19,6 +20,7 @@ class FakeTransport implements RpcTransport {
 
   async send(message: unknown): Promise<void> {
     this.sent.push(message);
+    await this.onSend?.(message);
   }
 
   onMessage(listener: (message: unknown) => void): void {
@@ -265,6 +267,169 @@ describe("CodexRpcClient", () => {
       userAgent: "codex-test"
     });
     expect(notifications).toHaveLength(1);
+  });
+
+  it("tracks pending requests before send completes so fast responses are not dropped", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+
+    transport.onSend = (message) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "method" in message &&
+        message.method === "turn/steer" &&
+        "id" in message
+      ) {
+        transport.emitMessage({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            turnId: "turn-9"
+          }
+        });
+      }
+    };
+
+    await expect(
+      client.steerTurn({
+        threadId: "thread-1",
+        expectedTurnId: "turn-9",
+        input: [
+          {
+            type: "text",
+            text: "Follow up",
+            text_elements: []
+          }
+        ]
+      })
+    ).resolves.toEqual({
+      turnId: "turn-9"
+    });
+  });
+
+  it("buffers initialize-phase events until the handshake is completed", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+
+    const notifications: unknown[] = [];
+    const serverRequests: unknown[] = [];
+    client.on("notification", (notification) => notifications.push(notification));
+    client.on("serverRequest", (request) => serverRequests.push(request));
+
+    const initializePromise = client.initialize({
+      clientInfo: {
+        name: "test",
+        title: "Test",
+        version: "0.1.0"
+      },
+      capabilities: {
+        experimentalApi: true
+      }
+    });
+    await Promise.resolve();
+
+    transport.emitMessage({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "thread-1",
+          title: "Hello",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 1,
+          status: "ready",
+          path: null,
+          cwd: "/workspace",
+          cliVersion: "0.0.0",
+          source: "appServer",
+          origin: null,
+          gitInfo: null,
+          threadName: "Hello",
+          turns: []
+        }
+      }
+    });
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: "init-request",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        cwd: "/workspace",
+        reason: "Need approval",
+        availableDecisions: ["accept", "decline", "cancel"]
+      }
+    });
+
+    expect(notifications).toEqual([]);
+    expect(serverRequests).toEqual([]);
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+
+    await initializePromise;
+
+    expect(notifications).toHaveLength(1);
+    expect(serverRequests).toHaveLength(1);
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "initialized"
+    });
+  });
+
+  it("rejects unknown initialize-phase server requests with method-not-found", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+
+    const initializePromise = client.initialize({
+      clientInfo: {
+        name: "test",
+        title: "Test",
+        version: "0.1.0"
+      },
+      capabilities: {
+        experimentalApi: true
+      }
+    });
+    await Promise.resolve();
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: "unknown-request",
+      method: "unsupported/request",
+      params: {
+        threadId: "thread-1"
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+
+    await initializePromise;
+
+    expect(transport.sent).toContainEqual({
+      jsonrpc: "2.0",
+      id: "unknown-request",
+      error: {
+        code: -32601,
+        message: "unsupported remote app-server request `unsupported/request`"
+      }
+    });
   });
 
   it("sends turn/steer requests with typed params", async () => {

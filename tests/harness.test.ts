@@ -15,6 +15,7 @@ import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileC
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { createTelegramHarness, type TelegramHarness } from "../src/harness";
+import type { AppServerEvent } from "../src/rpc";
 
 class ScriptedCodex implements BridgeCodexApi {
   model = "gpt-5-codex";
@@ -26,8 +27,8 @@ class ScriptedCodex implements BridgeCodexApi {
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
   snapshotDelayMs = 0;
 
-  #notificationListeners = new Set<(notification: ServerNotification) => void>();
-  #requestListeners = new Set<(request: ServerRequest) => void>();
+  readonly #eventQueue: AppServerEvent[] = [];
+  readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
   #pendingTurnId: string | null = null;
   #pendingThreadId: string | null = null;
 
@@ -181,24 +182,39 @@ class ScriptedCodex implements BridgeCodexApi {
 
   async respondUnsupportedRequest(): Promise<void> {}
 
-  onNotification(listener: (notification: ServerNotification) => void): void {
-    this.#notificationListeners.add(listener);
-  }
+  async nextEvent(): Promise<AppServerEvent | null> {
+    const event = this.#eventQueue.shift();
+    if (event) {
+      return event;
+    }
 
-  onServerRequest(listener: (request: ServerRequest) => void): void {
-    this.#requestListeners.add(listener);
+    return new Promise<AppServerEvent | null>((resolve) => {
+      this.#eventWaiters.push(resolve);
+    });
   }
 
   private emitNotification(notification: ServerNotification): void {
-    for (const listener of this.#notificationListeners) {
-      listener(notification);
-    }
+    this.emitEvent({
+      kind: "notification",
+      notification
+    });
   }
 
   private emitRequest(request: ServerRequest): void {
-    for (const listener of this.#requestListeners) {
-      listener(request);
+    this.emitEvent({
+      kind: "serverRequest",
+      request
+    });
+  }
+
+  private emitEvent(event: AppServerEvent): void {
+    const waiter = this.#eventWaiters.shift();
+    if (waiter) {
+      waiter(event);
+      return;
     }
+
+    this.#eventQueue.push(event);
   }
 }
 

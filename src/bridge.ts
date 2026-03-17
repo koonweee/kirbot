@@ -31,6 +31,7 @@ import type { LoggerLike } from "./logging";
 import { isAllowedRootCommand, isAllowedTopicCommand } from "./telegram-commands";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
+import type { AppServerEvent } from "./rpc";
 
 export type CallbackQueryEvent = {
   callbackQueryId: string;
@@ -52,8 +53,7 @@ export interface BridgeCodexApi {
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
   respondToUserInputRequest(id: RequestId, response: ToolRequestUserInputResponse): Promise<void>;
   respondUnsupportedRequest(id: RequestId, message: string): Promise<void>;
-  onNotification(listener: (notification: ServerNotification) => void): void;
-  onServerRequest(listener: (request: ServerRequest) => void): void;
+  nextEvent(): Promise<AppServerEvent | null>;
 }
 
 type PreparedCodexInput = {
@@ -80,10 +80,14 @@ const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex ses
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled.";
 const PLAN_MODE_EXITED_TEXT = "Exited plan mode.";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
+const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
   readonly #notificationChains = new Map<string, Promise<void>>();
+  readonly #stagedTurnEvents = new Map<string, AppServerEvent[]>();
+  readonly #stagedTurnEventTimers = new Map<string, NodeJS.Timeout>();
+  readonly #turnsAwaitingActivation = new Set<string>();
   readonly #messenger: TelegramMessenger;
   readonly #lifecycle: TurnLifecycleCoordinator;
   readonly #requestCoordinator: BridgeRequestCoordinator;
@@ -121,15 +125,8 @@ export class TelegramCodexBridge {
           ...(preserveDetails !== undefined ? { preserveDetails } : {})
         })
     );
-    this.codex.onNotification((notification) => {
-      void this.enqueueNotification(notification).catch((error) => {
-        this.logger.error("Failed to process Codex notification", error);
-      });
-    });
-    this.codex.onServerRequest((request) => {
-      void this.handleServerRequest(request).catch((error) => {
-        this.logger.error("Failed to process Codex server request", error);
-      });
+    void this.consumeCodexEvents().catch((error) => {
+      this.logger.error("Failed to consume Codex app-server events", error);
     });
   }
 
@@ -694,38 +691,60 @@ export class TelegramCodexBridge {
           )
         )
     });
+    this.#turnsAwaitingActivation.add(turn.id);
 
-    await this.database.recordTurnStart({
-      telegramUpdateId: message.updateId,
-      telegramChatId: String(message.chatId),
-      telegramTopicId: message.topicId,
-      codexThreadId: session.codexThreadId,
-      codexTurnId: turn.id,
-      draftId: message.updateId
-    });
+    try {
+      await this.database.recordTurnStart({
+        telegramUpdateId: message.updateId,
+        telegramChatId: String(message.chatId),
+        telegramTopicId: message.topicId,
+        codexThreadId: session.codexThreadId,
+        codexTurnId: turn.id,
+        draftId: message.updateId
+      });
 
-    const activeTurn = this.#lifecycle.activateTurn(
-      message,
-      session.codexThreadId,
-      turn.id,
-      thread.model,
-      thread.reasoningEffort
-    );
-    if (activeTurn.statusDraft) {
-      await this.#lifecycle.publishCurrentStatus(turn.id, true);
+      const activeTurn = this.#lifecycle.activateTurn(
+        message,
+        session.codexThreadId,
+        turn.id,
+        thread.model,
+        thread.reasoningEffort
+      );
+      await this.flushStagedTurnEvents(turn.id);
+      if (activeTurn.statusDraft) {
+        await this.#lifecycle.publishCurrentStatus(turn.id, true);
+      }
+    } finally {
+      this.#turnsAwaitingActivation.delete(turn.id);
     }
   }
 
-  private async enqueueNotification(notification: ServerNotification): Promise<void> {
-    const turnId = getNotificationTurnId(notification);
+  private async consumeCodexEvents(): Promise<void> {
+    while (true) {
+      const event = await this.codex.nextEvent();
+      if (!event) {
+        return;
+      }
+
+      await this.enqueueCodexEvent(event);
+    }
+  }
+
+  private async enqueueCodexEvent(event: AppServerEvent): Promise<void> {
+    const turnId = getAppEventTurnId(event);
     if (!turnId) {
-      await this.handleNotification(notification);
+      await this.handleCodexEvent(event);
       return;
     }
 
     const previous = this.#notificationChains.get(turnId) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {
-      await this.handleNotification(notification);
+      if (await this.shouldStageTurnEvent(turnId)) {
+        this.stageTurnEvent(turnId, event);
+        return;
+      }
+
+      await this.handleCodexEvent(event);
     });
     this.#notificationChains.set(turnId, next);
 
@@ -736,6 +755,67 @@ export class TelegramCodexBridge {
         this.#notificationChains.delete(turnId);
       }
     }
+  }
+
+  private async shouldStageTurnEvent(turnId: string): Promise<boolean> {
+    if (this.#lifecycle.getTurn(turnId)) {
+      return false;
+    }
+
+    if (this.#turnsAwaitingActivation.has(turnId)) {
+      return true;
+    }
+
+    const persistedTurn = await this.database.getTurnByIdOptional(turnId);
+    return !persistedTurn;
+  }
+
+  private stageTurnEvent(turnId: string, event: AppServerEvent): void {
+    const staged = this.#stagedTurnEvents.get(turnId);
+    if (staged) {
+      staged.push(event);
+      return;
+    }
+
+    this.#stagedTurnEvents.set(turnId, [event]);
+    const timer = setTimeout(() => {
+      const dropped = this.#stagedTurnEvents.get(turnId);
+      this.#stagedTurnEvents.delete(turnId);
+      this.#stagedTurnEventTimers.delete(turnId);
+      if (dropped && dropped.length > 0) {
+        this.logger.warn(`Dropped ${dropped.length} staged Codex event(s) for unknown turn ${turnId}`);
+      }
+    }, STAGED_TURN_EVENT_TIMEOUT_MS);
+    timer.unref?.();
+    this.#stagedTurnEventTimers.set(turnId, timer);
+  }
+
+  private async flushStagedTurnEvents(turnId: string): Promise<void> {
+    const timer = this.#stagedTurnEventTimers.get(turnId);
+    if (timer) {
+      clearTimeout(timer);
+      this.#stagedTurnEventTimers.delete(turnId);
+    }
+
+    const staged = this.#stagedTurnEvents.get(turnId);
+    if (!staged || staged.length === 0) {
+      this.#stagedTurnEvents.delete(turnId);
+      return;
+    }
+
+    this.#stagedTurnEvents.delete(turnId);
+    for (const event of staged) {
+      await this.handleCodexEvent(event);
+    }
+  }
+
+  private async handleCodexEvent(event: AppServerEvent): Promise<void> {
+    if (event.kind === "notification") {
+      await this.handleNotification(event.notification);
+      return;
+    }
+
+    await this.handleServerRequest(event.request);
   }
 
   private async handleNotification(notification: ServerNotification): Promise<void> {
@@ -1043,6 +1123,18 @@ export class TelegramCodexBridge {
     await this.syncQueuePreview(this.#lifecycle.getQueueState(chatId, topicId));
   }
 
+}
+
+function getServerRequestTurnId(request: ServerRequest): string | null {
+  return "turnId" in request.params && typeof request.params.turnId === "string" ? request.params.turnId : null;
+}
+
+function getAppEventTurnId(event: AppServerEvent): string | null {
+  if (event.kind === "notification") {
+    return getNotificationTurnId(event.notification);
+  }
+
+  return getServerRequestTurnId(event.request);
 }
 
 function parseSlashCommand(message: UserTurnMessage): ParsedSlashCommand | null {

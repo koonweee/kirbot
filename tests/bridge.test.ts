@@ -16,7 +16,7 @@ import type { CommandExecutionApprovalDecision } from "../src/generated/codex/v2
 import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileChangeApprovalDecision";
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ReasoningEffort } from "../src/generated/codex/ReasoningEffort";
-import { JsonRpcMethodError } from "../src/rpc";
+import { JsonRpcMethodError, type AppServerEvent } from "../src/rpc";
 import type { TelegramApi } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 
@@ -74,6 +74,18 @@ async function waitForAsyncNotifications(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error("Timed out waiting for condition");
+}
+
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
   ensuredThreads: string[] = [];
@@ -92,9 +104,12 @@ class FakeCodex implements BridgeCodexApi {
   nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
+  beforeSendTurnResolve:
+    | ((input: { threadId: string; turnId: string; input: UserInput[] }) => Promise<void> | void)
+    | null = null;
 
-  #notificationListeners = new Set<(notification: ServerNotification) => void>();
-  #requestListeners = new Set<(request: ServerRequest) => void>();
+  readonly #eventQueue: AppServerEvent[] = [];
+  readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
 
   async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: ReasoningEffort | null }> {
     this.createdThreads.push(title);
@@ -137,6 +152,11 @@ class FakeCodex implements BridgeCodexApi {
     this.turnCollaborationModes.push({
       turnId,
       collaborationMode: collaborationMode ?? null
+    });
+    await this.beforeSendTurnResolve?.({
+      threadId,
+      turnId,
+      input
     });
     return { id: turnId };
   }
@@ -212,24 +232,39 @@ class FakeCodex implements BridgeCodexApi {
     this.unsupported.push({ id, message });
   }
 
-  onNotification(listener: (notification: ServerNotification) => void): void {
-    this.#notificationListeners.add(listener);
-  }
+  async nextEvent(): Promise<AppServerEvent | null> {
+    const event = this.#eventQueue.shift();
+    if (event) {
+      return event;
+    }
 
-  onServerRequest(listener: (request: ServerRequest) => void): void {
-    this.#requestListeners.add(listener);
+    return new Promise<AppServerEvent | null>((resolve) => {
+      this.#eventWaiters.push(resolve);
+    });
   }
 
   emitNotification(notification: ServerNotification): void {
-    for (const listener of this.#notificationListeners) {
-      listener(notification);
-    }
+    this.emitEvent({
+      kind: "notification",
+      notification
+    });
   }
 
   emitRequest(request: ServerRequest): void {
-    for (const listener of this.#requestListeners) {
-      listener(request);
+    this.emitEvent({
+      kind: "serverRequest",
+      request
+    });
+  }
+
+  private emitEvent(event: AppServerEvent): void {
+    const waiter = this.#eventWaiters.shift();
+    if (waiter) {
+      waiter(event);
+      return;
     }
+
+    this.#eventQueue.push(event);
   }
 }
 
@@ -648,6 +683,74 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
+  });
+
+  it("replays turn completion that arrives before the turn is locally activated", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final from snapshot",
+      assistantText: "Final from snapshot"
+    };
+    codex.beforeSendTurnResolve = ({ threadId, turnId }) => {
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId,
+          turn: {
+            id: turnId,
+            items: [],
+            status: "completed",
+            error: null
+          }
+        }
+      });
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 779,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Handle the race"
+    });
+    await waitForCondition(() => getFinalAnswerMessage(telegram)?.text === "Final from snapshot");
+
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Final from snapshot");
+    const persistedTurn = await database.getTurnById("turn-1");
+    expect(persistedTurn.status).toBe("completed");
+    expect(persistedTurn.resolvedAssistantText).toBe("Final from snapshot");
+  });
+
+  it("replays approval requests that arrive before the turn is locally activated", async () => {
+    codex.beforeSendTurnResolve = ({ threadId, turnId }) => {
+      codex.emitRequest({
+        method: "item/commandExecution/requestApproval",
+        id: "approval-early",
+        params: {
+          threadId,
+          turnId,
+          itemId: "item-1",
+          command: "npm test",
+          cwd: "/workspace",
+          reason: "Need approval",
+          availableDecisions: ["accept", "decline", "cancel"]
+        }
+      });
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 780,
+      messageId: 12,
+      updateId: 23,
+      userId: 42,
+      text: "Handle approval race"
+    });
+    await waitForAsyncNotifications();
+
+    const pending = await database.getPendingRequestByTopic(-1001, 780);
+    expect(pending?.method).toBe("item/commandExecution/requestApproval");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("npm test");
   });
 
   it("rejects slash commands in a topic before creating a session", async () => {
