@@ -61,6 +61,21 @@ belongs in `src/telegram-format`.
   flow unless the feature explicitly requires hard failure.
 - Preserve the topic-centric model: one Telegram topic maps to one Codex thread.
 
+## Detached Local Runs
+
+- Use `npm run dev:tmux` for a detached watched development session, or
+  `npm run start:tmux` for a detached production session from `dist/`.
+- Use `npm run dev:tmux:attach` or `npm run start:tmux:attach` to attach to the
+  existing tmux session and read live logs. When already inside tmux these
+  commands switch clients instead of nesting sessions.
+- Use `npm run dev:tmux:restart` or `npm run start:tmux:restart` to restart the
+  detached pane in place. The restart commands create the session first if it
+  does not exist yet.
+- Build before detached production runs: use `npm run build` before
+  `npm run start:tmux` or `npm run start:tmux:restart`.
+- Prefer these tmux scripts over `nohup`, shell backgrounding, or leaving
+  orphaned node processes behind.
+
 ## Tests
 
 - Add or update Vitest coverage for behavior changes in

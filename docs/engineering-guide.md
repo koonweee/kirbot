@@ -14,6 +14,7 @@ This is the practical onboarding guide for engineers changing kirbot. It focuses
 Prerequisites:
 
 - Node.js 22+
+- `tmux` if you want detached dev or production sessions
 - a Telegram bot token
 - the Telegram user ID kirbot should accept
 
@@ -28,9 +29,27 @@ Daily commands:
 
 ```bash
 npm run dev
+npm run dev:tmux
+npm run dev:tmux:attach
+npm run dev:tmux:restart
+npm start
+npm run start:tmux
+npm run start:tmux:attach
+npm run start:tmux:restart
 npm test
 npm run typecheck
 ```
+
+Use `npm run dev` for watched local development. Use `npm start` only for the built production output in `dist/`.
+
+Detached tmux workflow:
+
+- `npm run dev:tmux` ensures a detached `kirbot-dev` session running the watched development command.
+- `npm run start:tmux` ensures a detached `kirbot-prod` session running the production `start` command.
+- `npm run dev:tmux:attach` and `npm run start:tmux:attach` attach to the existing tmux session so you can read live logs. When already inside tmux they switch clients instead of nesting sessions.
+- `npm run dev:tmux:restart` and `npm run start:tmux:restart` restart the pane in place and create the tmux session first if it does not exist.
+- Production tmux sessions assume `dist/` is current. Run `npm run build` before starting or restarting the detached production session.
+- Prefer these tmux commands over ad-hoc `nohup`, background `&`, or orphaned node processes when an engineer or agent needs a detached kirbot process.
 
 Codex upgrade commands:
 
