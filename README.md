@@ -1,6 +1,8 @@
 # kirbot
 
-kirbot is a Telegram bot that connects a Telegram group or forum topic to a Codex app server session. It lets approved Telegram users start Codex conversations from Telegram, continue them in-topic, and handle Codex approvals or input requests without leaving Telegram.
+![Kirbot](./kirbot.png)
+
+Kirbot is a Telegram bot that connects a Telegram group or forum topic to a Codex app server session. It lets approved Telegram users start Codex conversations from Telegram, continue them in-topic, and handle Codex approvals or input requests without leaving Telegram.
 
 ## Architecture
 
@@ -73,3 +75,5 @@ To run tests:
 ```bash
 npm test
 ```
+
+Attribution: side profile Kirby by @KIRBYSWARPSTAR on X.
