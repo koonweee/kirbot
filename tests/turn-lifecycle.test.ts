@@ -35,6 +35,10 @@ class FakeTelegram implements TelegramApi {
     throw new Error("Not implemented");
   }
 
+  async getChat(): Promise<{ username?: string }> {
+    throw new Error("Not implemented");
+  }
+
   async sendMessage(
     chatId: number,
     text: string,
@@ -43,6 +47,10 @@ class FakeTelegram implements TelegramApi {
     this.messageCounter += 1;
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
     return { message_id: this.messageCounter };
+  }
+
+  async copyMessage(): Promise<{ message_id: number }> {
+    throw new Error("Not implemented");
   }
 
   async sendMessageDraft(
@@ -354,7 +362,7 @@ describe("TurnLifecycleCoordinator", () => {
       branch: "feature/footer"
     });
 
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex", "high");
     harness.coordinator.handleThreadTokenUsageUpdated("turn-1", {
       total: {
         totalTokens: 17000,
@@ -378,7 +386,23 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5 • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
+      "gpt-5 high • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
+    );
+  });
+
+  it("omits reasoning effort from the completion footer when it is not available", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 0 files • ?% left • /workspace • main"
     );
   });
 });

@@ -1,4 +1,5 @@
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
+import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import { chunkFormattedText, prependText } from "../telegram-format/chunk";
 import { renderMarkdownToFormattedText } from "../telegram-format/markdown";
 import { renderPreformattedText } from "../telegram-format/preformatted";
@@ -29,6 +30,7 @@ export type TurnStatusDraft = {
 
 export type CompletionFooterDetails = {
   model: string | null;
+  reasoningEffort: ReasoningEffort | null;
   durationMs: number;
   changedFiles: number;
   contextLeftPercent: number | null;
@@ -263,9 +265,10 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
   const cwd = shortenHomePath(details.cwd);
   const branch = details.branch?.trim() ? details.branch : "no-branch";
   const model = details.model?.trim() ? details.model : "unknown-model";
+  const modelLabel = details.reasoningEffort ? `${model} ${details.reasoningEffort}` : model;
 
   return [
-    model,
+    modelLabel,
     formatElapsedDuration(details.durationMs, true),
     `${details.changedFiles} ${fileLabel}`,
     contextLeft,
