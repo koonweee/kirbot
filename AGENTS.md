@@ -34,12 +34,21 @@ into a line-by-line restatement of the implementation.
 - Keep root-chat session start behavior and in-topic behavior aligned. When a
   flow creates a topic from root, verify both the Telegram UX in root/topic and
   the first Codex turn behavior.
+- Treat [src/runtime.ts](/home/jtkw/kirbot/.worktrees/telegram-harness/src/runtime.ts)
+- Treat [src/runtime.ts](/home/jtkw/kirbot/src/runtime.ts)
+  as the owner of reusable kirbot bootstrap outside the `grammy` entrypoint.
+- Treat
+  [src/harness/recording-telegram.ts](/home/jtkw/kirbot/src/harness/recording-telegram.ts)
+  as the owner of harness transcript synthesis and outbound Telegram event
+  capture.
 
 ## Telegram Formatting
 
 For all Telegram text/entity formatting work, see:
 
 - [src/telegram-format/AGENTS.md](/home/jtkw/kirbot/src/telegram-format/AGENTS.md)
+- [src/harness/AGENTS.md](/home/jtkw/kirbot/src/harness/AGENTS.md)
+  for Telegram harness work
 
 That directory owns:
 
@@ -81,6 +90,7 @@ belongs in `src/telegram-format`.
 - Add or update Vitest coverage for behavior changes in
   [tests/bridge.test.ts](/home/jtkw/kirbot/tests/bridge.test.ts) and the
   narrower unit around the touched subsystem, such as
+  [tests/harness.test.ts](/home/jtkw/kirbot/tests/harness.test.ts),
   [tests/turn-lifecycle.test.ts](/home/jtkw/kirbot/tests/turn-lifecycle.test.ts),
   [tests/telegram-messenger.test.ts](/home/jtkw/kirbot/tests/telegram-messenger.test.ts),
   [tests/telegram-format.test.ts](/home/jtkw/kirbot/tests/telegram-format.test.ts),

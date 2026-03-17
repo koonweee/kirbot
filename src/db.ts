@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import Database from "better-sqlite3";
+import { sql } from "kysely";
 import { Generated, Kysely, Selectable, SqliteDialect } from "kysely";
 
 import type {
@@ -656,6 +657,16 @@ export class BridgeDatabase {
       })
       .where("id", "=", id)
       .execute();
+  }
+
+  async countPendingRequests(): Promise<number> {
+    const row = await this.kysely
+      .selectFrom("server_requests")
+      .select(sql<number>`count(*)`.as("count"))
+      .where("status", "=", "pending")
+      .executeTakeFirstOrThrow();
+
+    return Number(row.count);
   }
 
   private ensureColumn(tableName: string, columnName: string, definition: string): void {

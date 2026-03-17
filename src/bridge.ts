@@ -27,6 +27,7 @@ import {
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
+import type { LoggerLike } from "./logging";
 import { isAllowedRootCommand, isAllowedTopicCommand } from "./telegram-commands";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
@@ -92,9 +93,10 @@ export class TelegramCodexBridge {
     private readonly database: BridgeDatabase,
     private readonly telegram: TelegramApi,
     private readonly codex: BridgeCodexApi,
-    private readonly mediaStore: TemporaryImageStore
+    private readonly mediaStore: TemporaryImageStore,
+    private readonly logger: LoggerLike = console
   ) {
-    this.#messenger = new TelegramMessenger(telegram);
+    this.#messenger = new TelegramMessenger(telegram, logger);
     this.#lifecycle = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
       messenger: this.#messenger,
@@ -107,7 +109,7 @@ export class TelegramCodexBridge {
       syncQueuePreview: this.syncQueuePreview.bind(this),
       maybeSendNextQueuedFollowUp: this.maybeSendNextQueuedFollowUp.bind(this),
       submitQueuedFollowUp: this.submitQueuedFollowUp.bind(this)
-    });
+    }, logger);
     this.#requestCoordinator = new BridgeRequestCoordinator(
       config,
       database,
@@ -121,12 +123,12 @@ export class TelegramCodexBridge {
     );
     this.codex.onNotification((notification) => {
       void this.enqueueNotification(notification).catch((error) => {
-        console.error("Failed to process Codex notification", error);
+        this.logger.error("Failed to process Codex notification", error);
       });
     });
     this.codex.onServerRequest((request) => {
       void this.handleServerRequest(request).catch((error) => {
-        console.error("Failed to process Codex server request", error);
+        this.logger.error("Failed to process Codex server request", error);
       });
     });
   }
@@ -173,8 +175,16 @@ export class TelegramCodexBridge {
     try {
       await this.codex.archiveThread(session.codexThreadId);
     } catch (error) {
-      console.error("Failed to archive Codex thread", error);
+      this.logger.error("Failed to archive Codex thread", error);
     }
+  }
+
+  getActiveTurnCount(): number {
+    return this.#lifecycle.getActiveTurnCount();
+  }
+
+  getActiveTopics(): Array<{ chatId: number; topicId: number }> {
+    return this.#lifecycle.getActiveTopics();
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
@@ -255,7 +265,7 @@ export class TelegramCodexBridge {
 
       this.#lifecycle.clearPendingSteerSubmissionAfterInterrupt(turnId);
 
-      console.error("Failed to interrupt turn", error);
+      this.logger.error("Failed to interrupt turn", error);
       await this.#messenger.sendMessage({
         chatId: event.chatId,
         topicId: event.topicId,
@@ -518,7 +528,7 @@ export class TelegramCodexBridge {
       this.#lifecycle.clearStopRequested(activeTurn.turnId);
       await this.syncQueuePreview(this.#lifecycle.getQueueState(activeTurn.chatId, activeTurn.topicId));
 
-      console.error("Failed to interrupt turn", error);
+      this.logger.error("Failed to interrupt turn", error);
       await this.#messenger.sendMessage({
         chatId: message.chatId,
         topicId: message.topicId,
@@ -651,7 +661,7 @@ export class TelegramCodexBridge {
         ...(rendered.entities ? { entities: rendered.entities } : {})
       });
     } catch (error) {
-      console.error("Failed to send initial prompt mirror into Telegram topic", error);
+      this.logger.error("Failed to send initial prompt mirror into Telegram topic", error);
     }
   }
 
@@ -896,7 +906,7 @@ export class TelegramCodexBridge {
         return;
       }
 
-      console.error("Failed to steer turn", error);
+      this.logger.error("Failed to steer turn", error);
       await this.#messenger.sendMessage({
         chatId: message.chatId,
         topicId: message.topicId,

@@ -1,62 +1,13 @@
 import { Bot } from "grammy";
 import type { Message } from "grammy/types";
 
-import { TelegramCodexBridge } from "./bridge";
-import { CodexGateway, spawnCodexAppServer } from "./codex";
 import { loadConfig } from "./config";
-import { BridgeDatabase } from "./db";
-import { TemporaryImageStore } from "./media-store";
-import { CodexRpcClient, WebSocketRpcTransport } from "./rpc";
-import {
-  TelegramCommandSync,
-  initializeTelegramCommandSyncFailOpen,
-  type TelegramCommandApi
-} from "./telegram-command-sync";
+import type { TelegramCommandApi } from "./telegram-command-sync";
 import type { TelegramApi } from "./telegram-messenger";
-
-async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30): Promise<void> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      await transport.connect();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
+import { createKirbotRuntime } from "./runtime";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const database = new BridgeDatabase(config.database.path);
-  const mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
-  await database.migrate();
-  await mediaStore.cleanupStaleFiles();
-  const expiredPendingRequests = await database.expirePendingRequests(
-    JSON.stringify({
-      reason: "expired_on_startup",
-      message: "Pending request expired because the Telegram bridge restarted."
-    })
-  );
-  if (expiredPendingRequests > 0) {
-    console.warn(`Expired ${expiredPendingRequests} pending Codex request(s) from a previous run.`);
-  }
-
-  const spawnedAppServer = await spawnCodexAppServer({
-    url: config.codex.appServerUrl
-  });
-
-  const transport = new WebSocketRpcTransport(config.codex.appServerUrl);
-  await connectWithRetry(transport);
-
-  const rpcClient = new CodexRpcClient(transport);
-  const codex = new CodexGateway(rpcClient, config.codex);
-  await codex.initialize();
-
   const bot = new Bot(config.telegram.botToken);
   const telegramApi: TelegramApi = {
     createForumTopic: (chatId, name) => bot.api.createForumTopic(chatId, name),
@@ -89,13 +40,15 @@ async function main(): Promise<void> {
     setChatMenuButton: (options) => bot.api.setChatMenuButton(options)
   };
 
-  const bridge = new TelegramCodexBridge(config, database, telegramApi, codex, mediaStore);
-  const commandSync = new TelegramCommandSync(telegramCommandApi, config.telegram.userId);
+  const runtime = await createKirbotRuntime({
+    config,
+    telegramApi,
+    telegramCommandApi
+  });
+  const { bridge } = runtime;
   bot.catch((error) => {
     console.error("Telegram bot update handling failed", error.error);
   });
-
-  await initializeTelegramCommandSyncFailOpen(commandSync);
 
   bot.on("message:text", async (context) => {
     if (!context.message.from) {
@@ -205,11 +158,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     await bot.stop();
-    await rpcClient.close();
-    if (spawnedAppServer) {
-      await spawnedAppServer.stop();
-    }
-    await database.close();
+    await runtime.shutdown();
   };
 
   process.once("SIGINT", () => {

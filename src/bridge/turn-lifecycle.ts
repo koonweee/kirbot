@@ -2,6 +2,7 @@ import type { UserTurnMessage } from "../domain";
 import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
+import type { LoggerLike } from "../logging";
 import {
   buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
@@ -28,7 +29,10 @@ export class TurnLifecycleCoordinator {
   readonly #turns = new Map<string, TurnContext>();
   readonly #finalizer: TurnFinalizer;
 
-  constructor(private readonly deps: TurnLifecycleDependencies) {
+  constructor(
+    private readonly deps: TurnLifecycleDependencies,
+    private readonly logger: LoggerLike = console
+  ) {
     this.#finalizer = new TurnFinalizer(deps);
   }
 
@@ -78,7 +82,7 @@ export class TurnLifecycleCoordinator {
     this.#turns.set(turnId, context);
     context.statusElapsedTimer = setInterval(() => {
       void this.publishCurrentStatus(turnId, false).catch((error) => {
-        console.warn(`Failed to refresh elapsed status for turn ${turnId}`, error);
+        this.logger.warn(`Failed to refresh elapsed status for turn ${turnId}`, error);
       });
     }, 3000);
     context.statusElapsedTimer.unref?.();
@@ -102,6 +106,17 @@ export class TurnLifecycleCoordinator {
 
   getQueueState(chatId: number, topicId: number): QueueStateSnapshot {
     return this.deps.runtime.getQueueState(chatId, topicId);
+  }
+
+  getActiveTurnCount(): number {
+    return this.#turns.size;
+  }
+
+  getActiveTopics(): Array<{ chatId: number; topicId: number }> {
+    return Array.from(this.#turns.values()).map((turn) => ({
+      chatId: turn.chatId,
+      topicId: turn.topicId
+    }));
   }
 
   renderAssistantItems(turnId: string): string {
