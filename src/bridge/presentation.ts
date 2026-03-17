@@ -265,7 +265,7 @@ function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null)
 function buildCompletionFooterText(details: CompletionFooterDetails): string {
   const fileLabel = details.changedFiles === 1 ? "file" : "files";
   const contextLeft =
-    typeof details.contextLeftPercent === "number" ? `${details.contextLeftPercent}% left` : "?% left";
+    typeof details.contextLeftPercent === "number" ? `${details.contextLeftPercent}% left` : "100% left";
   const cwd = shortenHomePath(details.cwd);
   const branch = details.branch?.trim() ? details.branch : "no-branch";
   const model = details.model?.trim() ? details.model : "unknown-model";

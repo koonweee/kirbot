@@ -382,7 +382,7 @@ describe("TurnLifecycleCoordinator", () => {
     );
   });
 
-  it("excludes reasoning output tokens from the completion footer context-left calculation", async () => {
+  it("includes reasoning output tokens in the completion footer context-left calculation", async () => {
     const harness = createHarness({
       text: "Final answer",
       changedFiles: 0,
@@ -412,7 +412,75 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 0 files • 55% left • /workspace • main"
+      "gpt-5-codex • <1s • 0 files • 30% left • /workspace • main"
+    );
+  });
+
+  it("uses last token usage instead of total aggregate usage in the completion footer", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    harness.coordinator.handleThreadTokenUsageUpdated("turn-1", {
+      total: {
+        totalTokens: 26000,
+        inputTokens: 12000,
+        cachedInputTokens: 0,
+        outputTokens: 14000,
+        reasoningOutputTokens: 0
+      },
+      last: {
+        totalTokens: 17000,
+        inputTokens: 12000,
+        cachedInputTokens: 0,
+        outputTokens: 5000,
+        reasoningOutputTokens: 0
+      },
+      modelContextWindow: 32000
+    });
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 0 files • 75% left • /workspace • main"
+    );
+  });
+
+  it("rounds the completion footer context-left percentage to the nearest integer", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    harness.coordinator.handleThreadTokenUsageUpdated("turn-1", {
+      total: {
+        totalTokens: 12495,
+        inputTokens: 12495,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0
+      },
+      last: {
+        totalTokens: 12495,
+        inputTokens: 12495,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0
+      },
+      modelContextWindow: 13000
+    });
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 0 files • 51% left • /workspace • main"
     );
   });
 
@@ -428,7 +496,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 0 files • ?% left • /workspace • main"
+      "gpt-5-codex • <1s • 0 files • 100% left • /workspace • main"
     );
   });
 });

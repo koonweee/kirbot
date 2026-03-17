@@ -926,9 +926,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
     expect(telegram.deletions).toEqual([]);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
-    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex high • <1s • 0 files • ?% left • /workspace • main");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex high • <1s • 0 files • 100% left • /workspace • main");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
-      preformattedEntities("gpt-5-codex high • <1s • 0 files • ?% left • /workspace • main", "status")
+      preformattedEntities("gpt-5-codex high • <1s • 0 files • 100% left • /workspace • main", "status")
     );
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
 
