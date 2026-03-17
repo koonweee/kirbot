@@ -91,7 +91,7 @@ async function main(): Promise<void> {
 
     await bridge.handleUserTextMessage({
       chatId: context.chat.id,
-      topicId: context.message.message_thread_id ?? null,
+      topicId: context.message.is_topic_message ? (context.message.message_thread_id ?? null) : null,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
     const photo = pickLargestPhoto(context.message.photo);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
-      topicId: context.message.message_thread_id ?? null,
+      topicId: context.message.is_topic_message ? (context.message.message_thread_id ?? null) : null,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
 
     await bridge.handleUserMessage({
       chatId: context.chat.id,
-      topicId: context.message.message_thread_id ?? null,
+      topicId: context.message.is_topic_message ? (context.message.message_thread_id ?? null) : null,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,

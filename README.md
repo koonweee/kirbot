@@ -46,6 +46,11 @@ Required configuration:
 - `TELEGRAM_BOT_TOKEN`: Telegram bot token
 - `TELEGRAM_USER_ID`: Telegram user ID allowed to use the bot; in a private chat, this is also the chat ID
 
+Telegram BotFather settings:
+
+- Enable private-chat topics for the bot.
+- Disable user-created topics in private chats. kirbot expects root/private-chat messages to stay in the lobby so it can create session topics itself.
+
 Codex-related configuration:
 
 - `CODEX_APP_SERVER_URL`: WebSocket URL kirbot binds its bundled Codex app server to
