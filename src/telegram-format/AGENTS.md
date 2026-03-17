@@ -2,6 +2,12 @@
 
 This directory owns Kirbot's Telegram text formatting layer.
 
+For repo-level architecture and onboarding context, start with
+[README.md](/home/jtkw/kirbot/README.md),
+[docs/architecture.md](/home/jtkw/kirbot/docs/architecture.md), and
+[docs/user-flows.md](/home/jtkw/kirbot/docs/user-flows.md). This file only
+covers the local rules for the formatting subsystem.
+
 ## Purpose
 
 Use this module to produce Telegram-ready payloads as:
@@ -62,4 +68,6 @@ Choose the entrypoint based on the producer:
 1. Add or extend the shared formatter helper here.
 2. Expose a producer only if callers need a stable entrypoint.
 3. Add focused unit tests in `tests/telegram-format.test.ts`.
-4. Only then wire the new formatter into bridge/presentation code.
+4. Update `src/telegram-format/README.md` if the supported formatting surface
+   or behavior contract changed.
+5. Only then wire the new formatter into bridge/presentation code.
