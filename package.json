@@ -10,8 +10,8 @@
     "dev": "node --watch --watch-path=src --watch-path=KIRBOT.md --watch-path=.env --import tsx src/index.ts",
     "generate:codex-types": "node scripts/generate-codex-types.mjs",
     "start": "node --enable-source-maps dist/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "node scripts/run-vitest.mjs run",
+    "test:watch": "node scripts/run-vitest.mjs",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "verify:codex-types": "node scripts/check-codex-types.mjs",
     "verify:codex-upgrade": "npm run generate:codex-types && npm run typecheck && npm test"
