@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   TelegramMessenger,
@@ -12,6 +12,7 @@ const EMPTY_DRAFT_TEXT = "";
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   rejectEmptyDrafts = false;
+  rejectHtmlDrafts = false;
   sentMessages: Array<{ chatId: number; text: string; options?: TelegramSendOptions }> = [];
   drafts: Array<{ chatId: number; draftId: number; text: string; options?: TelegramDraftOptions }> = [];
   chatActions: Array<{
@@ -37,10 +38,13 @@ class FakeTelegram implements TelegramApi {
     text: string,
     options?: TelegramDraftOptions
   ): Promise<true> {
+    this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     if (this.rejectEmptyDrafts && text === "") {
       throw new Error("text must be non-empty");
     }
-    this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
+    if (this.rejectHtmlDrafts && options?.parse_mode === "HTML") {
+      throw new Error("can't parse entities");
+    }
     return true;
   }
 
@@ -234,5 +238,45 @@ describe("TelegramMessenger", () => {
       }
     ]);
     expect(telegram.chatActions).toHaveLength(1);
+  });
+
+  it("logs draft send failures instead of retrying without parse mode", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const telegram = new FakeTelegram();
+    telegram.rejectHtmlDrafts = true;
+    const messenger = new TelegramMessenger(telegram);
+    const stream = messenger.streamMessage({
+      chatId: 1,
+      topicId: 2,
+      draftId: 104
+    });
+
+    try {
+      await stream.update({ text: "Use <b>bold</b>", parseMode: "HTML" }, true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(telegram.drafts).toHaveLength(1);
+      expect(telegram.drafts[0]).toMatchObject({
+        chatId: 1,
+        draftId: 104,
+        text: "Use <b>bold</b>",
+        options: {
+          message_thread_id: 2,
+          parse_mode: "HTML"
+        }
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        "Failed to send Telegram draft",
+        expect.objectContaining({
+          chatId: 1,
+          topicId: 2,
+          draftId: 104,
+          parseMode: "HTML"
+        }),
+        expect.any(Error)
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
