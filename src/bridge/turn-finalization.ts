@@ -142,6 +142,7 @@ export class TurnFinalizer {
       clearInterval(context.statusElapsedTimer);
       context.statusElapsedTimer = null;
     }
+    context.statusDraft = null;
     await context.statusHandle.clear();
 
     for (const [itemId, commentary] of context.commentaryStreams) {

@@ -196,7 +196,7 @@ export class TurnLifecycleCoordinator {
     options?: { force?: boolean; preserveDetails?: boolean }
   ): Promise<void> {
     const context = this.#turns.get(turnId);
-    if (!context) {
+    if (!context || context.phase !== "active") {
       return;
     }
 
@@ -225,7 +225,7 @@ export class TurnLifecycleCoordinator {
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
     const context = this.#turns.get(turnId);
-    if (!context?.statusDraft) {
+    if (!context || context.phase !== "active" || !context.statusDraft) {
       return;
     }
 
