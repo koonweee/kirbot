@@ -56,6 +56,7 @@ Detached tmux workflow:
 Telegram harness workflow:
 
 - `npm run harness:telegram` starts an interactive harness that runs the real kirbot runtime with a recording Telegram transport.
+- The harness now isolates its Codex app-server port, SQLite state, media temp directory, and Codex workspace by default, so it can run beside a live kirbot dev or production process safely.
 - Use the harness when you want agent-driven app-level E2E coverage without a real Telegram client.
 - See [telegram-harness.md](telegram-harness.md) for transcript, raw event, and log inspection details.
 

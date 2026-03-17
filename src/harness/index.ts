@@ -1,4 +1,5 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -16,6 +17,9 @@ export type CreateTelegramHarnessOptions = {
   config?: AppConfig;
   stateDir?: string;
   codexApi?: BridgeCodexApi;
+  codexAppServerUrl?: string;
+  workspaceMode?: "empty" | "inherit";
+  workspaceDir?: string;
 };
 
 export type WaitForIdleOptions = {
@@ -44,7 +48,7 @@ export type TelegramHarness = {
 export async function createTelegramHarness(options: CreateTelegramHarnessOptions = {}): Promise<TelegramHarness> {
   const baseConfig = options.config ?? (await import("../config")).loadConfig();
   const stateDir = options.stateDir ?? mkdtempSync(join(tmpdir(), "kirbot-telegram-harness-"));
-  const config = buildHarnessConfig(baseConfig, stateDir);
+  const config = await buildHarnessConfig(baseConfig, stateDir, options);
   const logTarget = new BufferingLogTarget();
   const harnessLogger = createSourceLogger(logTarget, "harness");
   const telegram = new RecordingTelegram(config.telegram.userId);
@@ -65,7 +69,9 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       logTarget,
       ...(options.codexApi ? { codexApi: options.codexApi } : {})
     });
-    harnessLogger.info(`Started harness with state dir ${stateDir}`);
+    harnessLogger.info(
+      `Started harness with state dir ${stateDir} (codex=${config.codex.appServerUrl}, cwd=${config.codex.defaultCwd})`
+    );
     return runtime;
   };
 
@@ -174,7 +180,22 @@ class BufferingLogTarget implements AppLogTarget {
   }
 }
 
-function buildHarnessConfig(baseConfig: AppConfig, stateDir: string): AppConfig {
+async function buildHarnessConfig(
+  baseConfig: AppConfig,
+  stateDir: string,
+  options: Pick<
+    CreateTelegramHarnessOptions,
+    "codexApi" | "codexAppServerUrl" | "workspaceMode" | "workspaceDir"
+  >
+): Promise<AppConfig> {
+  const { workspaceDir, createWorkspaceDir } = resolveHarnessWorkspaceDir(baseConfig, stateDir, options);
+  if (createWorkspaceDir) {
+    mkdirSync(workspaceDir, { recursive: true });
+  }
+  const appServerUrl =
+    options.codexAppServerUrl ??
+    (options.codexApi ? buildHarnessAppServerUrl(0) : buildHarnessAppServerUrl(await allocateLocalPort()));
+
   return {
     ...baseConfig,
     telegram: {
@@ -185,9 +206,76 @@ function buildHarnessConfig(baseConfig: AppConfig, stateDir: string): AppConfig 
       path: join(stateDir, "telegram-harness.sqlite")
     },
     codex: {
-      ...baseConfig.codex
+      ...baseConfig.codex,
+      appServerUrl,
+      defaultCwd: workspaceDir
     }
   };
+}
+
+function resolveHarnessWorkspaceDir(
+  baseConfig: AppConfig,
+  stateDir: string,
+  options: Pick<CreateTelegramHarnessOptions, "workspaceMode" | "workspaceDir">
+): { workspaceDir: string; createWorkspaceDir: boolean } {
+  if (options.workspaceDir) {
+    return {
+      workspaceDir: options.workspaceDir,
+      createWorkspaceDir: true
+    };
+  }
+
+  if (options.workspaceMode === "inherit") {
+    return {
+      workspaceDir: baseConfig.codex.defaultCwd,
+      createWorkspaceDir: false
+    };
+  }
+
+  return {
+    workspaceDir: join(stateDir, "workspace"),
+    createWorkspaceDir: true
+  };
+}
+
+function buildHarnessAppServerUrl(port: number): string {
+  return `ws://127.0.0.1:${port}`;
+}
+
+async function allocateLocalPort(): Promise<number> {
+  const server = createServer();
+  let listening = false;
+
+  try {
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        listening = true;
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Could not determine allocated localhost port for harness Codex app server"));
+          return;
+        }
+
+        resolve(address.port);
+      });
+    });
+
+    return port;
+  } finally {
+    if (listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    }
+  }
 }
 
 function buildUserMessage(

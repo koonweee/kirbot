@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -174,6 +174,59 @@ afterEach(async () => {
 });
 
 describe("Telegram harness", () => {
+  it("isolates the default Codex app-server URL and workspace from the base config", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
+    const harness = await createTelegramHarness({
+      config: createConfig(tempDir),
+      stateDir: tempDir,
+      codexApi: new ScriptedCodex("complete")
+    });
+    harnesses.push(harness);
+
+    await harness.start();
+
+    const startupLog = getHarnessStartupLog(harness);
+    expect(startupLog).toContain(`state dir ${tempDir}`);
+    expect(startupLog).not.toContain("codex=ws://127.0.0.1:8787");
+    expect(startupLog).toContain(`cwd=${join(tempDir, "workspace")}`);
+    expect(readdirSync(join(tempDir, "workspace"))).toEqual([]);
+  });
+
+  it("supports inheriting the base workspace when requested", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
+    const harness = await createTelegramHarness({
+      config: createConfig(tempDir),
+      stateDir: tempDir,
+      codexApi: new ScriptedCodex("complete"),
+      workspaceMode: "inherit"
+    });
+    harnesses.push(harness);
+
+    await harness.start();
+
+    expect(getHarnessStartupLog(harness)).toContain("cwd=/workspace");
+  });
+
+  it("respects explicit Codex app-server and workspace overrides", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
+    const workspaceDir = join(tempDir, "custom-workspace");
+    const harness = await createTelegramHarness({
+      config: createConfig(tempDir),
+      stateDir: tempDir,
+      codexApi: new ScriptedCodex("complete"),
+      codexAppServerUrl: "ws://127.0.0.1:9123",
+      workspaceDir
+    });
+    harnesses.push(harness);
+
+    await harness.start();
+
+    const startupLog = getHarnessStartupLog(harness);
+    expect(startupLog).toContain("codex=ws://127.0.0.1:9123");
+    expect(startupLog).toContain(`cwd=${workspaceDir}`);
+    expect(readdirSync(workspaceDir)).toEqual([]);
+  });
+
   it("captures root-to-topic transcript output and raw Telegram events", async () => {
     const harness = await buildHarness(new ScriptedCodex("complete"));
     harnesses.push(harness);
@@ -326,4 +379,10 @@ async function waitForCondition(condition: () => boolean, timeoutMs = 2000): Pro
   }
 
   throw new Error("Timed out waiting for condition");
+}
+
+function getHarnessStartupLog(harness: TelegramHarness): string {
+  const startupLog = harness.getLogs().find((entry) => entry.source === "harness" && entry.message.startsWith("Started harness"));
+  expect(startupLog).toBeDefined();
+  return startupLog!.message;
 }
