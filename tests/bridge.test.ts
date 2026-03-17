@@ -668,6 +668,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.deletions).toEqual([]);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
     expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex • <1s • 0 files • ?% left • /workspace • main");
+    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
+      preformattedEntities("gpt-5-codex • <1s • 0 files • ?% left • /workspace • main", "status")
+    );
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
 
     const turn = await database.getTurnById("turn-1");

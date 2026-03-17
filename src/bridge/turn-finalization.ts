@@ -198,13 +198,23 @@ export class TurnFinalizer {
   }
 }
 
+const CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS = 12_000;
+
 function computeContextLeftPercent(tokenUsage: TurnContext["tokenUsage"]): number | null {
   if (!tokenUsage?.modelContextWindow || tokenUsage.modelContextWindow <= 0) {
     return null;
   }
 
-  const remainingRatio = 1 - tokenUsage.total.totalTokens / tokenUsage.modelContextWindow;
-  return Math.max(0, Math.round(remainingRatio * 100));
+  // Match codex-cli's baseline-adjusted remaining-context calculation:
+  // codex-rs/protocol/src/protocol.rs `percent_of_context_window_remaining`.
+  if (tokenUsage.modelContextWindow <= CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS) {
+    return 0;
+  }
+
+  const effectiveWindow = tokenUsage.modelContextWindow - CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS;
+  const used = Math.max(0, tokenUsage.total.totalTokens - CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS);
+  const remaining = Math.max(0, effectiveWindow - used);
+  return Math.round((remaining / effectiveWindow) * 100);
 }
 
 function formatError(error: unknown): string {

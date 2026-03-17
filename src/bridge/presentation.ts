@@ -167,7 +167,7 @@ export function buildRenderedCommentaryMessage(text: string): TelegramRenderedMe
 }
 
 export function buildRenderedCompletionFooter(details: CompletionFooterDetails): TelegramRenderedMessage {
-  return buildRenderedCommentaryMessage(buildCompletionFooterText(details));
+  return renderPreformattedText(buildCompletionFooterText(details), "status");
 }
 
 export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
