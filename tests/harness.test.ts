@@ -21,6 +21,7 @@ class ScriptedCodex implements BridgeCodexApi {
   reasoningEffort = null;
   nextTurnId = 1;
   finalText = "Harness reply";
+  tokenUsage: ServerNotification | null = null;
   createdThreadIds: string[] = [];
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
 
@@ -52,6 +53,16 @@ class ScriptedCodex implements BridgeCodexApi {
     const turnId = `turn-${this.nextTurnId++}`;
     if (this.behavior === "complete") {
       setTimeout(() => {
+        if (this.tokenUsage) {
+          this.emitNotification({
+            ...this.tokenUsage,
+            params: {
+              ...this.tokenUsage.params,
+              threadId,
+              turnId
+            }
+          } as ServerNotification);
+        }
         this.emitNotification({
           method: "turn/completed",
           params: {
@@ -228,6 +239,43 @@ describe("Telegram harness", () => {
     expect(transcript.topics[0]?.messages.some((message) => message.text === "Approved result")).toBe(true);
     expect(transcript.topics[0]?.messages.some((message) => message.text.includes('Resolved item/commandExecution/requestApproval with "accept".'))).toBe(true);
     expect(harness.getTelegramEvents().some((event) => event.type === "telegram.answerCallbackQuery")).toBe(true);
+  });
+
+  it("shows codex-cli-aligned context left in the harness transcript footer", async () => {
+    const codex = new ScriptedCodex("complete");
+    codex.finalText = "Footer observation";
+    codex.tokenUsage = {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-ignored",
+        turnId: "turn-ignored",
+        tokenUsage: {
+          total: {
+            totalTokens: 26000,
+            inputTokens: 12000,
+            cachedInputTokens: 0,
+            outputTokens: 14000,
+            reasoningOutputTokens: 5000
+          },
+          last: {
+            totalTokens: 26000,
+            inputTokens: 12000,
+            cachedInputTokens: 0,
+            outputTokens: 14000,
+            reasoningOutputTokens: 5000
+          },
+          modelContextWindow: 32000
+        }
+      }
+    } as ServerNotification;
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Observe context footer");
+    await harness.waitForIdle();
+
+    const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
+    expect(footer).toBe("gpt-5-codex • <1s • 0 files • 55% left • /workspace • main");
   });
 });
 

@@ -244,9 +244,10 @@ function computeContextLeftPercent(tokenUsage: TurnContext["tokenUsage"]): numbe
   }
 
   const effectiveWindow = tokenUsage.modelContextWindow - CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS;
-  const used = Math.max(0, tokenUsage.total.totalTokens - CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS);
+  const tokensInContextWindow = Math.max(0, tokenUsage.total.totalTokens - tokenUsage.total.reasoningOutputTokens);
+  const used = Math.max(0, tokensInContextWindow - CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS);
   const remaining = Math.max(0, effectiveWindow - used);
-  return Math.round((remaining / effectiveWindow) * 100);
+  return Math.min(100, Math.max(0, Math.trunc((remaining / effectiveWindow) * 100)));
 }
 
 function formatError(error: unknown): string {
