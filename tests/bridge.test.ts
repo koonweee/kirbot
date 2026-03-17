@@ -1441,6 +1441,105 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")).toHaveLength(1);
   });
 
+  it("does not resend commentary as a normal message after publishing completed plan artifacts", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 789,
+      messageId: 301,
+      updateId: 401,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Inspecting files"
+      }
+    });
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "Inspecting files",
+          phase: "commentary"
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: ""
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "item/plan/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "plan-1",
+        delta: "Draft the rollout"
+      }
+    });
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: "1. Draft the rollout"
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.filter((message) => message.text === "Inspecting files")).toHaveLength(1);
+    expect(
+      telegram.sentMessages.find((message) => message.text === "Inspecting files")?.options?.entities
+    ).toEqual(preformattedEntities("Inspecting files", "kirbot"));
+    expect(telegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")).toHaveLength(1);
+  });
+
   it("flushes the latest draft after fast consecutive deltas", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

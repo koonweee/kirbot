@@ -240,7 +240,12 @@ export class CodexGateway {
       .map((item) => item.text)
       .join("\n\n");
     const assistantText =
-      finalAnswerText.trim().length > 0 ? finalAnswerText : agentMessages.map((item) => item.text).join("\n\n");
+      finalAnswerText.trim().length > 0
+        ? finalAnswerText
+        : agentMessages
+            .filter((item) => item.phase !== "commentary")
+            .map((item) => item.text)
+            .join("\n\n");
     const planText = planItems.map((item) => item.text).join("\n\n");
 
     return {

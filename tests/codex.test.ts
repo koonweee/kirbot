@@ -231,6 +231,78 @@ describe("CodexGateway", () => {
     });
   });
 
+  it("does not treat commentary as final assistant output when plan items are present", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      appServerUrl: "ws://127.0.0.1:8787",
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const readPromise = gateway.readTurnSnapshot("thread-1", "turn-1");
+    await Promise.resolve();
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1",
+          cwd: "/workspace",
+          gitInfo: {
+            branch: "main"
+          },
+          turns: [
+            {
+              id: "turn-1",
+              items: [
+                {
+                  type: "agentMessage",
+                  id: "item-1",
+                  text: "Inspecting files",
+                  phase: "commentary"
+                },
+                {
+                  type: "plan",
+                  id: "plan-1",
+                  text: "1. Draft the rollout"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    });
+
+    await expect(readPromise).resolves.toEqual({
+      text: "1. Draft the rollout",
+      assistantText: "",
+      planText: "1. Draft the rollout",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+  });
+
   it("passes collaborationMode through on turn/start when provided", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);

@@ -439,7 +439,7 @@ function renderFinalAssistantText(turn: RuntimeTurn): string {
     return renderAssistantText(items.filter((item) => item.phase === "final_answer"));
   }
 
-  return renderAssistantText(items);
+  return renderAssistantText(items.filter((item) => item.phase !== "commentary"));
 }
 
 function renderPlanText(turn: RuntimeTurn): string {

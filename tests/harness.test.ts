@@ -194,7 +194,7 @@ describe("Telegram harness", () => {
     expect(transcript.topics[0]?.messages.map((message) => message.text)).toEqual([
       "Inspect the repo",
       "Harness reply",
-      "gpt-5-codex • <1s • 0 files • ?% left • /workspace • main"
+      "gpt-5-codex • <1s • 0 files • 100% left • /workspace • main"
     ]);
 
     const eventTypes = harness.getTelegramEvents().map((event) => event.type);
@@ -275,7 +275,7 @@ describe("Telegram harness", () => {
     await harness.waitForIdle();
 
     const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
-    expect(footer).toBe("gpt-5-codex • <1s • 0 files • 55% left • /workspace • main");
+    expect(footer).toBe("gpt-5-codex • <1s • 0 files • 30% left • /workspace • main");
   });
 });
 

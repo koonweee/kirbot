@@ -155,7 +155,7 @@ describe("BridgeTurnRuntime", () => {
       itemPhase: "commentary",
       draftText: "",
       draftKind: null,
-      finalText: "Inspecting the repo",
+      finalText: "",
       startedAssistantText: true
     });
 
