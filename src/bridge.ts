@@ -21,7 +21,7 @@ import {
   buildQueuePreviewKeyboard,
   deriveTopicTitle,
   renderQueuePreview,
-  renderTurnControlMessage,
+  renderTurnControlMessage
 } from "./bridge/presentation";
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
@@ -56,6 +56,13 @@ type PreparedCodexInput = {
   input: UserInput[];
   images: PreparedImageFiles;
 };
+
+type ParsedSlashCommand = {
+  command: string;
+};
+
+const INVALID_COMMAND_TEXT = "This command is not valid here.";
+
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
   readonly #notificationChains = new Map<string, Promise<void>>();
@@ -133,45 +140,11 @@ export class TelegramCodexBridge {
     }
 
     if (message.topicId === null) {
-      await this.startSessionFromRootMessage(message);
+      await this.handleRootMessage(message);
       return;
     }
 
-    const resolvedPendingInput = await this.tryResolveUserInput(message);
-    if (resolvedPendingInput) {
-      return;
-    }
-
-    if (message.topicId !== null) {
-      const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
-      if (!session) {
-        await this.startSessionInExistingTopic(message);
-        return;
-      }
-
-      if (!session.codexThreadId) {
-        await this.#messenger.sendMessage({
-          chatId: message.chatId,
-          topicId: message.topicId,
-          text: "This topic is still provisioning a Codex session. Try again in a moment."
-        });
-        return;
-      }
-
-      const activeTurn = this.findActiveTurnByTopic(message.chatId, message.topicId);
-      if (activeTurn) {
-        await this.trySteerTurn(activeTurn, message);
-        return;
-      }
-
-      await this.sendTurnForSession(session, message);
-      return;
-    }
-
-    await this.#messenger.sendMessage({
-      chatId: message.chatId,
-      text: "Could not determine a Telegram topic for this message, so no Codex session was started."
-    });
+    await this.handleTopicMessage(message);
   }
 
   async handleTopicClosed(event: TopicLifecycleEvent): Promise<void> {
@@ -280,6 +253,73 @@ export class TelegramCodexBridge {
         text: "Failed to interrupt turn."
       });
     }
+  }
+
+  private async handleRootMessage(message: UserTurnMessage): Promise<void> {
+    const command = parseSlashCommand(message);
+    if (command) {
+      await this.sendInvalidSlashCommandMessage(message);
+      return;
+    }
+
+    await this.startSessionFromRootMessage(message);
+  }
+
+  private async handleTopicMessage(message: UserTurnMessage): Promise<void> {
+    const command = parseSlashCommand(message);
+    if (command) {
+      if (!this.isValidTopicSlashCommand(command)) {
+        await this.sendInvalidSlashCommandMessage(message);
+        return;
+      }
+
+      await this.handleTopicSlashCommand(message, command);
+      return;
+    }
+
+    const resolvedPendingInput = await this.tryResolveUserInput(message);
+    if (resolvedPendingInput) {
+      return;
+    }
+
+    if (message.topicId === null) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: "Could not determine a Telegram topic for this message, so no Codex session was started."
+      });
+      return;
+    }
+
+    const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
+    if (!session) {
+      await this.startSessionInExistingTopic(message);
+      return;
+    }
+
+    if (!session.codexThreadId) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: "This topic is still provisioning a Codex session. Try again in a moment."
+      });
+      return;
+    }
+
+    const activeTurn = this.findActiveTurnByTopic(message.chatId, message.topicId);
+    if (activeTurn) {
+      await this.trySteerTurn(activeTurn, message);
+      return;
+    }
+
+    await this.sendTurnForSession(session, message);
+  }
+
+  private isValidTopicSlashCommand(command: ParsedSlashCommand): boolean {
+    return false;
+  }
+
+  private async handleTopicSlashCommand(message: UserTurnMessage, _command: ParsedSlashCommand): Promise<void> {
+    await this.sendInvalidSlashCommandMessage(message);
   }
 
   private async stopActiveTurn(activeTurn: TurnContext, event: CallbackQueryEvent): Promise<void> {
@@ -531,6 +571,14 @@ export class TelegramCodexBridge {
     return this.#lifecycle.getActiveTurnByTopic(chatId, topicId);
   }
 
+  private async sendInvalidSlashCommandMessage(message: UserTurnMessage): Promise<void> {
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+      text: INVALID_COMMAND_TEXT
+    });
+  }
+
   private async resolveTurnText(threadId: string, turnId: string): Promise<string> {
     const streamedText = this.#lifecycle.renderAssistantItems(turnId);
     const readbackText = await this.codex.readTurnMessages(threadId, turnId);
@@ -710,6 +758,31 @@ export class TelegramCodexBridge {
     await this.syncQueuePreview(this.#lifecycle.getQueueState(chatId, topicId));
   }
 
+}
+
+function parseSlashCommand(message: UserTurnMessage): ParsedSlashCommand | null {
+  if (message.input.length !== 1) {
+    return null;
+  }
+
+  const [input] = message.input;
+  if (!input || input.type !== "text") {
+    return null;
+  }
+
+  const trimmed = input.text.trim();
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
+
+  const [token] = trimmed.split(/\s+/, 1);
+  if (!token || token === "/") {
+    return null;
+  }
+
+  return {
+    command: token.slice(1)
+  };
 }
 
 function topicKey(chatId: number, topicId: number): string {

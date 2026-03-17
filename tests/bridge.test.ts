@@ -407,6 +407,21 @@ describe("TelegramCodexBridge", () => {
     expect(session?.codexThreadId).toBe("thread-1");
   });
 
+  it("rejects root slash commands instead of creating a new topic", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "/stop"
+    });
+
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+  });
+
   it("ignores messages from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -447,6 +462,22 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
+  });
+
+  it("rejects slash commands in a topic before creating a session", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 778,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/help"
+    });
+
+    expect(codex.turns).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    const session = await database.getSessionByTopic(-1001, 778);
+    expect(session).toBeUndefined();
   });
 
   it("retains Telegram images until the turn completes", async () => {
@@ -1748,6 +1779,29 @@ describe("TelegramCodexBridge", () => {
         inline_keyboard: [[{ text: "Stop", callback_data: "turn:turn-1:stop" }]]
       }
     });
+  });
+
+  it("rejects unknown slash commands during an active turn instead of steering", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 401,
+      updateId: 501,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 402,
+      updateId: 502,
+      userId: 42,
+      text: "/help"
+    });
+
+    expect(codex.steerCalls).toEqual([]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
   });
 
   it("interrupts the active turn from the stop control and cleans it up on completion", async () => {
