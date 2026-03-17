@@ -138,24 +138,6 @@ export function buildQueuePreviewKeyboard(
   };
 }
 
-export function renderTurnControlMessage(state: "active" | "stopping" | "finishing"): string {
-  switch (state) {
-    case "stopping":
-      return "Stopping this turn…";
-    case "finishing":
-      return "This turn is already finishing…";
-    case "active":
-    default:
-      return "Working on this request. Send another message to steer, or tap Stop.";
-  }
-}
-
-export function buildTurnControlKeyboard(turnId: string): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [[{ text: "Stop", callback_data: `turn:${turnId}:stop` }]]
-  };
-}
-
 export function renderTelegramStatusDraft(statusDraft: TurnStatusDraft | null): TelegramRenderedMessage | null {
   return statusDraft ? { text: buildStatusText(statusDraft) } : null;
 }

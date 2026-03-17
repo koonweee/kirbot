@@ -15,7 +15,6 @@ export type TurnContext = {
   threadId: string;
   turnId: string;
   phase: TurnPhase;
-  stopControlMessageId: number | null;
   stopRequested: boolean;
   submitPendingSteersAfterInterrupt: boolean;
   statusDraft: TurnStatusDraft | null;

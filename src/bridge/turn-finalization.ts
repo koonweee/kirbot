@@ -108,7 +108,6 @@ export class TurnFinalizer {
     }
 
     transitionTurnPhase(context, "finalizing");
-    await this.clearTurnControlMessage(context);
     await context.statusHandle.clear();
 
     for (const [itemId, commentary] of context.commentaryStreams) {
@@ -158,22 +157,6 @@ export class TurnFinalizer {
 
     return firstMessageId;
   }
-
-  private async clearTurnControlMessage(context: TurnContext): Promise<void> {
-    if (context.stopControlMessageId === null) {
-      return;
-    }
-
-    try {
-      await this.deps.telegram.deleteMessage(context.chatId, context.stopControlMessageId);
-    } catch (error) {
-      if (!isTelegramMessageMissingError(error)) {
-        console.warn("Failed to delete turn control message", error);
-      }
-    } finally {
-      context.stopControlMessageId = null;
-    }
-  }
 }
 
 function formatError(error: unknown): string {
@@ -182,19 +165,4 @@ function formatError(error: unknown): string {
   }
 
   return String(error);
-}
-
-function isTelegramMessageMissingError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const maybeTelegramError = error as { error_code?: unknown; description?: unknown };
-  return (
-    maybeTelegramError.error_code === 400 &&
-    typeof maybeTelegramError.description === "string" &&
-    (maybeTelegramError.description.toLowerCase().includes("message to edit not found") ||
-      maybeTelegramError.description.toLowerCase().includes("message to delete not found") ||
-      maybeTelegramError.description.toLowerCase().includes("not found"))
-  );
 }

@@ -612,7 +612,6 @@ describe("TelegramCodexBridge", () => {
       userId: 42,
       text: "Explain the fix"
     });
-    const stopControlMessageId = telegram.sentMessages.at(-1)?.messageId;
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking");
@@ -642,9 +641,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
-    expect(telegram.deletions).toEqual(
-      stopControlMessageId ? [{ chatId: -1001, messageId: stopControlMessageId }] : []
-    );
+    expect(telegram.deletions).toEqual([]);
     expect(telegram.sentMessages.at(-1)?.text).toBe("Working on it");
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
 
@@ -1759,7 +1756,7 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
-  it("sends a stop control reply for each active turn", async () => {
+  it("does not send a separate stop control message for active turns", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1769,16 +1766,7 @@ describe("TelegramCodexBridge", () => {
       text: "Inspect the current failure"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe(
-      "Working on this request. Send another message to steer, or tap Stop."
-    );
-    expect(telegram.sentMessages.at(-1)?.options).toEqual({
-      message_thread_id: 777,
-      reply_to_message_id: 400,
-      reply_markup: {
-        inline_keyboard: [[{ text: "Stop", callback_data: "turn:turn-1:stop" }]]
-      }
-    });
+    expect(telegram.sentMessages).toEqual([]);
   });
 
   it("rejects unknown slash commands during an active turn instead of steering", async () => {
@@ -1804,31 +1792,32 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
   });
 
-  it("interrupts the active turn from the stop control and cleans it up on completion", async () => {
+  it("interrupts the active turn from /stop", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
-      messageId: 401,
-      updateId: 501,
+      messageId: 403,
+      updateId: 503,
       userId: 42,
       text: "Inspect the current failure"
     });
 
-    const stopControlMessageId = telegram.sentMessages.at(-1)?.messageId;
-
-    await bridge.handleCallbackQuery({
-      callbackQueryId: "callback-stop",
-      data: "turn:turn-1:stop",
+    await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
-      userId: 42
+      messageId: 404,
+      updateId: 504,
+      userId: 42,
+      text: "/stop"
     });
 
     expect(codex.interruptCalls).toEqual([{ threadId: "thread-1", turnId: "turn-1" }]);
-    expect(telegram.edits).toContainEqual({
+    expect(telegram.sentMessages.at(-1)).toMatchObject({
       chatId: -1001,
-      messageId: stopControlMessageId ?? -1,
-      text: "Stopping this turn…"
+      text: "Stopping the current response…",
+      options: {
+        message_thread_id: 777
+      }
     });
 
     codex.emitNotification({
@@ -1845,10 +1834,23 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.deletions).toContainEqual({
+    expect(telegram.deletions).toEqual([]);
+  });
+
+  it("replies that /stop is not valid when there is no active response", async () => {
+    await bridge.handleUserTextMessage({
       chatId: -1001,
-      messageId: stopControlMessageId ?? -1
+      topicId: 779,
+      messageId: 405,
+      updateId: 505,
+      userId: 42,
+      text: "/stop"
     });
+
+    expect(codex.interruptCalls).toEqual([]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("There is no active response to stop right now.");
+    const session = await database.getSessionByTopic(-1001, 779);
+    expect(session).toBeUndefined();
   });
 
   it("interrupts the active turn and immediately submits merged pending steers", async () => {
@@ -2176,9 +2178,18 @@ describe("TelegramCodexBridge", () => {
       text: "Inspect the current failure"
     });
 
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 402,
+      updateId: 502,
+      userId: 42,
+      text: "Queued steer"
+    });
+
     await bridge.handleCallbackQuery({
-      callbackQueryId: "callback-stop-unauthorized",
-      data: "turn:turn-1:stop",
+      callbackQueryId: "callback-send-now-unauthorized",
+      data: "turn:turn-1:sendNow",
       chatId: -1001,
       topicId: 777,
       userId: 99

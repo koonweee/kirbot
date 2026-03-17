@@ -5,15 +5,12 @@ import {
   buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
-  buildTurnControlKeyboard,
   isSameStatusDraft,
   renderTelegramAssistantDraft,
   renderTelegramCommentaryDraft,
   renderTelegramStatusDraft,
-  renderTurnControlMessage,
   type TurnStatusDraft
 } from "./presentation";
-import type { InlineKeyboardMarkup } from "../telegram-messenger";
 import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import {
@@ -42,7 +39,6 @@ export class TurnLifecycleCoordinator {
       threadId,
       turnId,
       phase: "submitting",
-      stopControlMessageId: null,
       stopRequested: false,
       submitPendingSteersAfterInterrupt: false,
       statusDraft: buildStatusDraft("thinking"),
@@ -149,55 +145,6 @@ export class TurnLifecycleCoordinator {
 
     context.stopRequested = false;
     return context;
-  }
-
-  async sendTurnControlMessage(turnId: string, replyToMessageId: number): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (!context) {
-      return;
-    }
-
-    try {
-      const message = await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        text: renderTurnControlMessage("active"),
-        replyToMessageId,
-        replyMarkup: buildTurnControlKeyboard(context.turnId)
-      });
-      context.stopControlMessageId = message.messageId;
-    } catch (error) {
-      console.warn("Failed to send turn control message", error);
-    }
-  }
-
-  async updateTurnControlMessage(
-    turnId: string,
-    text: string,
-    replyMarkup?: InlineKeyboardMarkup
-  ): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (!context || context.stopControlMessageId === null) {
-      return;
-    }
-
-    try {
-      const options = replyMarkup
-        ? {
-            message_thread_id: context.topicId,
-            reply_markup: replyMarkup
-          }
-        : {
-            message_thread_id: context.topicId
-          };
-      await this.deps.telegram.editMessageText(context.chatId, context.stopControlMessageId, text, options);
-    } catch (error) {
-      if (isTelegramMessageMissingError(error)) {
-        context.stopControlMessageId = null;
-        return;
-      }
-      console.warn("Failed to update turn control message", error);
-    }
   }
 
   async updateStatus(
@@ -390,19 +337,4 @@ export class TurnLifecycleCoordinator {
     context.commentaryStreams.set(itemId, created);
     return created;
   }
-}
-
-function isTelegramMessageMissingError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const maybeTelegramError = error as { error_code?: unknown; description?: unknown };
-  return (
-    maybeTelegramError.error_code === 400 &&
-    typeof maybeTelegramError.description === "string" &&
-    (maybeTelegramError.description.toLowerCase().includes("message to edit not found") ||
-      maybeTelegramError.description.toLowerCase().includes("message to delete not found") ||
-      maybeTelegramError.description.toLowerCase().includes("not found"))
-  );
 }
