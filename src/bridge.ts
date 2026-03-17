@@ -61,6 +61,11 @@ type ParsedSlashCommand = {
   command: string;
 };
 
+type RootSessionStartContext = {
+  topicLink: string | null;
+  rootMessageId: number;
+};
+
 const INVALID_COMMAND_TEXT = "This command is not valid here.";
 const NO_ACTIVE_RESPONSE_TO_STOP_TEXT = "There is no active response to stop right now.";
 const STOPPING_CURRENT_RESPONSE_TEXT = "Stopping the current response…";
@@ -392,13 +397,17 @@ export class TelegramCodexBridge {
   private async startSessionFromRootMessage(message: UserTurnMessage): Promise<void> {
     const title = deriveTopicTitle(message.text);
     const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
+    const rootContext: RootSessionStartContext = {
+      topicLink: await this.tryBuildTopicDeepLink(message.chatId, forumTopic.message_thread_id),
+      rootMessageId: message.messageId
+    };
     await this.startSessionInTopic(
       {
         ...message,
         topicId: forumTopic.message_thread_id
       },
       title,
-      `Created session topic "${title}". Continue in the new topic.`
+      rootContext
     );
   }
 
@@ -414,7 +423,7 @@ export class TelegramCodexBridge {
   private async startSessionInTopic(
     message: UserTurnMessage,
     title: string,
-    lobbyAnnouncement?: string
+    rootContext?: RootSessionStartContext
   ): Promise<void> {
     if (message.topicId === null) {
       throw new Error("Cannot start a session without a Telegram topic id");
@@ -432,12 +441,8 @@ export class TelegramCodexBridge {
       const thread = await this.codex.createThread(title);
       const session = await this.database.activateSession(pending.id, thread.threadId);
 
-      if (lobbyAnnouncement) {
-        await this.#messenger.sendMessage({
-          chatId: message.chatId,
-          text: lobbyAnnouncement
-        });
-      }
+      await this.maybeSendRootTopicLink(message.chatId, rootContext?.topicLink);
+      await this.maybeCopyRootMessageToTopic(message.chatId, message.topicId, rootContext?.rootMessageId);
 
       await this.sendTurnForSession(session, message);
     } catch (error) {
@@ -447,6 +452,53 @@ export class TelegramCodexBridge {
         topicId: message.topicId,
         text: `Failed to create Codex session for "${title}": ${formatError(error)}`
       });
+    }
+  }
+
+  private async tryBuildTopicDeepLink(chatId: number, topicId: number): Promise<string | null> {
+    try {
+      const chat = await this.telegram.getChat(chatId);
+      if (chat.username) {
+        return `https://t.me/${chat.username}/${topicId}`;
+      }
+
+      return buildPrivateTopicDeepLink(chatId, topicId);
+    } catch (error) {
+      console.error("Failed to build Telegram topic deep link", error);
+      return null;
+    }
+  }
+
+  private async maybeSendRootTopicLink(chatId: number, topicLink: string | null | undefined): Promise<void> {
+    if (!topicLink) {
+      return;
+    }
+
+    try {
+      await this.#messenger.sendMessage({
+        chatId,
+        text: topicLink
+      });
+    } catch (error) {
+      console.error("Failed to send Telegram topic deep link", error);
+    }
+  }
+
+  private async maybeCopyRootMessageToTopic(
+    chatId: number,
+    topicId: number,
+    rootMessageId: number | undefined
+  ): Promise<void> {
+    if (rootMessageId === undefined) {
+      return;
+    }
+
+    try {
+      await this.telegram.copyMessage(chatId, chatId, rootMessageId, {
+        message_thread_id: topicId
+      });
+    } catch (error) {
+      console.error("Failed to copy root message into Telegram topic", error);
     }
   }
 
@@ -815,6 +867,15 @@ function parseSlashCommand(message: UserTurnMessage): ParsedSlashCommand | null 
   return {
     command: token.slice(1)
   };
+}
+
+function buildPrivateTopicDeepLink(chatId: number, topicId: number): string {
+  const chatIdText = String(chatId);
+  if (!chatIdText.startsWith("-100")) {
+    throw new Error(`Cannot derive private topic link for chat id ${chatId}`);
+  }
+
+  return `https://t.me/c/${chatIdText.slice(4)}/${topicId}`;
 }
 
 function topicKey(chatId: number, topicId: number): string {

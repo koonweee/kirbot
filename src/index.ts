@@ -56,7 +56,15 @@ async function main(): Promise<void> {
   const bot = new Bot(config.telegram.botToken);
   const telegramApi: TelegramApi = {
     createForumTopic: (chatId, name) => bot.api.createForumTopic(chatId, name),
+    getChat: async (chatId) => {
+      const chat = await bot.api.getChat(chatId);
+      return {
+        ...(chat.username ? { username: chat.username } : {})
+      };
+    },
     sendMessage: (chatId, text, options) => bot.api.sendMessage(chatId, text, options),
+    copyMessage: (chatId, fromChatId, messageId, options) =>
+      bot.api.copyMessage(chatId, fromChatId, messageId, options),
     sendMessageDraft: (chatId, draftId, text, options) => bot.api.sendMessageDraft(chatId, draftId, text, options),
     sendChatAction: (chatId, action, options) => bot.api.sendChatAction(chatId, action, options),
     editMessageText: (chatId, messageId, text, options) => bot.api.editMessageText(chatId, messageId, text, options),

@@ -217,14 +217,26 @@ class FakeTelegram implements TelegramApi {
   messageCounter = 500;
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
+  nextCopyMessageError: Error | null = null;
+  nextGetChatError: Error | null = null;
+  chatUsername: string | undefined = "kirbot-test-chat";
   draftBlocks: Array<Promise<void>> = [];
   events: string[] = [];
+  getChatCalls: Array<{ chatId: number }> = [];
   chatActions: Array<{
     chatId: number;
     action: "typing" | "upload_document";
     options?: { message_thread_id?: number };
   }> = [];
   createdTopics: Array<{ chatId: number; name: string }> = [];
+  copiedMessages: Array<{
+    chatId: number;
+    fromChatId: number;
+    messageId: number;
+    options?: {
+      message_thread_id?: number;
+    };
+  }> = [];
   sentMessages: Array<{
     messageId: number;
     chatId: number;
@@ -267,6 +279,17 @@ class FakeTelegram implements TelegramApi {
     return { message_thread_id: this.topicCounter, name };
   }
 
+  async getChat(chatId: number): Promise<{ username?: string }> {
+    this.getChatCalls.push({ chatId });
+    if (this.nextGetChatError) {
+      const error = this.nextGetChatError;
+      this.nextGetChatError = null;
+      throw error;
+    }
+
+    return this.chatUsername ? { username: this.chatUsername } : {};
+  }
+
   async sendMessage(
     chatId: number,
     text: string,
@@ -284,6 +307,25 @@ class FakeTelegram implements TelegramApi {
         ? { messageId: this.messageCounter, chatId, text, options }
         : { messageId: this.messageCounter, chatId, text }
     );
+    return { message_id: this.messageCounter };
+  }
+
+  async copyMessage(
+    chatId: number,
+    fromChatId: number,
+    messageId: number,
+    options?: {
+      message_thread_id?: number;
+    }
+  ): Promise<{ message_id: number }> {
+    if (this.nextCopyMessageError) {
+      const error = this.nextCopyMessageError;
+      this.nextCopyMessageError = null;
+      throw error;
+    }
+
+    this.messageCounter += 1;
+    this.copiedMessages.push(options ? { chatId, fromChatId, messageId, options } : { chatId, fromChatId, messageId });
     return { message_id: this.messageCounter };
   }
 
@@ -425,10 +467,122 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-1"
       }
     ]);
+    expect(telegram.getChatCalls).toEqual([{ chatId: -1001 }]);
+    expect(telegram.sentMessages[0]).toMatchObject({
+      chatId: -1001,
+      text: "https://t.me/kirbot-test-chat/101"
+    });
+    expect(telegram.copiedMessages).toEqual([
+      {
+        chatId: -1001,
+        fromChatId: -1001,
+        messageId: 10,
+        options: {
+          message_thread_id: 101
+        }
+      }
+    ]);
 
     const session = await database.getSessionByTopic(-1001, 101);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+  });
+
+  it("uses a private supergroup deep link when the chat has no username", async () => {
+    telegram.chatUsername = undefined;
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001234567890,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(telegram.sentMessages[0]).toMatchObject({
+      chatId: -1001234567890,
+      text: "https://t.me/c/1234567890/101"
+    });
+    expect(telegram.copiedMessages).toEqual([
+      {
+        chatId: -1001234567890,
+        fromChatId: -1001234567890,
+        messageId: 10,
+        options: {
+          message_thread_id: 101
+        }
+      }
+    ]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "Fix the failing deployment tests",
+        turnId: "turn-1"
+      }
+    ]);
+  });
+
+  it("continues session startup when copying the root prompt into the topic fails", async () => {
+    telegram.nextCopyMessageError = new Error("copy failed");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(telegram.sentMessages[0]).toMatchObject({
+      chatId: -1001,
+      text: "https://t.me/kirbot-test-chat/101"
+    });
+    expect(telegram.copiedMessages).toEqual([]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "Fix the failing deployment tests",
+        turnId: "turn-1"
+      }
+    ]);
+    const session = await database.getSessionByTopic(-1001, 101);
+    expect(session?.status).toBe("active");
+  });
+
+  it("continues session startup when the topic deep link cannot be built", async () => {
+    telegram.nextGetChatError = new Error("chat lookup failed");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(telegram.sentMessages).toEqual([]);
+    expect(telegram.copiedMessages).toEqual([
+      {
+        chatId: -1001,
+        fromChatId: -1001,
+        messageId: 10,
+        options: {
+          message_thread_id: 101
+        }
+      }
+    ]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "Fix the failing deployment tests",
+        turnId: "turn-1"
+      }
+    ]);
+    const session = await database.getSessionByTopic(-1001, 101);
+    expect(session?.status).toBe("active");
   });
 
   it("rejects root slash commands instead of creating a new topic", async () => {
