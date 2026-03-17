@@ -59,6 +59,10 @@ export function buildRestartArgs(targetName) {
   ];
 }
 
+export function buildClearHistoryArgs(targetName) {
+  return ["clear-history", "-t", `${getTarget(targetName).sessionName}:0.0`];
+}
+
 function printHelp() {
   console.log("Usage: node scripts/tmux-session.mjs <ensure|attach|restart> <dev|start>");
   console.log("");
@@ -136,8 +140,9 @@ function restartSession(targetName) {
     return;
   }
 
+  runTmux(buildClearHistoryArgs(targetName));
   runTmux(buildRestartArgs(targetName));
-  console.log(`Restarted tmux session ${target.sessionName} (${buildSessionCommand(targetName)}).`);
+  console.log(`Restarted tmux session ${target.sessionName} (${buildSessionCommand(targetName)}) and cleared pane history.`);
 }
 
 export function runTmuxSessionCli(argv = process.argv.slice(2)) {

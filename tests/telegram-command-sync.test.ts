@@ -79,6 +79,7 @@ describe("TelegramCommandSync", () => {
   it("configures the commands menu and a single visible command list at startup", async () => {
     const telegram = new FakeTelegramCommandApi();
     const sync = new TelegramCommandSync(telegram, 42);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     await sync.initialize();
 
@@ -144,6 +145,16 @@ describe("TelegramCommandSync", () => {
           }
         }
       }
+    ]);
+    expect(infoSpy.mock.calls).toEqual([
+      ["Telegram command sync: starting set visible commands for default scope."],
+      ["Telegram command sync: completed set visible commands for default scope."],
+      ["Telegram command sync: starting set commands menu button for default scope."],
+      ["Telegram command sync: completed set commands menu button for default scope."],
+      ["Telegram command sync: starting set commands menu button for private chat 42."],
+      ["Telegram command sync: completed set commands menu button for private chat 42."],
+      ["Telegram command sync: starting set visible commands for private chat 42."],
+      ["Telegram command sync: completed set visible commands for private chat 42."]
     ]);
   });
 

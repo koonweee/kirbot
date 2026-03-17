@@ -17,6 +17,7 @@ type TmuxSessionModule = {
   };
   buildNewSessionArgs(targetName: string): string[];
   buildAttachArgs(targetName: string, insideTmux: boolean): string[];
+  buildClearHistoryArgs(targetName: string): string[];
   buildRestartArgs(targetName: string): string[];
 };
 
@@ -61,6 +62,11 @@ describe("tmux-session helper", () => {
   });
 
   it("restarts the production pane in place", () => {
+    expect(tmuxSession.buildClearHistoryArgs("start")).toEqual([
+      "clear-history",
+      "-t",
+      "kirbot-prod:0.0"
+    ]);
     expect(tmuxSession.buildRestartArgs("start")).toEqual([
       "respawn-pane",
       "-k",

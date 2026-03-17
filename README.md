@@ -124,7 +124,7 @@ Notes:
 - `npm run dev` is the watched local development entrypoint.
 - Detached tmux sessions use stable names: `kirbot-dev` for `npm run dev` and `kirbot-prod` for `npm start`.
 - The attach scripts connect to the existing tmux session, or switch clients if already inside tmux, so they are the fastest way for an agent to inspect live process output.
-- The restart scripts recreate the pane command in place and create the session first if it does not already exist.
+- The restart scripts clear the pane scrollback, recreate the pane command in place, and create the session first if it does not already exist.
 - Detached production sessions assume `dist/` is already built. Run `npm run build` before `npm run start:tmux` or `npm run start:tmux:restart`.
 
 Attribution: side profile Kirby by @KIRBYSWARPSTAR on X.

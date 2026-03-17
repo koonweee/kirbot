@@ -40,19 +40,27 @@ export class TelegramCommandSync {
   ) {}
 
   async initialize(): Promise<void> {
-    await this.applyVisibleCommands({
-      type: "default"
+    await this.runStartupStep("set visible commands for default scope", async () => {
+      await this.applyVisibleCommands({
+        type: "default"
+      });
     });
-    await this.telegram.setChatMenuButton({
-      menu_button: COMMANDS_MENU_BUTTON
+    await this.runStartupStep("set commands menu button for default scope", async () => {
+      await this.telegram.setChatMenuButton({
+        menu_button: COMMANDS_MENU_BUTTON
+      });
     });
-    await this.telegram.setChatMenuButton({
-      chat_id: this.privateChatId,
-      menu_button: COMMANDS_MENU_BUTTON
+    await this.runStartupStep(`set commands menu button for private chat ${this.privateChatId}`, async () => {
+      await this.telegram.setChatMenuButton({
+        chat_id: this.privateChatId,
+        menu_button: COMMANDS_MENU_BUTTON
+      });
     });
-    await this.applyVisibleCommands({
-      type: "chat",
-      chat_id: this.privateChatId
+    await this.runStartupStep(`set visible commands for private chat ${this.privateChatId}`, async () => {
+      await this.applyVisibleCommands({
+        type: "chat",
+        chat_id: this.privateChatId
+      });
     });
   }
 
@@ -64,6 +72,12 @@ export class TelegramCommandSync {
     }
 
     await this.telegram.setMyCommands(commands, { scope });
+  }
+
+  private async runStartupStep(description: string, operation: () => Promise<void>): Promise<void> {
+    console.info(`Telegram command sync: starting ${description}.`);
+    await operation();
+    console.info(`Telegram command sync: completed ${description}.`);
   }
 }
 
