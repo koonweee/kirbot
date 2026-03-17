@@ -90,7 +90,14 @@ class FakeTelegram implements TelegramApi {
 function createHarness(
   resolvedSnapshot:
     | string
-    | { text: string; changedFiles?: number; cwd?: string | null; branch?: string | null } = { text: "" }
+    | {
+        text: string;
+        assistantText?: string;
+        planText?: string;
+        changedFiles?: number;
+        cwd?: string | null;
+        branch?: string | null;
+      } = { text: "" }
 ): {
   coordinator: TurnLifecycleCoordinator;
   telegram: FakeTelegram;
@@ -112,9 +119,18 @@ function createHarness(
   const queuedFollowUps: Array<{ chatId: number; topicId: number; message: UserTurnMessage }> = [];
   const snapshot =
     typeof resolvedSnapshot === "string"
-      ? { text: resolvedSnapshot, changedFiles: 0, cwd: "/workspace", branch: "main" }
+      ? {
+          text: resolvedSnapshot,
+          assistantText: resolvedSnapshot,
+          planText: "",
+          changedFiles: 0,
+          cwd: "/workspace",
+          branch: "main"
+        }
       : {
           text: resolvedSnapshot.text,
+          assistantText: resolvedSnapshot.assistantText ?? resolvedSnapshot.text,
+          planText: resolvedSnapshot.planText ?? "",
           changedFiles: resolvedSnapshot.changedFiles ?? 0,
           cwd: resolvedSnapshot.cwd ?? "/workspace",
           branch: resolvedSnapshot.branch ?? "main"
@@ -135,6 +151,8 @@ function createHarness(
     },
     resolveTurnSnapshot: async () => ({
       text: snapshot.text,
+      assistantText: snapshot.assistantText,
+      planText: snapshot.planText,
       changedFiles: snapshot.changedFiles,
       cwd: snapshot.cwd,
       branch: snapshot.branch
@@ -212,6 +230,39 @@ describe("TurnLifecycleCoordinator", () => {
       pendingSteers: [],
       queuedFollowUps: []
     });
+  });
+
+  it("persists completed plan items without duplicating them at turn finalization", async () => {
+    const harness = createHarness({
+      text: "1. Draft the rollout",
+      assistantText: "",
+      planText: "1. Draft the rollout"
+    });
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleItemStarted("turn-1", {
+      type: "plan",
+      id: "plan-1",
+      text: ""
+    });
+    await harness.coordinator.handlePlanDelta("turn-1", "plan-1", "Draft the rollout");
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "plan",
+      id: "plan-1",
+      text: "1. Draft the rollout"
+    });
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.filter((message) => message.text.startsWith("Plan"))).toEqual([
+      {
+        chatId: -1001,
+        text: "Plan\n\n1. Draft the rollout",
+        options: {
+          message_thread_id: 777
+        }
+      }
+    ]);
+    expect(harness.appendCalls.at(-1)).toBe("1. Draft the rollout");
   });
 
   it("submits merged pending steers when an interrupted turn is finalized with send-now intent", async () => {
@@ -327,7 +378,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5 • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
+      "gpt-5 • <1s • 2 files • 0% left • /home/tester/kirbot • feature/footer"
     );
   });
 });

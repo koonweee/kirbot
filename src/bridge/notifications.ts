@@ -14,6 +14,7 @@ export function getNotificationTurnId(notification: ServerNotification): string 
     case "item/commandExecution/outputDelta":
     case "item/fileChange/outputDelta":
     case "item/agentMessage/delta":
+    case "item/plan/delta":
     case "item/completed":
     case "error":
       return notification.params.turnId;

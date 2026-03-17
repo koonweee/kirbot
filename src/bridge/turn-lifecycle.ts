@@ -2,17 +2,19 @@ import type { UserTurnMessage } from "../domain";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
 import {
+  buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
   buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
   isSameStatusDraft,
   renderTelegramAssistantDraft,
+  renderTelegramPlanDraft,
   renderTelegramCommentaryDraft,
   renderTelegramStatusDraft,
   type TurnStatusDraft
 } from "./presentation";
-import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
+import { type AssistantRenderUpdate, type PlanRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import {
   type TurnLifecycleDependencies,
@@ -58,6 +60,8 @@ export class TurnLifecycleCoordinator {
         draftId: buildStableDraftId(`${turnId}:final`)
       }),
       commentaryStreams: new Map(),
+      planStreams: new Map(),
+      publishedPlanMessages: 0,
       model,
       tokenUsage: null
     };
@@ -94,6 +98,10 @@ export class TurnLifecycleCoordinator {
 
   renderAssistantItems(turnId: string): string {
     return this.deps.runtime.renderAssistantItems(turnId);
+  }
+
+  renderPlanItems(turnId: string): string {
+    return this.deps.runtime.renderPlanItems(turnId);
   }
 
   queuePendingSteer(turnId: string, message: UserTurnMessage): { localId: string; queueState: QueueStateSnapshot } | null {
@@ -211,12 +219,24 @@ export class TurnLifecycleCoordinator {
   async handleItemStarted(turnId: string, item: ThreadItem): Promise<void> {
     if (item.type === "agentMessage") {
       this.deps.runtime.registerAssistantItem(turnId, item.id, item.phase);
+    } else if (item.type === "plan") {
+      this.deps.runtime.registerPlanItem(turnId, item.id);
     }
     await this.updateStatus(turnId, buildStatusDraftForItem(item));
   }
 
-  async handlePlanUpdated(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("planning"));
+  async handlePlanUpdated(turnId: string, details: string | null): Promise<void> {
+    await this.updateStatus(turnId, buildStatusDraft("planning", details));
+  }
+
+  async handlePlanDelta(turnId: string, itemId: string, delta: string): Promise<void> {
+    const context = this.#turns.get(turnId);
+    const update = this.deps.runtime.appendPlanDelta(turnId, itemId, delta);
+    if (!context || !update) {
+      return;
+    }
+
+    await this.handlePlanRenderUpdate(context, update, "delta", true);
   }
 
   async handleReasoningDelta(turnId: string): Promise<void> {
@@ -258,6 +278,17 @@ export class TurnLifecycleCoordinator {
       if (queueState) {
         await this.deps.syncQueuePreview(queueState);
       }
+      return;
+    }
+
+    if (item.type === "plan") {
+      const context = this.#turns.get(turnId);
+      const update = this.deps.runtime.commitPlanItem(turnId, item.id, item.text);
+      if (!context || !update) {
+        return;
+      }
+
+      await this.handlePlanRenderUpdate(context, update, "completed", true);
       return;
     }
 
@@ -357,6 +388,25 @@ export class TurnLifecycleCoordinator {
     }
   }
 
+  private async handlePlanRenderUpdate(
+    context: TurnContext,
+    update: PlanRenderUpdate,
+    stage: "delta" | "completed",
+    forceDraft = false
+  ): Promise<void> {
+    const plan = this.getOrCreatePlanStream(context, update.itemId);
+    plan.text = update.itemText;
+
+    if (stage === "completed") {
+      await plan.handle.finalize(buildRenderedPlanMessages(update.itemText));
+      context.planStreams.delete(update.itemId);
+      context.publishedPlanMessages += 1;
+      return;
+    }
+
+    await plan.handle.update(renderTelegramPlanDraft(update.itemText || "…"), forceDraft);
+  }
+
   private getOrCreateCommentaryStream(context: TurnContext, itemId: string) {
     const existing = context.commentaryStreams.get(itemId);
     if (existing) {
@@ -372,6 +422,24 @@ export class TurnLifecycleCoordinator {
       text: ""
     };
     context.commentaryStreams.set(itemId, created);
+    return created;
+  }
+
+  private getOrCreatePlanStream(context: TurnContext, itemId: string) {
+    const existing = context.planStreams.get(itemId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = {
+      handle: this.deps.messenger.streamMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        draftId: buildStableDraftId(`${context.turnId}:plan:${itemId}`)
+      }),
+      text: ""
+    };
+    context.planStreams.set(itemId, created);
     return created;
   }
 }

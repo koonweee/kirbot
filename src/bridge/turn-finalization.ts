@@ -1,6 +1,7 @@
 import type { UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
+  buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
   buildRenderedCompletionFooter,
   type CompletionFooterDetails
@@ -16,6 +17,8 @@ import {
 
 export type ResolvedTurnSnapshot = {
   text: string;
+  assistantText: string;
+  planText: string;
   changedFiles: number;
   cwd: string | null;
   branch: string | null;
@@ -27,7 +30,12 @@ export type TurnLifecycleDependencies = {
   telegram: TelegramApi;
   releaseTurnFiles(turnId: string): Promise<void>;
   appendTurnStream(turnId: string, streamText: string): Promise<void>;
-  completePersistedTurn(turnId: string, messageId: number | null, status: TerminalTurnStatus): Promise<void>;
+  completePersistedTurn(
+    turnId: string,
+    messageId: number | null,
+    status: TerminalTurnStatus,
+    resolvedText: { assistantText: string; planText: string }
+  ): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
   maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void>;
@@ -68,9 +76,17 @@ export class TurnFinalizer {
     await this.beginFinalization(context);
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
     const finalText = policy.buildFinalText(snapshot.text);
+    const shouldReusePublishedPlanOutput =
+      policy.terminalStatus === "completed" &&
+      snapshot.assistantText.trim().length === 0 &&
+      context.publishedPlanMessages > 0;
     const messageId =
-      finalText.trim().length > 0 || policy.publishWhenEmpty
-        ? await this.publishFinalTurnText(context, finalText)
+      !shouldReusePublishedPlanOutput && (finalText.trim().length > 0 || policy.publishWhenEmpty)
+        ? await this.publishFinalTurnText(
+            context,
+            finalText,
+            snapshot.assistantText.trim().length > 0 ? "assistant" : "plan"
+          )
         : null;
 
     if (policy.publishFooter) {
@@ -78,7 +94,10 @@ export class TurnFinalizer {
     }
 
     await this.deps.appendTurnStream(context.turnId, finalText);
-    await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus);
+    await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus, {
+      assistantText: snapshot.assistantText,
+      planText: snapshot.planText
+    });
     await this.deps.releaseTurnFiles(context.turnId);
 
     const queueState = this.deps.runtime.finalizeTurn(context.turnId);
@@ -136,11 +155,25 @@ export class TurnFinalizer {
       }
       context.commentaryStreams.delete(itemId);
     }
+
+    for (const [itemId, plan] of context.planStreams) {
+      if (plan.text.trim().length > 0) {
+        await plan.handle.finalize(buildRenderedPlanMessages(plan.text));
+        context.publishedPlanMessages += 1;
+      } else {
+        await plan.handle.clear();
+      }
+      context.planStreams.delete(itemId);
+    }
   }
 
-  private async publishFinalTurnText(context: TurnContext, text: string): Promise<number> {
-    const outputs = buildRenderedAssistantMessages(text);
-    if (this.deps.runtime.getTurn(context.turnId)?.hasAssistantText) {
+  private async publishFinalTurnText(
+    context: TurnContext,
+    text: string,
+    kind: "assistant" | "plan"
+  ): Promise<number> {
+    const outputs = kind === "assistant" ? buildRenderedAssistantMessages(text) : buildRenderedPlanMessages(text);
+    if (kind === "assistant") {
       const messageId = await context.finalStream.finalize(outputs);
       if (messageId !== null) {
         return messageId;

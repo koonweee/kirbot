@@ -158,6 +158,10 @@ export function renderTelegramAssistantDraft(text: string): TelegramRenderedMess
   return renderMarkdownToFormattedText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT));
 }
 
+export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
+  return renderMarkdownToFormattedText(buildPlanPreviewText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT)));
+}
+
 export function renderTelegramCommentaryDraft(text: string): TelegramRenderedMessage {
   return renderPreformattedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT), "kirbot");
 }
@@ -170,16 +174,27 @@ export function buildRenderedCompletionFooter(details: CompletionFooterDetails):
   return renderPreformattedText(buildCompletionFooterText(details), "status");
 }
 
+export function buildRenderedPlanMessages(text: string): TelegramRenderedMessage[] {
+  return buildHeaderedMarkdownMessages(text, "Plan");
+}
+
 export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
+  return buildHeaderedMarkdownMessages(text);
+}
+
+function buildHeaderedMarkdownMessages(text: string, header?: string): TelegramRenderedMessage[] {
   const reservedHeaderChars = 32;
   const formatted = renderMarkdownToFormattedText(text);
   const chunks = chunkFormattedText(formatted, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
 
   if (chunks.length === 1) {
-    return chunks;
+    return header ? [prependText(`${header}\n\n`, chunks[0]!)] : chunks;
   }
 
-  return chunks.map((chunk, index) => prependText(`Part ${index + 1}/${chunks.length}\n\n`, chunk));
+  return chunks.map((chunk, index) => {
+    const prefix = header ? `${header} ${index + 1}/${chunks.length}\n\n` : `Part ${index + 1}/${chunks.length}\n\n`;
+    return prependText(prefix, chunk);
+  });
 }
 
 function truncateStatus(text: string): string {
@@ -210,6 +225,10 @@ function buildDraftPreviewWithLimit(text: string, limit: number): string {
 
 function buildCommentaryDraftPreviewWithLimit(text: string, limit: number): string {
   return buildTruncatedPreview(text, limit, "...\n", "\n\n[commentary truncated]");
+}
+
+function buildPlanPreviewText(text: string): string {
+  return `Plan\n\n${text}`;
 }
 
 function buildTruncatedPreview(text: string, limit: number, prefix: string, suffix: string): string {

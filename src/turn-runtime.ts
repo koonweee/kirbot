@@ -9,6 +9,10 @@ type AssistantItemState = {
   phase: MessagePhase | null;
 };
 
+type PlanItemState = {
+  text: string;
+};
+
 export type RuntimeTurn = {
   chatId: number;
   topicId: number;
@@ -16,6 +20,8 @@ export type RuntimeTurn = {
   turnId: string;
   assistantItemOrder: string[];
   assistantItems: Map<string, AssistantItemState>;
+  planItemOrder: string[];
+  planItems: Map<string, PlanItemState>;
   hasAssistantText: boolean;
 };
 
@@ -55,6 +61,12 @@ export type AssistantRenderUpdate = {
   startedAssistantText: boolean;
 };
 
+export type PlanRenderUpdate = {
+  itemId: string;
+  itemText: string;
+  finalText: string;
+};
+
 export class BridgeTurnRuntime {
   readonly #turns = new Map<string, RuntimeTurn>();
   readonly #topicStates = new Map<string, TopicState>();
@@ -73,6 +85,8 @@ export class BridgeTurnRuntime {
       turnId: input.turnId,
       assistantItemOrder: [],
       assistantItems: new Map<string, AssistantItemState>(),
+      planItemOrder: [],
+      planItems: new Map<string, PlanItemState>(),
       hasAssistantText: false
     };
 
@@ -192,6 +206,15 @@ export class BridgeTurnRuntime {
     ensureAssistantItem(turn, itemId).phase = phase;
   }
 
+  registerPlanItem(turnId: string, itemId: string): void {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return;
+    }
+
+    ensurePlanItem(turn, itemId);
+  }
+
   appendAssistantDelta(turnId: string, itemId: string, delta: string): AssistantRenderUpdate | null {
     const turn = this.#turns.get(turnId);
     if (!turn) {
@@ -226,9 +249,36 @@ export class BridgeTurnRuntime {
     return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
 
+  appendPlanDelta(turnId: string, itemId: string, delta: string): PlanRenderUpdate | null {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return null;
+    }
+
+    const item = ensurePlanItem(turn, itemId);
+    item.text = `${item.text}${delta}`;
+    return buildPlanRenderUpdate(turn, itemId);
+  }
+
+  commitPlanItem(turnId: string, itemId: string, text: string): PlanRenderUpdate | null {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return null;
+    }
+
+    const item = ensurePlanItem(turn, itemId);
+    item.text = text;
+    return buildPlanRenderUpdate(turn, itemId);
+  }
+
   renderAssistantItems(turnId: string): string {
     const turn = this.#turns.get(turnId);
     return turn ? renderFinalAssistantText(turn) : "";
+  }
+
+  renderPlanItems(turnId: string): string {
+    const turn = this.#turns.get(turnId);
+    return turn ? renderPlanText(turn) : "";
   }
 
   renderAssistantDraft(turnId: string): { text: string; kind: AssistantDraftKind | null } {
@@ -324,6 +374,20 @@ function ensureAssistantItem(turn: RuntimeTurn, itemId: string): AssistantItemSt
   return created;
 }
 
+function ensurePlanItem(turn: RuntimeTurn, itemId: string): PlanItemState {
+  const existing = turn.planItems.get(itemId);
+  if (existing) {
+    return existing;
+  }
+
+  const created: PlanItemState = {
+    text: ""
+  };
+  turn.planItems.set(itemId, created);
+  turn.planItemOrder.push(itemId);
+  return created;
+}
+
 function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAssistantText: boolean): AssistantRenderUpdate {
   const item = turn.assistantItems.get(itemId);
   const draft = renderAssistantDraft(turn);
@@ -335,6 +399,15 @@ function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAs
     draftKind: draft.kind,
     finalText: renderFinalAssistantText(turn),
     startedAssistantText
+  };
+}
+
+function buildPlanRenderUpdate(turn: RuntimeTurn, itemId: string): PlanRenderUpdate {
+  const item = turn.planItems.get(itemId);
+  return {
+    itemId,
+    itemText: item?.text ?? "",
+    finalText: renderPlanText(turn)
   };
 }
 
@@ -367,6 +440,13 @@ function renderFinalAssistantText(turn: RuntimeTurn): string {
   }
 
   return renderAssistantText(items);
+}
+
+function renderPlanText(turn: RuntimeTurn): string {
+  return turn.planItemOrder
+    .map((itemId) => turn.planItems.get(itemId)?.text ?? "")
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 function getAssistantItemsWithText(turn: RuntimeTurn): AssistantItemState[] {
