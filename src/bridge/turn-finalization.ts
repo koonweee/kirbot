@@ -145,7 +145,7 @@ export class TurnFinalizer {
         chatId,
         topicId,
         text: rendered.text,
-        ...(rendered.parseMode ? { parseMode: rendered.parseMode } : {})
+        ...(rendered.entities ? { entities: rendered.entities } : {})
       });
       if (firstMessageId === null) {
         firstMessageId = message.messageId;

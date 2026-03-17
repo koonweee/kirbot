@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { MessageEntity } from "grammy/types";
 
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
@@ -48,7 +49,7 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     draftId: number,
     text: string,
-    _options?: { message_thread_id?: number; parse_mode?: "HTML" }
+    _options?: { message_thread_id?: number; entities?: MessageEntity[] }
   ): Promise<true> {
     this.drafts.push({ chatId, draftId, text });
     return true;

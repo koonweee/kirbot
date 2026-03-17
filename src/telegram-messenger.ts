@@ -1,19 +1,19 @@
+import type { MessageEntity } from "grammy/types";
+
 export type InlineKeyboardMarkup = {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 };
-
-export type TelegramParseMode = "HTML";
 
 export type TelegramSendOptions = {
   message_thread_id?: number;
   reply_to_message_id?: number;
   reply_markup?: InlineKeyboardMarkup;
-  parse_mode?: TelegramParseMode;
+  entities?: MessageEntity[];
 };
 
 export type TelegramDraftOptions = {
   message_thread_id?: number;
-  parse_mode?: TelegramParseMode;
+  entities?: MessageEntity[];
 };
 
 export type TelegramChatAction = "typing" | "upload_document";
@@ -42,7 +42,7 @@ export interface TelegramApi {
 
 export type TelegramRenderedMessage = {
   text: string;
-  parseMode?: TelegramParseMode;
+  entities?: MessageEntity[];
 };
 
 type DraftSessionState = {
@@ -51,7 +51,7 @@ type DraftSessionState = {
   retryTimer: NodeJS.Timeout | null;
   inFlight: Promise<void> | null;
   lastText: string | null;
-  lastParseMode: TelegramParseMode | undefined;
+  lastEntities: MessageEntity[] | undefined;
   lastUpdateAt: number;
   lastChatActionAt: number;
   closed: boolean;
@@ -68,7 +68,7 @@ export class TelegramMessenger {
     chatId: number;
     topicId?: number | null;
     text: string;
-    parseMode?: TelegramParseMode;
+    entities?: MessageEntity[];
     replyToMessageId?: number;
     replyMarkup?: InlineKeyboardMarkup;
   }): Promise<{ messageId: number }> {
@@ -76,7 +76,7 @@ export class TelegramMessenger {
       ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
       ...(input.replyToMessageId !== undefined ? { reply_to_message_id: input.replyToMessageId } : {}),
       ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}),
-      ...withTelegramParseMode(input.parseMode)
+      ...(input.entities ? { entities: input.entities } : {})
     });
     return { messageId: message.message_id };
   }
@@ -195,7 +195,7 @@ export class TelegramStreamMessageHandle {
     for (const output of outputs) {
       const message = await this.telegram.sendMessage(this.chatId, output.text, {
         message_thread_id: this.topicId,
-        ...withTelegramParseMode(output.parseMode)
+        ...(output.entities ? { entities: output.entities } : {})
       });
       if (firstMessageId === null) {
         firstMessageId = message.message_id;
@@ -220,7 +220,7 @@ class TelegramDraftSession {
     retryTimer: null,
     inFlight: null,
     lastText: null,
-    lastParseMode: undefined,
+    lastEntities: undefined,
     lastUpdateAt: 0,
     lastChatActionAt: 0,
     closed: false
@@ -244,8 +244,13 @@ class TelegramDraftSession {
     if (
       !force &&
       this.#state.pending === null &&
-      this.#state.lastText === rendered.text &&
-      this.#state.lastParseMode === rendered.parseMode
+      areSameRenderedMessages(
+        {
+          text: this.#state.lastText ?? "",
+          ...(this.#state.lastEntities ? { entities: this.#state.lastEntities } : {})
+        },
+        rendered
+      )
     ) {
       return;
     }
@@ -273,7 +278,7 @@ class TelegramDraftSession {
     await this.clearDraftBestEffort();
     this.#state.pending = null;
     this.#state.lastText = null;
-    this.#state.lastParseMode = undefined;
+    this.#state.lastEntities = undefined;
     this.#state.lastUpdateAt = Date.now();
   }
 
@@ -324,7 +329,15 @@ class TelegramDraftSession {
     }
 
     this.#state.pending = null;
-    if (pending.text === this.#state.lastText && pending.parseMode === this.#state.lastParseMode) {
+    if (
+      areSameRenderedMessages(
+        {
+          text: this.#state.lastText ?? "",
+          ...(this.#state.lastEntities ? { entities: this.#state.lastEntities } : {})
+        },
+        pending
+      )
+    ) {
       return;
     }
 
@@ -332,7 +345,7 @@ class TelegramDraftSession {
       await this.maybeSendChatAction();
       await this.sendDraft(pending);
       this.#state.lastText = pending.text;
-      this.#state.lastParseMode = pending.parseMode;
+      this.#state.lastEntities = pending.entities;
       this.#state.lastUpdateAt = Date.now();
     } catch (error) {
       if (isRetryAfterError(error)) {
@@ -351,7 +364,7 @@ class TelegramDraftSession {
         chatId: this.chatId,
         topicId: this.topicId,
         draftId: this.draftId,
-        parseMode: pending.parseMode
+        entityCount: pending.entities?.length ?? 0
       }, error);
     }
   }
@@ -359,7 +372,7 @@ class TelegramDraftSession {
   private async sendDraft(rendered: TelegramRenderedMessage): Promise<void> {
     await this.telegram.sendMessageDraft(this.chatId, this.draftId, rendered.text, {
       message_thread_id: this.topicId,
-      ...withTelegramParseMode(rendered.parseMode)
+      ...(rendered.entities ? { entities: rendered.entities } : {})
     });
   }
 
@@ -406,8 +419,23 @@ class TelegramDraftSession {
   }
 }
 
-function withTelegramParseMode(parseMode?: TelegramParseMode): { parse_mode?: TelegramParseMode } {
-  return parseMode ? { parse_mode: parseMode } : {};
+function areSameRenderedMessages(left: TelegramRenderedMessage, right: TelegramRenderedMessage): boolean {
+  return left.text === right.text && areSameEntities(left.entities, right.entities);
+}
+
+function areSameEntities(left: MessageEntity[] | undefined, right: MessageEntity[] | undefined): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((entity, index) => {
+    const other = right[index];
+    return JSON.stringify(entity) === JSON.stringify(other);
+  });
 }
 
 function isRetryAfterError(error: unknown): error is { parameters?: { retry_after?: number } } {
