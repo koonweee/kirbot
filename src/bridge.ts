@@ -24,6 +24,7 @@ import {
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
+import { isAllowedRootCommand, isAllowedTopicCommand } from "./telegram-commands";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
 
@@ -255,7 +256,12 @@ export class TelegramCodexBridge {
   private async handleRootMessage(message: UserTurnMessage): Promise<void> {
     const command = parseSlashCommand(message);
     if (command) {
-      await this.sendInvalidSlashCommandMessage(message);
+      if (!isAllowedRootCommand(command.command)) {
+        await this.sendInvalidSlashCommandMessage(message);
+        return;
+      }
+
+      await this.handleRootSlashCommand(message, command);
       return;
     }
 
@@ -265,7 +271,7 @@ export class TelegramCodexBridge {
   private async handleTopicMessage(message: UserTurnMessage): Promise<void> {
     const command = parseSlashCommand(message);
     if (command) {
-      if (!this.isValidTopicSlashCommand(command)) {
+      if (!isAllowedTopicCommand(command.command)) {
         await this.sendInvalidSlashCommandMessage(message);
         return;
       }
@@ -311,8 +317,8 @@ export class TelegramCodexBridge {
     await this.sendTurnForSession(session, message);
   }
 
-  private isValidTopicSlashCommand(command: ParsedSlashCommand): boolean {
-    return command.command === "stop";
+  private async handleRootSlashCommand(message: UserTurnMessage, _command: ParsedSlashCommand): Promise<void> {
+    await this.sendInvalidSlashCommandMessage(message);
   }
 
   private async handleTopicSlashCommand(message: UserTurnMessage, command: ParsedSlashCommand): Promise<void> {

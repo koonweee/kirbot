@@ -7,6 +7,7 @@ import { loadConfig } from "./config";
 import { BridgeDatabase } from "./db";
 import { TemporaryImageStore } from "./media-store";
 import { CodexRpcClient, WebSocketRpcTransport } from "./rpc";
+import { TelegramCommandSync, type TelegramCommandApi } from "./telegram-command-sync";
 import type { TelegramApi } from "./telegram-messenger";
 
 async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30): Promise<void> {
@@ -78,20 +79,34 @@ async function main(): Promise<void> {
       };
     }
   };
+  const telegramCommandApi: TelegramCommandApi = {
+    setMyCommands: (commands, options) => bot.api.setMyCommands(commands, options),
+    deleteMyCommands: (options) => bot.api.deleteMyCommands(options),
+    setChatMenuButton: (options) => bot.api.setChatMenuButton(options)
+  };
 
   const bridge = new TelegramCodexBridge(config, database, telegramApi, codex, mediaStore);
+  const commandSync = new TelegramCommandSync(telegramCommandApi, config.telegram.userId);
   bot.catch((error) => {
     console.error("Telegram bot update handling failed", error.error);
   });
+
+  await commandSync.initialize();
 
   bot.on("message:text", async (context) => {
     if (!context.message.from) {
       return;
     }
 
+    if (context.message.from.id !== config.telegram.userId) {
+      return;
+    }
+
+    const topicId = getMessageTopicId(context.message);
+
     await bridge.handleUserTextMessage({
       chatId: context.chat.id,
-      topicId: context.message.is_topic_message ? (context.message.message_thread_id ?? null) : null,
+      topicId,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
@@ -104,10 +119,15 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (context.message.from.id !== config.telegram.userId) {
+      return;
+    }
+
     const photo = pickLargestPhoto(context.message.photo);
+    const topicId = getMessageTopicId(context.message);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
-      topicId: context.message.is_topic_message ? (context.message.message_thread_id ?? null) : null,
+      topicId,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
@@ -125,9 +145,14 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (context.message.from.id !== config.telegram.userId) {
+      return;
+    }
+
+    const topicId = getMessageTopicId(context.message);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
-      topicId: context.message.is_topic_message ? (context.message.message_thread_id ?? null) : null,
+      topicId,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
@@ -155,6 +180,10 @@ async function main(): Promise<void> {
   });
 
   bot.on("callback_query:data", async (context) => {
+    if (context.callbackQuery.from.id !== config.telegram.userId) {
+      return;
+    }
+
     const message = context.callbackQuery.message;
     const topicId =
       message && "message_thread_id" in message && typeof message.message_thread_id === "number"
@@ -227,6 +256,10 @@ function pickLargestPhoto(photos: Message.PhotoMessage["photo"]): Message.PhotoM
 
 function isImageDocument(document: Message.DocumentMessage["document"]): boolean {
   return typeof document.mime_type === "string" && document.mime_type.startsWith("image/");
+}
+
+function getMessageTopicId(message: Message.ServiceMessage): number | null {
+  return message.is_topic_message ? (message.message_thread_id ?? null) : null;
 }
 
 void main().catch((error) => {
