@@ -65,6 +65,9 @@ belongs in `src/telegram-format`.
 - Start from the user-visible flow, then work inward to the owning module.
 - Prefer small helper extraction over broad rewrites when the behavior boundary
   is already clear.
+- When investigating or fixing Telegram-visible races, ordering bugs, or other
+  integration behavior, prefer reproducing the issue at the harness/runtime
+  level before or alongside narrower unit coverage.
 - Prefer fail-open Telegram integration changes. If deep links, copies, draft
   updates, or other Telegram niceties fail, preserve the underlying Codex turn
   flow unless the feature explicitly requires hard failure.
@@ -97,9 +100,20 @@ belongs in `src/telegram-format`.
   or [tests/codex.test.ts](/home/jtkw/kirbot/tests/codex.test.ts).
 - Use the existing fake Telegram/Codex adapters in tests and extend them rather
   than introducing one-off mocks when possible.
+- Prefer [tests/harness.test.ts](/home/jtkw/kirbot/tests/harness.test.ts) or
+  direct harness probes when the important question is what Telegram would
+  visibly show after async orchestration, especially for draft cleanup,
+  ordering, callback flows, and restart/race regressions.
 - When changing completion footers, queue previews, commands, approvals, or
   mode routing, assert the exact user-visible Telegram text so regressions stay
   obvious.
+
+## PR Notes
+
+- When a bug has a concrete repro, describe the PR in terms of the
+  user-visible before/after behavior, not just the internal refactor.
+- If harness verification was part of the investigation, summarize the repro
+  and the post-fix harness result in the PR description.
 
 ## Documentation Maintenance
 
