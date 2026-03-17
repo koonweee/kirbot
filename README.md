@@ -11,6 +11,7 @@ New to the repo:
 - Read [docs/architecture.md](docs/architecture.md) for the system model and code map.
 - Read [docs/user-flows.md](docs/user-flows.md) for the user-visible flows and the code that owns each one.
 - Read [docs/engineering-guide.md](docs/engineering-guide.md) for setup, tests, change boundaries, and documentation maintenance.
+- Read [docs/telegram-harness.md](docs/telegram-harness.md) if you want to drive kirbot without a real Telegram client.
 
 Formatting work has its own local guide in [src/telegram-format/README.md](src/telegram-format/README.md) and [src/telegram-format/AGENTS.md](src/telegram-format/AGENTS.md).
 
@@ -108,6 +109,7 @@ npm start
 npm run start:tmux
 npm run start:tmux:attach
 npm run start:tmux:restart
+npm run harness:telegram
 npm test
 npm run typecheck
 npm run verify:codex-types
@@ -126,5 +128,6 @@ Notes:
 - The attach scripts connect to the existing tmux session, or switch clients if already inside tmux, so they are the fastest way for an agent to inspect live process output.
 - The restart scripts clear the pane scrollback, recreate the pane command in place, and create the session first if it does not already exist.
 - Detached production sessions assume `dist/` is already built. Run `npm run build` before `npm run start:tmux` or `npm run start:tmux:restart`.
+- `npm run harness:telegram` starts the in-process Telegram harness for agent-driven E2E flows with transcript, event, and log inspection. See [docs/telegram-harness.md](docs/telegram-harness.md).
 
 Attribution: side profile Kirby by @KIRBYSWARPSTAR on X.

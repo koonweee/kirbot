@@ -22,7 +22,8 @@ At runtime, the process owns both sides of the bridge:
 
 ## Startup And Shutdown
 
-The process entrypoint is [`src/index.ts`](/home/jtkw/kirbot/src/index.ts).
+The process entrypoint is [`src/index.ts`](/home/jtkw/kirbot/src/index.ts), with
+shared runtime bootstrap in [`src/runtime.ts`](/home/jtkw/kirbot/src/runtime.ts).
 
 Startup responsibilities:
 
@@ -45,7 +46,10 @@ Shutdown responsibilities:
 The core modules are intentionally split by responsibility rather than by Telegram event type.
 
 [`src/index.ts`](/home/jtkw/kirbot/src/index.ts)
-Bootstraps the process, wires dependencies together, and translates raw Telegram updates into bridge calls.
+Owns the real `grammy` bot entrypoint and translates raw Telegram updates into bridge calls.
+
+[`src/runtime.ts`](/home/jtkw/kirbot/src/runtime.ts)
+Owns reusable kirbot bootstrap: config, DB/media startup, Codex startup, bridge wiring, command sync, and shutdown.
 
 [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
 Owns high-level session and turn orchestration. This is the entrypoint for Telegram-driven behavior: session creation, turn submission, slash commands, callback handling, request routing, and notification fan-in.
@@ -80,6 +84,9 @@ Owns SQLite schema creation and all persistence operations used by the bridge.
 [`src/telegram-command-sync.ts`](/home/jtkw/kirbot/src/telegram-command-sync.ts)
 Keeps Telegram command menus aligned with the commands kirbot supports.
 
+[`src/harness/*`](/home/jtkw/kirbot/src/harness)
+Owns the Telegram harness that drives the real kirbot core with synthetic inbound Telegram events and a recording outbound Telegram transport.
+
 ## Persisted Concepts
 
 kirbot stores bridge state in SQLite, not Telegram metadata.
@@ -110,6 +117,7 @@ These boundaries matter more than the exact implementation:
 
 - Keep `src/bridge.ts` as orchestration glue. Move reusable logic into `src/bridge/*` helpers.
 - Keep Telegram formatting logic in `src/telegram-format/*`, not in bridge or messenger code.
+- Keep reusable app startup in `src/runtime.ts`, not split between the Telegram entrypoint and harness code.
 - Prefer Telegram fail-open behavior when the extra UX affordance is optional. Session and turn delivery matter more than a copied message, deep link, or draft nicety.
 - Treat tests as the executable contract for user-visible behavior.
 

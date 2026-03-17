@@ -20,6 +20,7 @@ import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import { resolvePinnedCodexInvocation } from "./codex-cli";
 import { CodexRpcClient, type SpawnedAppServer, type WebSocketRpcTransport } from "./rpc";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
+import type { LoggerLike } from "./logging";
 
 export type ThreadStartSettings = {
   model: string;
@@ -28,6 +29,7 @@ export type ThreadStartSettings = {
 
 export type AppServerOptions = {
   url: string;
+  logger?: LoggerLike;
 };
 
 export async function spawnCodexAppServer(options: AppServerOptions): Promise<SpawnedAppServer> {
@@ -37,9 +39,19 @@ export async function spawnCodexAppServer(options: AppServerOptions): Promise<Sp
   });
 
   child.stdout?.on("data", (chunk) => {
+    if (options.logger) {
+      options.logger.info(String(chunk).trimEnd());
+      return;
+    }
+
     process.stdout.write(`[codex-app-server] ${chunk}`);
   });
   child.stderr?.on("data", (chunk) => {
+    if (options.logger) {
+      options.logger.error(String(chunk).trimEnd());
+      return;
+    }
+
     process.stderr.write(`[codex-app-server] ${chunk}`);
   });
 

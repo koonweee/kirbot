@@ -1,4 +1,5 @@
 import type { MessageEntity } from "grammy/types";
+import type { LoggerLike } from "./logging";
 
 export type InlineKeyboardMarkup = {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
@@ -62,7 +63,10 @@ const DEFAULT_CHAT_ACTION_THROTTLE_MS = 3000;
 const EMPTY_DRAFT_TEXT = "";
 
 export class TelegramMessenger {
-  constructor(private readonly telegram: TelegramApi) {}
+  constructor(
+    private readonly telegram: TelegramApi,
+    private readonly logger: LoggerLike = console
+  ) {}
 
   async sendMessage(input: {
     chatId: number;
@@ -91,6 +95,7 @@ export class TelegramMessenger {
   }): TelegramStatusDraftHandle {
     return new TelegramStatusDraftHandle(
       this.telegram,
+      this.logger,
       input.chatId,
       input.topicId,
       input.draftId,
@@ -110,6 +115,7 @@ export class TelegramMessenger {
   }): TelegramStreamMessageHandle {
     return new TelegramStreamMessageHandle(
       this.telegram,
+      this.logger,
       input.chatId,
       input.topicId,
       input.draftId,
@@ -125,6 +131,7 @@ export class TelegramStatusDraftHandle {
 
   constructor(
     telegram: TelegramApi,
+    logger: LoggerLike,
     chatId: number,
     topicId: number,
     draftId: number,
@@ -134,6 +141,7 @@ export class TelegramStatusDraftHandle {
   ) {
     this.#session = new TelegramDraftSession(
       telegram,
+      logger,
       chatId,
       topicId,
       draftId,
@@ -166,6 +174,7 @@ export class TelegramStreamMessageHandle {
 
   constructor(
     private readonly telegram: TelegramApi,
+    logger: LoggerLike,
     private readonly chatId: number,
     private readonly topicId: number,
     draftId: number,
@@ -175,6 +184,7 @@ export class TelegramStreamMessageHandle {
   ) {
     this.#session = new TelegramDraftSession(
       telegram,
+      logger,
       chatId,
       topicId,
       draftId,
@@ -229,6 +239,7 @@ class TelegramDraftSession {
 
   constructor(
     private readonly telegram: TelegramApi,
+    private readonly logger: LoggerLike,
     private readonly chatId: number,
     private readonly topicId: number,
     private readonly draftId: number,
@@ -368,7 +379,7 @@ class TelegramDraftSession {
         return;
       }
 
-      console.warn("Failed to send Telegram draft", {
+      this.logger.warn("Failed to send Telegram draft", {
         chatId: this.chatId,
         topicId: this.topicId,
         draftId: this.draftId,
@@ -421,7 +432,7 @@ class TelegramDraftSession {
       this.#state.lastChatActionAt = now;
     } catch (error) {
       if (!isRetryAfterError(error)) {
-        console.warn("Failed to send Telegram chat action", error);
+        this.logger.warn("Failed to send Telegram chat action", error);
       }
     }
   }

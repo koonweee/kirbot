@@ -1,4 +1,5 @@
 import { getVisibleTelegramCommands, type TelegramBotCommand } from "./telegram-commands";
+import type { LoggerLike } from "./logging";
 
 type TelegramCommandScope =
   | {
@@ -36,7 +37,8 @@ const COMMANDS_MENU_BUTTON: TelegramMenuButtonCommands = {
 export class TelegramCommandSync {
   constructor(
     private readonly telegram: TelegramCommandApi,
-    private readonly privateChatId: number
+    private readonly privateChatId: number,
+    private readonly logger: LoggerLike = console
   ) {}
 
   async initialize(): Promise<void> {
@@ -75,16 +77,19 @@ export class TelegramCommandSync {
   }
 
   private async runStartupStep(description: string, operation: () => Promise<void>): Promise<void> {
-    console.info(`Telegram command sync: starting ${description}.`);
+    this.logger.info(`Telegram command sync: starting ${description}.`);
     await operation();
-    console.info(`Telegram command sync: completed ${description}.`);
+    this.logger.info(`Telegram command sync: completed ${description}.`);
   }
 }
 
-export async function initializeTelegramCommandSyncFailOpen(commandSync: Pick<TelegramCommandSync, "initialize">): Promise<void> {
+export async function initializeTelegramCommandSyncFailOpen(
+  commandSync: Pick<TelegramCommandSync, "initialize">,
+  logger: LoggerLike = console
+): Promise<void> {
   try {
     await commandSync.initialize();
   } catch (error) {
-    console.warn("Telegram command sync failed during startup; continuing without updating command menus.", error);
+    logger.warn("Telegram command sync failed during startup; continuing without updating command menus.", error);
   }
 }

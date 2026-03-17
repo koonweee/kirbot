@@ -382,6 +382,40 @@ describe("TurnLifecycleCoordinator", () => {
     );
   });
 
+  it("excludes reasoning output tokens from the completion footer context-left calculation", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    harness.coordinator.handleThreadTokenUsageUpdated("turn-1", {
+      total: {
+        totalTokens: 26000,
+        inputTokens: 12000,
+        cachedInputTokens: 0,
+        outputTokens: 14000,
+        reasoningOutputTokens: 5000
+      },
+      last: {
+        totalTokens: 26000,
+        inputTokens: 12000,
+        cachedInputTokens: 0,
+        outputTokens: 14000,
+        reasoningOutputTokens: 5000
+      },
+      modelContextWindow: 32000
+    });
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 0 files • 55% left • /workspace • main"
+    );
+  });
+
   it("omits reasoning effort from the completion footer when it is not available", async () => {
     const harness = createHarness({
       text: "Final answer",

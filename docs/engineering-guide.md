@@ -8,6 +8,7 @@ This is the practical onboarding guide for engineers changing kirbot. It focuses
 2. [architecture.md](architecture.md)
 3. [user-flows.md](user-flows.md)
 4. [`src/telegram-format/README.md`](/home/jtkw/kirbot/src/telegram-format/README.md) if your change touches Telegram formatting
+5. [telegram-harness.md](telegram-harness.md) if your change affects harness-driven E2E flows
 
 ## Local Setup
 
@@ -36,6 +37,7 @@ npm start
 npm run start:tmux
 npm run start:tmux:attach
 npm run start:tmux:restart
+npm run harness:telegram
 npm test
 npm run typecheck
 ```
@@ -50,6 +52,12 @@ Detached tmux workflow:
 - `npm run dev:tmux:restart` and `npm run start:tmux:restart` restart the pane in place and create the tmux session first if it does not exist.
 - Production tmux sessions assume `dist/` is current. Run `npm run build` before starting or restarting the detached production session.
 - Prefer these tmux commands over ad-hoc `nohup`, background `&`, or orphaned node processes when an engineer or agent needs a detached kirbot process.
+
+Telegram harness workflow:
+
+- `npm run harness:telegram` starts an interactive harness that runs the real kirbot runtime with a recording Telegram transport.
+- Use the harness when you want agent-driven app-level E2E coverage without a real Telegram client.
+- See [telegram-harness.md](telegram-harness.md) for transcript, raw event, and log inspection details.
 
 Codex upgrade commands:
 
@@ -87,6 +95,12 @@ Codex app-server interaction:
 Persistence and restart behavior:
 [`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
 
+Reusable runtime bootstrap:
+[`src/runtime.ts`](/home/jtkw/kirbot/src/runtime.ts)
+
+Telegram harness transport and transcript synthesis:
+[`src/harness`](/home/jtkw/kirbot/src/harness)
+
 ## Testing Expectations
 
 Prefer the existing fake Telegram and fake Codex adapters over new one-off mocks.
@@ -94,6 +108,7 @@ Prefer the existing fake Telegram and fake Codex adapters over new one-off mocks
 Common test targets:
 
 - end-to-end bridge behavior: [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- harness-driven conversational E2E coverage: [`tests/harness.test.ts`](/home/jtkw/kirbot/tests/harness.test.ts)
 - turn finalization and queue semantics: [`tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/tests/turn-lifecycle.test.ts)
 - Telegram delivery mechanics: [`tests/telegram-messenger.test.ts`](/home/jtkw/kirbot/tests/telegram-messenger.test.ts)
 - formatting behavior: [`tests/telegram-format.test.ts`](/home/jtkw/kirbot/tests/telegram-format.test.ts)
@@ -101,6 +116,9 @@ Common test targets:
 - Codex contract assumptions: [`tests/codex.test.ts`](/home/jtkw/kirbot/tests/codex.test.ts)
 
 When changing user-visible Telegram text, assert the exact text in tests so regressions are obvious.
+When changing harness-visible Telegram behavior, update the transcript/event expectations in
+[`tests/harness.test.ts`](/home/jtkw/kirbot/tests/harness.test.ts)
+and [telegram-harness.md](telegram-harness.md) if the usage model changed.
 
 ## Documentation Rules
 
@@ -130,6 +148,7 @@ Use the narrowest document that still matches the change:
 - `docs/architecture.md` for system shape and code ownership
 - `docs/user-flows.md` for user-visible behavior and flow-to-code mapping
 - `docs/engineering-guide.md` for change workflow and maintenance guidance
+- `docs/telegram-harness.md` for harness usage and extension guidance
 - `src/telegram-format/README.md` for formatting-specific behavior
 - `AGENTS.md` files for instructions future contributors and coding agents should follow
 

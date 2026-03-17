@@ -1,0 +1,329 @@
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { BridgeCodexApi } from "../src/bridge";
+import type { AppConfig } from "../src/config";
+import type { ServerNotification } from "../src/generated/codex/ServerNotification";
+import type { ServerRequest } from "../src/generated/codex/ServerRequest";
+import type { RequestId } from "../src/generated/codex/RequestId";
+import type { UserInput } from "../src/generated/codex/v2/UserInput";
+import type { CommandExecutionApprovalDecision } from "../src/generated/codex/v2/CommandExecutionApprovalDecision";
+import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileChangeApprovalDecision";
+import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
+import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
+import { createTelegramHarness, type TelegramHarness } from "../src/harness";
+
+class ScriptedCodex implements BridgeCodexApi {
+  model = "gpt-5-codex";
+  reasoningEffort = null;
+  nextTurnId = 1;
+  finalText = "Harness reply";
+  tokenUsage: ServerNotification | null = null;
+  createdThreadIds: string[] = [];
+  commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
+
+  #notificationListeners = new Set<(notification: ServerNotification) => void>();
+  #requestListeners = new Set<(request: ServerRequest) => void>();
+  #pendingTurnId: string | null = null;
+  #pendingThreadId: string | null = null;
+
+  constructor(private readonly behavior: "complete" | "commandApproval" = "complete") {}
+
+  async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: null }> {
+    const threadId = `thread-${this.createdThreadIds.length + 1}`;
+    this.createdThreadIds.push(title);
+    return {
+      threadId,
+      model: this.model,
+      reasoningEffort: this.reasoningEffort
+    };
+  }
+
+  async ensureThreadLoaded(): Promise<{ model: string; reasoningEffort: null }> {
+    return {
+      model: this.model,
+      reasoningEffort: this.reasoningEffort
+    };
+  }
+
+  async sendTurn(threadId: string, _input: UserInput[]): Promise<{ id: string }> {
+    const turnId = `turn-${this.nextTurnId++}`;
+    if (this.behavior === "complete") {
+      setTimeout(() => {
+        if (this.tokenUsage) {
+          this.emitNotification({
+            ...this.tokenUsage,
+            params: {
+              ...this.tokenUsage.params,
+              threadId,
+              turnId
+            }
+          } as ServerNotification);
+        }
+        this.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: {
+              id: turnId,
+              status: "completed"
+            }
+          }
+        } as ServerNotification);
+      }, 0);
+    } else {
+      this.#pendingThreadId = threadId;
+      this.#pendingTurnId = turnId;
+      setTimeout(() => {
+        this.emitRequest({
+          method: "item/commandExecution/requestApproval",
+          id: "approval-1",
+          params: {
+            threadId,
+            turnId,
+            itemId: "item-1",
+            command: "npm test",
+            cwd: "/workspace",
+            reason: "Need approval",
+            availableDecisions: ["accept", "decline", "cancel"]
+          }
+        } as ServerRequest);
+      }, 0);
+    }
+
+    return { id: turnId };
+  }
+
+  async steerTurn(): Promise<{ turnId: string }> {
+    return { turnId: "turn-steer" };
+  }
+
+  async interruptTurn(): Promise<void> {}
+
+  async archiveThread(): Promise<void> {}
+
+  async readTurnSnapshot(): Promise<ResolvedTurnSnapshot> {
+    return {
+      text: this.finalText,
+      assistantText: this.finalText,
+      planText: "",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    };
+  }
+
+  async respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void> {
+    this.commandApprovals.push({ id, decision: response.decision });
+    const pendingThreadId = this.#pendingThreadId;
+    const pendingTurnId = this.#pendingTurnId;
+    if (!pendingThreadId || !pendingTurnId) {
+      return;
+    }
+
+    setTimeout(() => {
+      this.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: pendingThreadId,
+          turn: {
+            id: pendingTurnId,
+            status: "completed"
+          }
+        }
+      } as ServerNotification);
+    }, 0);
+  }
+
+  async respondToFileChangeApproval(_id: RequestId, _response: { decision: FileChangeApprovalDecision }): Promise<void> {}
+
+  async respondToUserInputRequest(_id: RequestId, _response: ToolRequestUserInputResponse): Promise<void> {}
+
+  async respondUnsupportedRequest(): Promise<void> {}
+
+  onNotification(listener: (notification: ServerNotification) => void): void {
+    this.#notificationListeners.add(listener);
+  }
+
+  onServerRequest(listener: (request: ServerRequest) => void): void {
+    this.#requestListeners.add(listener);
+  }
+
+  private emitNotification(notification: ServerNotification): void {
+    for (const listener of this.#notificationListeners) {
+      listener(notification);
+    }
+  }
+
+  private emitRequest(request: ServerRequest): void {
+    for (const listener of this.#requestListeners) {
+      listener(request);
+    }
+  }
+}
+
+const harnesses: TelegramHarness[] = [];
+
+afterEach(async () => {
+  while (harnesses.length > 0) {
+    await harnesses.pop()?.stop();
+  }
+});
+
+describe("Telegram harness", () => {
+  it("captures root-to-topic transcript output and raw Telegram events", async () => {
+    const harness = await buildHarness(new ScriptedCodex("complete"));
+    harnesses.push(harness);
+
+    await harness.sendRootText("Inspect the repo");
+    await harness.waitForIdle();
+
+    const transcript = harness.getTranscript();
+    expect(transcript.root.messages).toEqual([
+      {
+        actor: "user",
+        messageId: 1,
+        text: "Inspect the repo"
+      }
+    ]);
+    expect(transcript.topics).toHaveLength(1);
+    expect(transcript.topics[0]?.title).toBe("Inspect the repo");
+    expect(transcript.topics[0]?.messages.map((message) => message.text)).toEqual([
+      "Inspect the repo",
+      "Harness reply",
+      "gpt-5-codex • <1s • 0 files • ?% left • /workspace • main"
+    ]);
+
+    const eventTypes = harness.getTelegramEvents().map((event) => event.type);
+    expect(eventTypes).toContain("telegram.createForumTopic");
+    expect(eventTypes).toContain("telegram.sendMessageDraft");
+    expect(eventTypes).toContain("telegram.sendMessage");
+  });
+
+  it("allows button presses to resolve Codex approval requests", async () => {
+    const codex = new ScriptedCodex("commandApproval");
+    codex.finalText = "Approved result";
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Run the tests");
+    await waitForCondition(() =>
+      harness
+        .getTranscript()
+        .topics.some((topic) => topic.messages.some((message) => Array.isArray(message.buttons) && message.buttons.length > 0))
+    );
+
+    const approvalMessage = harness
+      .getTranscript()
+      .topics.flatMap((topic) => topic.messages)
+      .find((message) => Array.isArray(message.buttons) && message.buttons.length > 0);
+    expect(approvalMessage).toBeDefined();
+
+    await harness.pressButton({
+      messageId: approvalMessage!.messageId,
+      buttonText: "Approve"
+    });
+    await harness.waitForIdle();
+
+    expect(codex.commandApprovals).toEqual([
+      {
+        id: "approval-1",
+        decision: "accept"
+      }
+    ]);
+
+    const transcript = harness.getTranscript();
+    expect(transcript.topics[0]?.messages.some((message) => message.text === "Approved result")).toBe(true);
+    expect(transcript.topics[0]?.messages.some((message) => message.text.includes('Resolved item/commandExecution/requestApproval with "accept".'))).toBe(true);
+    expect(harness.getTelegramEvents().some((event) => event.type === "telegram.answerCallbackQuery")).toBe(true);
+  });
+
+  it("shows codex-cli-aligned context left in the harness transcript footer", async () => {
+    const codex = new ScriptedCodex("complete");
+    codex.finalText = "Footer observation";
+    codex.tokenUsage = {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-ignored",
+        turnId: "turn-ignored",
+        tokenUsage: {
+          total: {
+            totalTokens: 26000,
+            inputTokens: 12000,
+            cachedInputTokens: 0,
+            outputTokens: 14000,
+            reasoningOutputTokens: 5000
+          },
+          last: {
+            totalTokens: 26000,
+            inputTokens: 12000,
+            cachedInputTokens: 0,
+            outputTokens: 14000,
+            reasoningOutputTokens: 5000
+          },
+          modelContextWindow: 32000
+        }
+      }
+    } as ServerNotification;
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Observe context footer");
+    await harness.waitForIdle();
+
+    const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
+    expect(footer).toBe("gpt-5-codex • <1s • 0 files • 55% left • /workspace • main");
+  });
+});
+
+async function buildHarness(codex: BridgeCodexApi): Promise<TelegramHarness> {
+  const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
+  const harness = await createTelegramHarness({
+    config: createConfig(tempDir),
+    stateDir: tempDir,
+    codexApi: codex
+  });
+  await harness.start();
+  return harness;
+}
+
+function createConfig(tempDir: string): AppConfig {
+  return {
+    telegram: {
+      botToken: "token",
+      userId: 42,
+      mediaTempDir: join(tempDir, "media")
+    },
+    database: {
+      path: join(tempDir, "bridge.sqlite")
+    },
+    codex: {
+      appServerUrl: "ws://127.0.0.1:8787",
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    }
+  };
+}
+
+async function waitForCondition(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error("Timed out waiting for condition");
+}
