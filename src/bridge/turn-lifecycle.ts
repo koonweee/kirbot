@@ -1,7 +1,6 @@
 import type { UserTurnMessage } from "../domain";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import {
-  buildRenderedAssistantMessages,
   buildRenderedCommentaryMessage,
   buildStableDraftId,
   buildStatusDraft,
@@ -14,67 +13,23 @@ import {
   renderTurnControlMessage,
   type TurnStatusDraft
 } from "./presentation";
+import type { InlineKeyboardMarkup } from "../telegram-messenger";
+import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
+import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import {
-  TelegramMessenger,
-  type InlineKeyboardMarkup,
-  type TelegramApi,
-  type TelegramRenderedMessage,
-  type TelegramStatusDraftHandle,
-  type TelegramStreamMessageHandle
-} from "../telegram-messenger";
-import { BridgeTurnRuntime, type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
+  type TurnLifecycleDependencies,
+  TurnFinalizer
+} from "./turn-finalization";
 
-export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
-export type TerminalTurnStatus = Extract<TurnPhase, "completed" | "failed" | "interrupted">;
-
-type CommentaryStreamState = {
-  handle: TelegramStreamMessageHandle;
-  text: string;
-};
-
-export type TurnContext = {
-  chatId: number;
-  topicId: number;
-  threadId: string;
-  turnId: string;
-  phase: TurnPhase;
-  stopControlMessageId: number | null;
-  stopRequested: boolean;
-  submitPendingSteersAfterInterrupt: boolean;
-  statusDraft: TurnStatusDraft | null;
-  lastStatusUpdateAt: number;
-  statusHandle: TelegramStatusDraftHandle;
-  finalStream: TelegramStreamMessageHandle;
-  commentaryStreams: Map<string, CommentaryStreamState>;
-};
-
-type TurnLifecycleDependencies = {
-  runtime: BridgeTurnRuntime;
-  messenger: TelegramMessenger;
-  telegram: TelegramApi;
-  releaseTurnFiles(turnId: string): Promise<void>;
-  appendTurnStream(turnId: string, streamText: string): Promise<void>;
-  completePersistedTurn(turnId: string, messageId: number | null, status: TerminalTurnStatus): Promise<void>;
-  resolveTurnText(threadId: string, turnId: string): Promise<string>;
-  syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
-  maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void>;
-  submitQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): Promise<void>;
-};
-
-type FinalizationPolicy = {
-  terminalStatus: TerminalTurnStatus;
-  threadId: string;
-  publishWhenEmpty: boolean;
-  scheduleNextQueuedFollowUp: boolean;
-  submitPendingSteers: boolean;
-  movePendingSteersToQueued: boolean;
-  buildFinalText(resolvedText: string): string;
-};
+export type { TurnContext } from "./turn-context";
 
 export class TurnLifecycleCoordinator {
   readonly #turns = new Map<string, TurnContext>();
+  readonly #finalizer: TurnFinalizer;
 
-  constructor(private readonly deps: TurnLifecycleDependencies) {}
+  constructor(private readonly deps: TurnLifecycleDependencies) {
+    this.#finalizer = new TurnFinalizer(deps);
+  }
 
   activateTurn(message: UserTurnMessage, threadId: string, turnId: string): TurnContext {
     if (message.topicId === null) {
@@ -105,7 +60,7 @@ export class TurnLifecycleCoordinator {
       commentaryStreams: new Map()
     };
 
-    this.transitionPhase(context, "active");
+    transitionTurnPhase(context, "active");
     this.#turns.set(turnId, context);
     this.deps.runtime.registerTurn({
       chatId: message.chatId,
@@ -354,7 +309,7 @@ export class TurnLifecycleCoordinator {
   }
 
   async completeTurn(threadId: string, turnId: string): Promise<void> {
-    await this.finalizeTurn(turnId, {
+    await this.#finalizer.finalizeTurn(this.#turns, turnId, {
       terminalStatus: "completed",
       threadId,
       publishWhenEmpty: true,
@@ -366,7 +321,7 @@ export class TurnLifecycleCoordinator {
   }
 
   async failTurn(threadId: string, turnId: string, errorMessage: string): Promise<void> {
-    await this.finalizeTurn(turnId, {
+    await this.#finalizer.finalizeTurn(this.#turns, turnId, {
       terminalStatus: "failed",
       threadId,
       publishWhenEmpty: true,
@@ -383,7 +338,7 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    await this.finalizeTurn(turnId, {
+    await this.#finalizer.finalizeTurn(this.#turns, turnId, {
       terminalStatus: "interrupted",
       threadId,
       publishWhenEmpty: false,
@@ -392,85 +347,6 @@ export class TurnLifecycleCoordinator {
       movePendingSteersToQueued: !context.submitPendingSteersAfterInterrupt,
       buildFinalText: (resolvedText) => resolvedText
     });
-  }
-
-  private async finalizeTurn(turnId: string, policy: FinalizationPolicy): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (!context || context.phase === "finalizing" || isTerminalPhase(context.phase)) {
-      return;
-    }
-
-    const pendingSteers = policy.submitPendingSteers
-      ? this.deps.runtime.drainPendingSteers(context.chatId, context.topicId)
-      : null;
-    if (policy.movePendingSteersToQueued) {
-      await this.deps.syncQueuePreview(this.deps.runtime.movePendingSteersToQueued(context.chatId, context.topicId));
-    }
-
-    await this.beginFinalization(context);
-    const resolvedText = await this.deps.resolveTurnText(policy.threadId, context.turnId);
-    const finalText = policy.buildFinalText(resolvedText);
-    const messageId =
-      finalText.trim().length > 0 || policy.publishWhenEmpty
-        ? await this.publishFinalTurnText(context, finalText)
-        : null;
-
-    await this.deps.appendTurnStream(context.turnId, finalText);
-    await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus);
-    await this.deps.releaseTurnFiles(context.turnId);
-
-    const queueState = this.deps.runtime.finalizeTurn(context.turnId);
-    this.#turns.delete(context.turnId);
-    this.transitionPhase(context, policy.terminalStatus);
-
-    if (!queueState) {
-      return;
-    }
-
-    await this.deps.syncQueuePreview(queueState);
-    if (policy.scheduleNextQueuedFollowUp) {
-      await this.deps.maybeSendNextQueuedFollowUp(queueState.chatId, queueState.topicId);
-    }
-
-    if (!policy.submitPendingSteers || !pendingSteers?.mergedMessage) {
-      return;
-    }
-
-    try {
-      await this.deps.submitQueuedFollowUp(context.chatId, context.topicId, pendingSteers.mergedMessage);
-      await this.deps.syncQueuePreview(this.deps.runtime.getQueueState(context.chatId, context.topicId));
-    } catch (error) {
-      const restoredQueue = this.deps.runtime.prependQueuedFollowUp(
-        context.chatId,
-        context.topicId,
-        pendingSteers.mergedMessage
-      );
-      await this.deps.syncQueuePreview(restoredQueue);
-      await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        text: `Interrupted the current turn, but failed to submit queued steer instructions: ${formatError(error)}`
-      });
-    }
-  }
-
-  private async beginFinalization(context: TurnContext): Promise<void> {
-    if (context.phase === "finalizing") {
-      return;
-    }
-
-    this.transitionPhase(context, "finalizing");
-    await this.clearTurnControlMessage(context);
-    await context.statusHandle.clear();
-
-    for (const [itemId, commentary] of context.commentaryStreams) {
-      if (commentary.text.trim().length > 0) {
-        await commentary.handle.finalize(buildRenderedCommentaryMessage(commentary.text));
-      } else {
-        await commentary.handle.clear();
-      }
-      context.commentaryStreams.delete(itemId);
-    }
   }
 
   private async handleAssistantRenderUpdate(
@@ -497,13 +373,13 @@ export class TurnLifecycleCoordinator {
     }
   }
 
-  private getOrCreateCommentaryStream(context: TurnContext, itemId: string): CommentaryStreamState {
+  private getOrCreateCommentaryStream(context: TurnContext, itemId: string) {
     const existing = context.commentaryStreams.get(itemId);
     if (existing) {
       return existing;
     }
 
-    const created: CommentaryStreamState = {
+    const created = {
       handle: this.deps.messenger.streamMessage({
         chatId: context.chatId,
         topicId: context.topicId,
@@ -514,95 +390,6 @@ export class TurnLifecycleCoordinator {
     context.commentaryStreams.set(itemId, created);
     return created;
   }
-
-  private async publishFinalTurnText(context: TurnContext, text: string): Promise<number> {
-    const outputs = buildRenderedAssistantMessages(text);
-    if (this.deps.runtime.getTurn(context.turnId)?.hasAssistantText) {
-      const messageId = await context.finalStream.finalize(outputs);
-      if (messageId !== null) {
-        return messageId;
-      }
-    }
-
-    return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
-  }
-
-  private async sendRenderedMessages(
-    chatId: number,
-    topicId: number,
-    renderedMessages: TelegramRenderedMessage[]
-  ): Promise<number> {
-    let firstMessageId: number | null = null;
-
-    for (const rendered of renderedMessages) {
-      const message = await this.deps.messenger.sendMessage({
-        chatId,
-        topicId,
-        text: rendered.text,
-        ...(rendered.parseMode ? { parseMode: rendered.parseMode } : {})
-      });
-      if (firstMessageId === null) {
-        firstMessageId = message.messageId;
-      }
-    }
-
-    if (firstMessageId === null) {
-      throw new Error("Failed to publish Telegram message chunks");
-    }
-
-    return firstMessageId;
-  }
-
-  private async clearTurnControlMessage(context: TurnContext): Promise<void> {
-    if (context.stopControlMessageId === null) {
-      return;
-    }
-
-    try {
-      await this.deps.telegram.deleteMessage(context.chatId, context.stopControlMessageId);
-    } catch (error) {
-      if (!isTelegramMessageMissingError(error)) {
-        console.warn("Failed to delete turn control message", error);
-      }
-    } finally {
-      context.stopControlMessageId = null;
-    }
-  }
-
-  private transitionPhase(context: TurnContext, nextPhase: TurnPhase): void {
-    if (!isAllowedTransition(context.phase, nextPhase)) {
-      throw new Error(`Illegal turn phase transition: ${context.phase} -> ${nextPhase}`);
-    }
-
-    context.phase = nextPhase;
-  }
-}
-
-function isAllowedTransition(current: TurnPhase, next: TurnPhase): boolean {
-  switch (current) {
-    case "submitting":
-      return next === "active";
-    case "active":
-      return next === "finalizing";
-    case "finalizing":
-      return next === "completed" || next === "failed" || next === "interrupted";
-    case "completed":
-    case "failed":
-    case "interrupted":
-      return false;
-  }
-}
-
-function isTerminalPhase(phase: TurnPhase): phase is TerminalTurnStatus {
-  return phase === "completed" || phase === "failed" || phase === "interrupted";
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return String(error);
 }
 
 function isTelegramMessageMissingError(error: unknown): boolean {
