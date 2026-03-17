@@ -7,7 +7,9 @@ export function getNotificationTurnId(notification: ServerNotification): string 
       return notification.params.turn.id;
     case "item/started":
     case "turn/plan/updated":
+    case "thread/tokenUsage/updated":
     case "item/reasoning/summaryTextDelta":
+    case "model/rerouted":
     case "item/mcpToolCall/progress":
     case "item/commandExecution/outputDelta":
     case "item/fileChange/outputDelta":

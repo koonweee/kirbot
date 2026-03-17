@@ -14,8 +14,10 @@ import type { ToolRequestUserInputParams } from "./generated/codex/v2/ToolReques
 import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
 import type { Turn } from "./generated/codex/v2/Turn";
 import type { TurnSteerResponse } from "./generated/codex/v2/TurnSteerResponse";
+import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import { resolvePinnedCodexInvocation } from "./codex-cli";
 import { CodexRpcClient, type SpawnedAppServer, type WebSocketRpcTransport } from "./rpc";
+import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 
 export type AppServerOptions = {
   url: string;
@@ -63,6 +65,7 @@ export type UserInputServerRequest = {
 
 export class CodexGateway {
   readonly #loadedThreads = new Set<string>();
+  readonly #threadModels = new Map<string, string>();
 
   constructor(
     private readonly client: CodexRpcClient,
@@ -71,9 +74,17 @@ export class CodexGateway {
     this.client.on("notification", (notification: ServerNotification) => {
       if (notification.method === "thread/archived" || notification.method === "thread/closed") {
         this.#loadedThreads.delete(notification.params.threadId);
+        this.#threadModels.delete(notification.params.threadId);
+      }
+
+      if (notification.method === "model/rerouted") {
+        this.#threadModels.set(notification.params.threadId, notification.params.toModel);
       }
     });
-    this.client.on("transportClosed", () => this.#loadedThreads.clear());
+    this.client.on("transportClosed", () => {
+      this.#loadedThreads.clear();
+      this.#threadModels.clear();
+    });
   }
 
   async initialize(): Promise<void> {
@@ -89,7 +100,7 @@ export class CodexGateway {
     });
   }
 
-  async createThread(title: string): Promise<string> {
+  async createThread(title: string): Promise<{ threadId: string; model: string }> {
     const response = await this.client.startThread({
       cwd: this.config.defaultCwd,
       model: this.config.model ?? null,
@@ -108,23 +119,33 @@ export class CodexGateway {
     });
 
     this.#loadedThreads.add(response.thread.id);
+    this.#threadModels.set(response.thread.id, response.model);
     await this.client.setThreadName({
       threadId: response.thread.id,
       name: title
     });
-    return response.thread.id;
+    return {
+      threadId: response.thread.id,
+      model: response.model
+    };
   }
 
-  async ensureThreadLoaded(threadId: string): Promise<void> {
+  async ensureThreadLoaded(threadId: string): Promise<{ model: string }> {
     if (this.#loadedThreads.has(threadId)) {
-      return;
+      return {
+        model: this.#threadModels.get(threadId) ?? this.config.model ?? "unknown-model"
+      };
     }
 
-    await this.client.resumeThread({
+    const response = await this.client.resumeThread({
       threadId,
       persistExtendedHistory: false
     });
     this.#loadedThreads.add(threadId);
+    this.#threadModels.set(threadId, response.model);
+    return {
+      model: response.model
+    };
   }
 
   async sendTurn(threadId: string, input: UserInput[]): Promise<Turn> {
@@ -156,7 +177,7 @@ export class CodexGateway {
     this.#loadedThreads.delete(threadId);
   }
 
-  async readTurnMessages(threadId: string, turnId: string): Promise<string> {
+  async readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {
     const response = await this.client.readThread({
       threadId,
       includeTurns: true
@@ -164,7 +185,12 @@ export class CodexGateway {
 
     const turn = response.thread.turns.find((candidate) => candidate.id === turnId);
     if (!turn) {
-      return "";
+      return {
+        text: "",
+        changedFiles: 0,
+        cwd: response.thread.cwd,
+        branch: response.thread.gitInfo?.branch ?? null
+      };
     }
 
     const agentMessages = turn.items.filter(
@@ -175,11 +201,13 @@ export class CodexGateway {
       .map((item) => item.text)
       .join("\n\n");
 
-    if (finalAnswerText.trim().length > 0) {
-      return finalAnswerText;
-    }
-
-    return agentMessages.map((item) => item.text).join("\n\n");
+    return {
+      text:
+        finalAnswerText.trim().length > 0 ? finalAnswerText : agentMessages.map((item) => item.text).join("\n\n"),
+      changedFiles: countChangedFiles(turn.items),
+      cwd: response.thread.cwd,
+      branch: response.thread.gitInfo?.branch ?? null
+    };
   }
 
   async respondToCommandApproval(id: RequestId, response: CommandExecutionRequestApprovalResponse): Promise<void> {
@@ -208,4 +236,22 @@ export class CodexGateway {
   onServerRequest(listener: (request: ServerRequest) => void): void {
     this.client.on("serverRequest", listener);
   }
+}
+
+function countChangedFiles(items: ThreadItem[]): number {
+  const paths = new Set<string>();
+
+  for (const item of items) {
+    if (item.type !== "fileChange") {
+      continue;
+    }
+
+    for (const change of item.changes) {
+      if (change.path) {
+        paths.add(change.path);
+      }
+    }
+  }
+
+  return paths.size;
 }

@@ -23,6 +23,7 @@ import {
 } from "./bridge/presentation";
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
+import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
 
@@ -35,13 +36,13 @@ export type CallbackQueryEvent = {
 };
 
 export interface BridgeCodexApi {
-  createThread(title: string): Promise<string>;
-  ensureThreadLoaded(threadId: string): Promise<void>;
+  createThread(title: string): Promise<{ threadId: string; model: string }>;
+  ensureThreadLoaded(threadId: string): Promise<{ model: string }>;
   sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }>;
   steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   archiveThread(threadId: string): Promise<void>;
-  readTurnMessages(threadId: string, turnId: string): Promise<string>;
+  readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
   respondToUserInputRequest(id: RequestId, response: ToolRequestUserInputResponse): Promise<void>;
@@ -87,7 +88,7 @@ export class TelegramCodexBridge {
       appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
       completePersistedTurn: (turnId, messageId, status) =>
         this.database.completeTurn(turnId, messageId, status).then(() => undefined),
-      resolveTurnText: this.resolveTurnText.bind(this),
+      resolveTurnSnapshot: this.resolveTurnSnapshot.bind(this),
       syncQueuePreview: this.syncQueuePreview.bind(this),
       maybeSendNextQueuedFollowUp: this.maybeSendNextQueuedFollowUp.bind(this),
       submitQueuedFollowUp: this.submitQueuedFollowUp.bind(this)
@@ -422,8 +423,8 @@ export class TelegramCodexBridge {
     });
 
     try {
-      const threadId = await this.codex.createThread(title);
-      const session = await this.database.activateSession(pending.id, threadId);
+      const thread = await this.codex.createThread(title);
+      const session = await this.database.activateSession(pending.id, thread.threadId);
 
       if (lobbyAnnouncement) {
         await this.#messenger.sendMessage({
@@ -452,7 +453,7 @@ export class TelegramCodexBridge {
       throw new Error("Cannot send a Codex turn without a Telegram topic id");
     }
 
-    await this.codex.ensureThreadLoaded(session.codexThreadId);
+    const thread = await this.codex.ensureThreadLoaded(session.codexThreadId);
     const turn = await this.submitPreparedInput(message, {
       submit: (input) => this.codex.sendTurn(session.codexThreadId!, input)
     });
@@ -466,7 +467,7 @@ export class TelegramCodexBridge {
       draftId: message.updateId
     });
 
-    const activeTurn = this.#lifecycle.activateTurn(message, session.codexThreadId, turn.id);
+    const activeTurn = this.#lifecycle.activateTurn(message, session.codexThreadId, turn.id, thread.model);
     if (activeTurn.statusDraft) {
       await this.#lifecycle.publishCurrentStatus(turn.id, true);
     }
@@ -511,9 +512,19 @@ export class TelegramCodexBridge {
           await this.#lifecycle.handlePlanUpdated(notification.params.turnId);
         }
       },
+      "thread/tokenUsage/updated": async () => {
+        if (notification.method === "thread/tokenUsage/updated") {
+          this.#lifecycle.handleThreadTokenUsageUpdated(notification.params.turnId, notification.params.tokenUsage);
+        }
+      },
       "item/reasoning/summaryTextDelta": async () => {
         if (notification.method === "item/reasoning/summaryTextDelta") {
           await this.#lifecycle.handleReasoningDelta(notification.params.turnId);
+        }
+      },
+      "model/rerouted": async () => {
+        if (notification.method === "model/rerouted") {
+          this.#lifecycle.handleModelRerouted(notification.params.turnId, notification.params.toModel);
         }
       },
       "item/mcpToolCall/progress": async () => {
@@ -591,10 +602,13 @@ export class TelegramCodexBridge {
     });
   }
 
-  private async resolveTurnText(threadId: string, turnId: string): Promise<string> {
+  private async resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {
     const streamedText = this.#lifecycle.renderAssistantItems(turnId);
-    const readbackText = await this.codex.readTurnMessages(threadId, turnId);
-    return readbackText.trim().length > 0 ? readbackText : streamedText;
+    const snapshot = await this.codex.readTurnSnapshot(threadId, turnId);
+    return {
+      ...snapshot,
+      text: snapshot.text.trim().length > 0 ? snapshot.text : streamedText
+    };
   }
 
   private async trySteerTurn(activeTurn: TurnContext, message: UserTurnMessage): Promise<void> {

@@ -1,5 +1,6 @@
 import type { UserTurnMessage } from "../domain";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
+import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
 import {
   buildRenderedCommentaryMessage,
   buildStableDraftId,
@@ -28,11 +29,12 @@ export class TurnLifecycleCoordinator {
     this.#finalizer = new TurnFinalizer(deps);
   }
 
-  activateTurn(message: UserTurnMessage, threadId: string, turnId: string): TurnContext {
+  activateTurn(message: UserTurnMessage, threadId: string, turnId: string, model: string | null): TurnContext {
     if (message.topicId === null) {
       throw new Error("Cannot create an active turn without a Telegram topic id");
     }
 
+    const startedAtMs = Date.now();
     const context: TurnContext = {
       chatId: message.chatId,
       topicId: message.topicId,
@@ -41,23 +43,33 @@ export class TurnLifecycleCoordinator {
       phase: "submitting",
       stopRequested: false,
       submitPendingSteersAfterInterrupt: false,
+      startedAtMs,
       statusDraft: buildStatusDraft("thinking"),
-      lastStatusUpdateAt: Date.now(),
+      lastStatusUpdateAt: startedAtMs,
       statusHandle: this.deps.messenger.statusDraft({
         chatId: message.chatId,
         topicId: message.topicId,
         draftId: buildStableDraftId(`${turnId}:status`)
       }),
+      statusElapsedTimer: null,
       finalStream: this.deps.messenger.streamMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         draftId: buildStableDraftId(`${turnId}:final`)
       }),
-      commentaryStreams: new Map()
+      commentaryStreams: new Map(),
+      model,
+      tokenUsage: null
     };
 
     transitionTurnPhase(context, "active");
     this.#turns.set(turnId, context);
+    context.statusElapsedTimer = setInterval(() => {
+      void this.publishCurrentStatus(turnId, false).catch((error) => {
+        console.warn(`Failed to refresh elapsed status for turn ${turnId}`, error);
+      });
+    }, 3000);
+    context.statusElapsedTimer.unref?.();
     this.deps.runtime.registerTurn({
       chatId: message.chatId,
       topicId: message.topicId,
@@ -174,7 +186,10 @@ export class TurnLifecycleCoordinator {
 
     context.statusDraft = nextStatus;
     context.lastStatusUpdateAt = now;
-    await context.statusHandle.set(renderTelegramStatusDraft(nextStatus), options?.force ?? false);
+    await context.statusHandle.set(
+      renderTelegramStatusDraft(nextStatus, Date.now() - context.startedAtMs),
+      options?.force ?? false
+    );
   }
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
@@ -183,7 +198,10 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    await context.statusHandle.set(renderTelegramStatusDraft(context.statusDraft), force);
+    await context.statusHandle.set(
+      renderTelegramStatusDraft(context.statusDraft, Date.now() - context.startedAtMs),
+      force
+    );
   }
 
   async handleTurnStarted(turnId: string): Promise<void> {
@@ -206,7 +224,9 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleToolProgress(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("using tool"));
+    await this.updateStatus(turnId, buildStatusDraft("using tool"), {
+      preserveDetails: true
+    });
   }
 
   async handleCommandOutput(turnId: string): Promise<void> {
@@ -263,6 +283,7 @@ export class TurnLifecycleCoordinator {
       scheduleNextQueuedFollowUp: true,
       submitPendingSteers: false,
       movePendingSteersToQueued: false,
+      publishFooter: true,
       buildFinalText: (resolvedText) => resolvedText || "(no assistant output)"
     });
   }
@@ -275,6 +296,7 @@ export class TurnLifecycleCoordinator {
       scheduleNextQueuedFollowUp: true,
       submitPendingSteers: false,
       movePendingSteersToQueued: false,
+      publishFooter: true,
       buildFinalText: (resolvedText) => [resolvedText, `\n\nCodex error: ${errorMessage}`].filter(Boolean).join("")
     });
   }
@@ -292,8 +314,23 @@ export class TurnLifecycleCoordinator {
       scheduleNextQueuedFollowUp: false,
       submitPendingSteers: context.submitPendingSteersAfterInterrupt,
       movePendingSteersToQueued: !context.submitPendingSteersAfterInterrupt,
+      publishFooter: false,
       buildFinalText: (resolvedText) => resolvedText
     });
+  }
+
+  handleThreadTokenUsageUpdated(turnId: string, tokenUsage: ThreadTokenUsage): void {
+    const context = this.#turns.get(turnId);
+    if (context) {
+      context.tokenUsage = tokenUsage;
+    }
+  }
+
+  handleModelRerouted(turnId: string, model: string): void {
+    const context = this.#turns.get(turnId);
+    if (context) {
+      context.model = model;
+    }
   }
 
   private async handleAssistantRenderUpdate(

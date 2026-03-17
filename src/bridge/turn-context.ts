@@ -1,4 +1,5 @@
 import type { TurnStatusDraft } from "./presentation";
+import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
 import type { TelegramStatusDraftHandle, TelegramStreamMessageHandle } from "../telegram-messenger";
 
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
@@ -17,11 +18,15 @@ export type TurnContext = {
   phase: TurnPhase;
   stopRequested: boolean;
   submitPendingSteersAfterInterrupt: boolean;
+  startedAtMs: number;
   statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
   statusHandle: TelegramStatusDraftHandle;
+  statusElapsedTimer: NodeJS.Timeout | null;
   finalStream: TelegramStreamMessageHandle;
   commentaryStreams: Map<string, CommentaryStreamState>;
+  model: string | null;
+  tokenUsage: ThreadTokenUsage | null;
 };
 
 export function transitionTurnPhase(context: TurnContext, nextPhase: TurnPhase): void {

@@ -148,7 +148,7 @@ describe("CodexGateway", () => {
     });
   });
 
-  it("prefers final-answer agent messages when reading a completed turn", async () => {
+  it("prefers final-answer agent messages when reading a completed turn snapshot", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
@@ -175,7 +175,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const readPromise = gateway.readTurnMessages("thread-1", "turn-1");
+    const readPromise = gateway.readTurnSnapshot("thread-1", "turn-1");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({
@@ -194,6 +194,10 @@ describe("CodexGateway", () => {
       result: {
         thread: {
           id: "thread-1",
+          cwd: "/workspace",
+          gitInfo: {
+            branch: "main"
+          },
           turns: [
             {
               id: "turn-1",
@@ -217,6 +221,11 @@ describe("CodexGateway", () => {
       }
     });
 
-    await expect(readPromise).resolves.toBe("Ship this patch.");
+    await expect(readPromise).resolves.toEqual({
+      text: "Ship this patch.",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
   });
 });
