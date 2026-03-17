@@ -1,6 +1,8 @@
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
-import type { TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
+import type { SessionMode, TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
+import type { CollaborationMode } from "./generated/codex/CollaborationMode";
+import type { ReasoningEffort } from "./generated/codex/ReasoningEffort";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { RequestId } from "./generated/codex/RequestId";
@@ -37,9 +39,9 @@ export type CallbackQueryEvent = {
 };
 
 export interface BridgeCodexApi {
-  createThread(title: string): Promise<{ threadId: string; model: string }>;
-  ensureThreadLoaded(threadId: string): Promise<{ model: string }>;
-  sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }>;
+  createThread(title: string): Promise<{ threadId: string } & ThreadStartSettings>;
+  ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings>;
+  sendTurn(threadId: string, input: UserInput[], collaborationMode?: CollaborationMode | null): Promise<{ id: string }>;
   steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   archiveThread(threadId: string): Promise<void>;
@@ -59,12 +61,23 @@ type PreparedCodexInput = {
 
 type ParsedSlashCommand = {
   command: string;
+  argsText: string;
+};
+
+type ThreadStartSettings = {
+  model: string;
+  reasoningEffort: ReasoningEffort | null;
 };
 
 const INVALID_COMMAND_TEXT = "This command is not valid here.";
 const NO_ACTIVE_RESPONSE_TO_STOP_TEXT = "There is no active response to stop right now.";
 const STOPPING_CURRENT_RESPONSE_TEXT = "Stopping the current response…";
 const RESPONSE_ALREADY_FINISHING_TEXT = "This response is already finishing.";
+const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing modes.";
+const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one.";
+const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled.";
+const PLAN_MODE_EXITED_TEXT = "Exited plan mode.";
+const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -87,8 +100,8 @@ export class TelegramCodexBridge {
       telegram,
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
-      completePersistedTurn: (turnId, messageId, status) =>
-        this.database.completeTurn(turnId, messageId, status).then(() => undefined),
+      completePersistedTurn: (turnId, messageId, status, resolvedText) =>
+        this.database.completeTurn(turnId, messageId, status, resolvedText).then(() => undefined),
       resolveTurnSnapshot: this.resolveTurnSnapshot.bind(this),
       syncQueuePreview: this.syncQueuePreview.bind(this),
       maybeSendNextQueuedFollowUp: this.maybeSendNextQueuedFollowUp.bind(this),
@@ -317,7 +330,12 @@ export class TelegramCodexBridge {
     await this.sendTurnForSession(session, message);
   }
 
-  private async handleRootSlashCommand(message: UserTurnMessage, _command: ParsedSlashCommand): Promise<void> {
+  private async handleRootSlashCommand(message: UserTurnMessage, command: ParsedSlashCommand): Promise<void> {
+    if (command.command === "plan") {
+      await this.startPlanSessionFromRootMessage(message, command.argsText);
+      return;
+    }
+
     await this.sendInvalidSlashCommandMessage(message);
   }
 
@@ -327,7 +345,126 @@ export class TelegramCodexBridge {
       return;
     }
 
+    if (command.command === "plan") {
+      await this.enterPlanMode(message, command.argsText);
+      return;
+    }
+
+    if (command.command === "implement") {
+      await this.implementLatestPlan(message, command.argsText);
+      return;
+    }
+
     await this.sendInvalidSlashCommandMessage(message);
+  }
+
+  private async enterPlanMode(message: UserTurnMessage, promptText: string): Promise<void> {
+    const session = await this.requireModeCommandSession(message);
+    if (!session) {
+      return;
+    }
+
+    if (this.findActiveTurnByTopic(message.chatId, message.topicId!)) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: MODE_CHANGE_REJECTED_TEXT
+      });
+      return;
+    }
+
+    const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "plan");
+    if (!updatedSession) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: MODE_COMMAND_REQUIRES_SESSION_TEXT
+      });
+      return;
+    }
+
+    if (!promptText.trim()) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: PLAN_MODE_ENABLED_TEXT
+      });
+      return;
+    }
+
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      topicId: message.topicId,
+      text: PLAN_MODE_ENABLED_TEXT
+    });
+    await this.sendTurnForSession(updatedSession, replaceMessageText(message, promptText));
+  }
+
+  private async implementLatestPlan(message: UserTurnMessage, extraInstructions: string): Promise<void> {
+    const session = await this.requireModeCommandSession(message);
+    if (!session) {
+      return;
+    }
+
+    if (this.findActiveTurnByTopic(message.chatId, message.topicId!)) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: MODE_CHANGE_REJECTED_TEXT
+      });
+      return;
+    }
+
+    const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "default");
+    if (!updatedSession) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: MODE_COMMAND_REQUIRES_SESSION_TEXT
+      });
+      return;
+    }
+
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      topicId: message.topicId,
+      text: PLAN_MODE_EXITED_TEXT
+    });
+    await this.sendTurnForSession(
+      updatedSession,
+      replaceMessageText(message, buildImplementationPrompt(extraInstructions)),
+      {
+        forceMode: "default"
+      }
+    );
+  }
+
+  private async requireModeCommandSession(message: UserTurnMessage): Promise<TopicSession | null> {
+    if (message.topicId === null) {
+      await this.sendInvalidSlashCommandMessage(message);
+      return null;
+    }
+
+    const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
+    if (!session) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: MODE_COMMAND_REQUIRES_SESSION_TEXT
+      });
+      return null;
+    }
+
+    if (!session.codexThreadId) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: "This topic is still provisioning a Codex session. Try again in a moment."
+      });
+      return null;
+    }
+
+    return session;
   }
 
   private async stopActiveTurn(message: UserTurnMessage): Promise<void> {
@@ -398,7 +535,33 @@ export class TelegramCodexBridge {
         topicId: forumTopic.message_thread_id
       },
       title,
-      `Created session topic "${title}". Continue in the new topic.`
+      {
+        lobbyAnnouncement: `Created session topic "${title}". Continue in the new topic.`
+      }
+    );
+  }
+
+  private async startPlanSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
+    const trimmedPrompt = promptText.trim();
+    const title = trimmedPrompt ? deriveTopicTitle(trimmedPrompt) : DEFAULT_NEW_PLAN_SESSION_TITLE;
+    const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
+    const topicMessage = {
+      ...message,
+      topicId: forumTopic.message_thread_id
+    };
+
+    await this.startSessionInTopic(
+      topicMessage,
+      title,
+      {
+        lobbyAnnouncement: `Created plan topic "${title}". Continue in the new topic.`,
+        initialPreferredMode: "plan",
+        postActivationTopicMessage: PLAN_MODE_ENABLED_TEXT,
+        startInitialTurn: trimmedPrompt.length > 0,
+        ...(trimmedPrompt ? {
+          firstTurnMessage: replaceMessageText(topicMessage, trimmedPrompt)
+        } : {})
+      }
     );
   }
 
@@ -414,7 +577,13 @@ export class TelegramCodexBridge {
   private async startSessionInTopic(
     message: UserTurnMessage,
     title: string,
-    lobbyAnnouncement?: string
+    options?: {
+      lobbyAnnouncement?: string;
+      initialPreferredMode?: SessionMode;
+      startInitialTurn?: boolean;
+      firstTurnMessage?: UserTurnMessage;
+      postActivationTopicMessage?: string;
+    }
   ): Promise<void> {
     if (message.topicId === null) {
       throw new Error("Cannot start a session without a Telegram topic id");
@@ -430,16 +599,34 @@ export class TelegramCodexBridge {
 
     try {
       const thread = await this.codex.createThread(title);
-      const session = await this.database.activateSession(pending.id, thread.threadId);
+      let session = await this.database.activateSession(pending.id, thread.threadId);
 
-      if (lobbyAnnouncement) {
+      if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
+        session = await this.database.updateSessionPreferredMode(
+          Number(session.telegramChatId),
+          session.telegramTopicId,
+          options.initialPreferredMode
+        ) ?? session;
+      }
+
+      if (options?.lobbyAnnouncement) {
         await this.#messenger.sendMessage({
           chatId: message.chatId,
-          text: lobbyAnnouncement
+          text: options.lobbyAnnouncement
         });
       }
 
-      await this.sendTurnForSession(session, message);
+      if (options?.postActivationTopicMessage) {
+        await this.#messenger.sendMessage({
+          chatId: message.chatId,
+          topicId: message.topicId,
+          text: options.postActivationTopicMessage
+        });
+      }
+
+      if (options?.startInitialTurn ?? true) {
+        await this.sendTurnForSession(session, options?.firstTurnMessage ?? message);
+      }
     } catch (error) {
       await this.database.markSessionErrored(pending.id);
       await this.#messenger.sendMessage({
@@ -450,7 +637,13 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async sendTurnForSession(session: TopicSession, message: UserTurnMessage): Promise<void> {
+  private async sendTurnForSession(
+    session: TopicSession,
+    message: UserTurnMessage,
+    options?: {
+      forceMode?: SessionMode;
+    }
+  ): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error(`Session ${session.id} has no Codex thread id`);
     }
@@ -461,7 +654,17 @@ export class TelegramCodexBridge {
 
     const thread = await this.codex.ensureThreadLoaded(session.codexThreadId);
     const turn = await this.submitPreparedInput(message, {
-      submit: (input) => this.codex.sendTurn(session.codexThreadId!, input)
+      submit: (input) =>
+        this.codex.sendTurn(
+          session.codexThreadId!,
+          input,
+          buildTurnCollaborationMode(
+            options?.forceMode ?? session.preferredMode,
+            thread,
+            this.config.codex.developerInstructions ?? null,
+            options?.forceMode === "default"
+          )
+        )
     });
 
     await this.database.recordTurnStart({
@@ -515,7 +718,10 @@ export class TelegramCodexBridge {
       },
       "turn/plan/updated": async () => {
         if (notification.method === "turn/plan/updated") {
-          await this.#lifecycle.handlePlanUpdated(notification.params.turnId);
+          await this.#lifecycle.handlePlanUpdated(
+            notification.params.turnId,
+            buildPlanStatusDetails(notification.params.explanation, notification.params.plan)
+          );
         }
       },
       "thread/tokenUsage/updated": async () => {
@@ -555,6 +761,11 @@ export class TelegramCodexBridge {
             notification.params.itemId,
             notification.params.delta
           );
+        }
+      },
+      "item/plan/delta": async () => {
+        if (notification.method === "item/plan/delta") {
+          await this.#lifecycle.handlePlanDelta(notification.params.turnId, notification.params.itemId, notification.params.delta);
         }
       },
       "item/completed": async () => {
@@ -609,11 +820,19 @@ export class TelegramCodexBridge {
   }
 
   private async resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {
-    const streamedText = this.#lifecycle.renderAssistantItems(turnId);
+    const streamedAssistantText = this.#lifecycle.renderAssistantItems(turnId);
+    const streamedPlanText = this.#lifecycle.renderPlanItems(turnId);
     const snapshot = await this.codex.readTurnSnapshot(threadId, turnId);
     return {
       ...snapshot,
-      text: snapshot.text.trim().length > 0 ? snapshot.text : streamedText
+      assistantText: snapshot.assistantText.trim().length > 0 ? snapshot.assistantText : streamedAssistantText,
+      planText: snapshot.planText.trim().length > 0 ? snapshot.planText : streamedPlanText,
+      text:
+        snapshot.text.trim().length > 0
+          ? snapshot.text
+          : streamedAssistantText.trim().length > 0
+            ? streamedAssistantText
+            : streamedPlanText
     };
   }
 
@@ -807,14 +1026,83 @@ function parseSlashCommand(message: UserTurnMessage): ParsedSlashCommand | null 
     return null;
   }
 
-  const [token] = trimmed.split(/\s+/, 1);
+  const [token, ...rest] = trimmed.split(/\s+/);
   if (!token || token === "/") {
     return null;
   }
 
   return {
-    command: token.slice(1)
+    command: token.slice(1),
+    argsText: rest.join(" ").trim()
   };
+}
+
+function buildTurnCollaborationMode(
+  preferredMode: SessionMode,
+  settings: ThreadStartSettings,
+  developerInstructions: string | null,
+  explicitDefault = false
+): CollaborationMode | null {
+  if (preferredMode === "plan") {
+    return {
+      mode: "plan",
+      settings: {
+        model: settings.model,
+        reasoning_effort: settings.reasoningEffort,
+        developer_instructions: null
+      }
+    };
+  }
+
+  if (!explicitDefault) {
+    return null;
+  }
+
+  return {
+    mode: "default",
+    settings: {
+      model: settings.model,
+      reasoning_effort: settings.reasoningEffort,
+      developer_instructions: developerInstructions
+    }
+  };
+}
+
+function replaceMessageText(message: UserTurnMessage, text: string): UserTurnMessage {
+  return {
+    ...message,
+    text,
+    input: [
+      {
+        type: "text",
+        text,
+        text_elements: []
+      }
+    ]
+  };
+}
+
+function buildImplementationPrompt(extraInstructions: string): string {
+  const parts = ["Implement the plan."];
+  const trimmedInstructions = extraInstructions.trim();
+  if (trimmedInstructions) {
+    parts.push("", "Additional instructions:", trimmedInstructions);
+  }
+
+  return parts.join("\n");
+}
+
+function buildPlanStatusDetails(
+  explanation: string | null,
+  plan: Array<{ step: string; status: "pending" | "inProgress" | "completed" }>
+): string | null {
+  const trimmedExplanation = explanation?.trim();
+  if (trimmedExplanation) {
+    return trimmedExplanation;
+  }
+
+  const activeStep = plan.find((step) => step.status === "inProgress");
+  return activeStep?.step ?? null;
 }
 
 function topicKey(chatId: number, topicId: number): string {

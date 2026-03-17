@@ -7,6 +7,14 @@ import type { ToolRequestUserInputResponse } from "../generated/codex/v2/ToolReq
 import type { InlineKeyboardMarkup } from "../telegram-messenger";
 import type { UserInputServerRequest } from "../codex";
 
+export type UserInputRequestState = {
+  answers: Record<string, string[]>;
+  currentQuestionIndex: number;
+  awaitingFreeTextQuestionId: string | null;
+};
+
+type UserInputQuestion = UserInputServerRequest["params"]["questions"][number];
+
 export function buildApprovalKeyboard(
   requestId: number,
   availableDecisions: ReadonlyArray<unknown> | null
@@ -43,35 +51,157 @@ export function formatFileChangeApprovalPrompt(params: FileChangeRequestApproval
   return ["Codex requested file-change approval.", `Turn: ${params.turnId}`, `Item: ${params.itemId}`].join("\n");
 }
 
-export function parseUserInputResponse(
-  text: string,
-  questions: UserInputServerRequest["params"]["questions"]
-): ToolRequestUserInputResponse {
-  if (questions.length === 1) {
-    const question = questions[0];
-    if (!question) {
-      throw new Error("Expected a single question for user input parsing");
-    }
+export function createInitialUserInputState(): UserInputRequestState {
+  return {
+    answers: {},
+    currentQuestionIndex: 0,
+    awaitingFreeTextQuestionId: null
+  };
+}
 
+export function parseUserInputState(stateJson: string | null): UserInputRequestState {
+  if (!stateJson) {
+    return createInitialUserInputState();
+  }
+
+  const parsed = JSON.parse(stateJson) as Partial<UserInputRequestState>;
+  return {
+    answers: parsed.answers ?? {},
+    currentQuestionIndex: parsed.currentQuestionIndex ?? 0,
+    awaitingFreeTextQuestionId: parsed.awaitingFreeTextQuestionId ?? null
+  };
+}
+
+export function stringifyUserInputState(state: UserInputRequestState): string {
+  return JSON.stringify(state);
+}
+
+export function getCurrentUserInputQuestion(
+  questions: UserInputServerRequest["params"]["questions"],
+  state: UserInputRequestState
+): UserInputQuestion | null {
+  return questions[state.currentQuestionIndex] ?? null;
+}
+
+export function buildUserInputPrompt(
+  requestId: number,
+  questions: UserInputServerRequest["params"]["questions"],
+  state: UserInputRequestState
+): { text: string; replyMarkup?: InlineKeyboardMarkup } {
+  const question = getCurrentUserInputQuestion(questions, state);
+  if (!question) {
     return {
-      answers: {
-        [question.id]: {
-          answers: [text.trim()]
-        }
-      }
+      text: "Sent your answers to Codex."
     };
   }
 
-  const parsed = JSON.parse(text) as Record<string, string | Array<string>>;
-  const answers = Object.fromEntries(
-    questions.map((question) => {
-      const value = parsed[question.id];
-      const normalized = Array.isArray(value) ? value : value ? [value] : [];
-      return [question.id, { answers: normalized }];
-    })
-  );
+  const lines = ["Codex is asking for user input."];
+  if (questions.length > 1) {
+    lines.push(`Question ${state.currentQuestionIndex + 1}/${questions.length}`);
+  }
 
-  return { answers };
+  if (question.header.trim()) {
+    lines.push(question.header.trim());
+  }
+
+  lines.push(question.question);
+
+  if (question.isSecret) {
+    lines.push("Sensitive input. Your reply stays visible in this topic.");
+  }
+
+  const awaitingFreeText = state.awaitingFreeTextQuestionId === question.id;
+  if (question.options?.length) {
+    lines.push("");
+    for (const option of question.options) {
+      lines.push(option.description ? `- ${option.label}: ${option.description}` : `- ${option.label}`);
+    }
+
+    lines.push("");
+    lines.push(awaitingFreeText ? "Reply with your own answer in this topic." : "Use the buttons below to answer.");
+  } else {
+    lines.push("");
+    lines.push("Reply with your answer in this topic.");
+  }
+
+  const replyMarkup =
+    question.options?.length && !awaitingFreeText
+      ? {
+          inline_keyboard: [
+            ...question.options.map((option, index) => [
+              { text: option.label, callback_data: `req:${requestId}:opt:${index}` }
+            ]),
+            ...(question.isOther ? [[{ text: "Other…", callback_data: `req:${requestId}:other` }]] : [])
+          ]
+        }
+      : undefined;
+
+  return {
+    text: lines.join("\n"),
+    ...(replyMarkup ? { replyMarkup } : {})
+  };
+}
+
+export function currentQuestionAcceptsFreeText(question: UserInputQuestion, state: UserInputRequestState): boolean {
+  return !question.options?.length || state.awaitingFreeTextQuestionId === question.id;
+}
+
+export function answerCurrentUserInputQuestion(
+  questions: UserInputServerRequest["params"]["questions"],
+  state: UserInputRequestState,
+  answers: string[]
+): UserInputRequestState {
+  const question = getCurrentUserInputQuestion(questions, state);
+  if (!question) {
+    return state;
+  }
+
+  const nextState: UserInputRequestState = {
+    answers: {
+      ...state.answers,
+      [question.id]: answers
+    },
+    currentQuestionIndex: state.currentQuestionIndex,
+    awaitingFreeTextQuestionId: null
+  };
+
+  let nextIndex = state.currentQuestionIndex + 1;
+  while (nextIndex < questions.length && nextState.answers[questions[nextIndex]!.id]) {
+    nextIndex += 1;
+  }
+  nextState.currentQuestionIndex = nextIndex;
+  return nextState;
+}
+
+export function allowCurrentQuestionFreeText(
+  questions: UserInputServerRequest["params"]["questions"],
+  state: UserInputRequestState
+): UserInputRequestState {
+  const question = getCurrentUserInputQuestion(questions, state);
+  if (!question) {
+    return state;
+  }
+
+  return {
+    ...state,
+    awaitingFreeTextQuestionId: question.id
+  };
+}
+
+export function buildUserInputResponse(
+  questions: UserInputServerRequest["params"]["questions"],
+  state: UserInputRequestState
+): ToolRequestUserInputResponse {
+  return {
+    answers: Object.fromEntries(
+      questions.map((question) => [
+        question.id,
+        {
+          answers: state.answers[question.id] ?? []
+        }
+      ])
+    )
+  };
 }
 
 export function parseRequestId(value: string): RequestId {

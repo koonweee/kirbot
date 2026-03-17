@@ -196,4 +196,28 @@ describe("BridgeTurnRuntime", () => {
     });
     expect(runtime.renderAssistantItems("turn-1")).toBe("First part\n\nSecond part");
   });
+
+  it("tracks plan items separately from assistant items", () => {
+    const runtime = new BridgeTurnRuntime();
+    runtime.registerTurn({
+      chatId: -1001,
+      topicId: 777,
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+
+    runtime.registerPlanItem("turn-1", "plan-1");
+    expect(runtime.appendPlanDelta("turn-1", "plan-1", "Draft the rollout")).toEqual({
+      itemId: "plan-1",
+      itemText: "Draft the rollout",
+      finalText: "Draft the rollout"
+    });
+
+    runtime.commitPlanItem("turn-1", "plan-1", "1. Draft the rollout");
+    runtime.registerAssistantItem("turn-1", "item-1", "final_answer");
+    runtime.commitAssistantItem("turn-1", "item-1", "Implementation done.", "final_answer");
+
+    expect(runtime.renderPlanItems("turn-1")).toBe("1. Draft the rollout");
+    expect(runtime.renderAssistantItems("turn-1")).toBe("Implementation done.");
+  });
 });

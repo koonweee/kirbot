@@ -78,7 +78,7 @@ describe("CodexGateway", () => {
             version: "0.1.0"
           },
           capabilities: {
-            experimentalApi: false
+            experimentalApi: true
           }
         }
       }
@@ -223,9 +223,83 @@ describe("CodexGateway", () => {
 
     await expect(readPromise).resolves.toEqual({
       text: "Ship this patch.",
+      assistantText: "Ship this patch.",
+      planText: "",
       changedFiles: 0,
       cwd: "/workspace",
       branch: "main"
+    });
+  });
+
+  it("passes collaborationMode through on turn/start when provided", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      appServerUrl: "ws://127.0.0.1:8787",
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    void gateway.sendTurn(
+      "thread-1",
+      [
+        {
+          type: "text",
+          text: "plan this change",
+          text_elements: []
+        }
+      ],
+      {
+        mode: "plan",
+        settings: {
+          model: "gpt-5-codex",
+          reasoning_effort: "high",
+          developer_instructions: null
+        }
+      }
+    );
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "turn/start",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "plan this change",
+            text_elements: []
+          }
+        ],
+        collaborationMode: {
+          mode: "plan",
+          settings: {
+            model: "gpt-5-codex",
+            reasoning_effort: "high",
+            developer_instructions: null
+          }
+        }
+      }
     });
   });
 });

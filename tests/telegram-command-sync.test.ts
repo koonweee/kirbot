@@ -85,6 +85,14 @@ describe("TelegramCommandSync", () => {
           {
             command: "stop",
             description: "Stop the current response"
+          },
+          {
+            command: "plan",
+            description: "Switch this topic into plan mode"
+          },
+          {
+            command: "implement",
+            description: "Implement the plan in this topic"
           }
         ],
         options: {
@@ -98,6 +106,14 @@ describe("TelegramCommandSync", () => {
           {
             command: "stop",
             description: "Stop the current response"
+          },
+          {
+            command: "plan",
+            description: "Switch this topic into plan mode"
+          },
+          {
+            command: "implement",
+            description: "Implement the plan in this topic"
           }
         ],
         options: {

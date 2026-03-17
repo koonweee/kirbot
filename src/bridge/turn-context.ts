@@ -10,6 +10,11 @@ export type CommentaryStreamState = {
   text: string;
 };
 
+export type PlanStreamState = {
+  handle: TelegramStreamMessageHandle;
+  text: string;
+};
+
 export type TurnContext = {
   chatId: number;
   topicId: number;
@@ -25,6 +30,8 @@ export type TurnContext = {
   statusElapsedTimer: NodeJS.Timeout | null;
   finalStream: TelegramStreamMessageHandle;
   commentaryStreams: Map<string, CommentaryStreamState>;
+  planStreams: Map<string, PlanStreamState>;
+  publishedPlanMessages: number;
   model: string | null;
   tokenUsage: ThreadTokenUsage | null;
 };

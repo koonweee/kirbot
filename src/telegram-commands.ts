@@ -3,23 +3,31 @@ export type TelegramBotCommand = {
   description: string;
 };
 
-type TelegramCommandName = "stop";
+type TelegramCommandName = "stop" | "plan" | "implement";
 
 const COMMAND_DEFINITIONS: Readonly<Record<TelegramCommandName, TelegramBotCommand>> = {
   stop: {
     command: "stop",
     description: "Stop the current response"
+  },
+  plan: {
+    command: "plan",
+    description: "Switch this topic into plan mode"
+  },
+  implement: {
+    command: "implement",
+    description: "Implement the plan in this topic"
   }
 };
 
-const ROOT_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = [];
-const TOPIC_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = ["stop"];
+const ROOT_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = ["plan"];
+const TOPIC_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = ["stop", "plan", "implement"];
 
 const ROOT_COMMANDS = buildTelegramCommands(ROOT_COMMAND_ALLOWLIST);
 const TOPIC_COMMANDS = buildTelegramCommands(TOPIC_COMMAND_ALLOWLIST);
 const ALL_VISIBLE_COMMANDS = buildTelegramCommands([
-  ...ROOT_COMMAND_ALLOWLIST,
-  ...TOPIC_COMMAND_ALLOWLIST
+  ...TOPIC_COMMAND_ALLOWLIST,
+  ...ROOT_COMMAND_ALLOWLIST
 ]);
 
 const ROOT_COMMAND_SET = new Set(ROOT_COMMANDS.map((command) => command.command));
