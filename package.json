@@ -12,7 +12,7 @@
     "dev:tmux:attach": "node scripts/tmux-session.mjs attach dev",
     "dev:tmux:restart": "node scripts/tmux-session.mjs restart dev",
     "generate:codex-types": "node scripts/generate-codex-types.mjs",
-    "start": "node --enable-source-maps dist/index.js",
+    "start": "node --enable-source-maps dist/src/index.js",
     "start:tmux": "node scripts/tmux-session.mjs ensure start",
     "start:tmux:attach": "node scripts/tmux-session.mjs attach start",
     "start:tmux:restart": "node scripts/tmux-session.mjs restart start",

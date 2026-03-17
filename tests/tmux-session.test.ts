@@ -38,7 +38,7 @@ describe("tmux-session helper", () => {
       start: {
         sessionName: "kirbot-prod",
         npmScript: "start",
-        description: "Detached kirbot production process from dist/index.js."
+        description: "Detached kirbot production process from the built start command."
       }
     });
   });
