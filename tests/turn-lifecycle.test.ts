@@ -378,7 +378,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5 • <1s • 2 files • 0% left • /home/tester/kirbot • feature/footer"
+      "gpt-5 • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
     );
   });
 });
