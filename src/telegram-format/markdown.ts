@@ -29,6 +29,15 @@ import type {
 import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
 
 import { TelegramEntityBuilder } from "./entity-builder";
+import {
+  boldFormattedText,
+  codeFormattedText,
+  italicFormattedText,
+  linkFormattedText,
+  preformattedFormattedText,
+  quoteFormattedText,
+  strikethroughFormattedText
+} from "./formatters";
 import type { FormattedText } from "./types";
 
 export function renderMarkdownToFormattedText(markdown: string): FormattedText {
@@ -95,22 +104,17 @@ function renderBlock(builder: TelegramEntityBuilder, node: RootContent | BlockCo
 }
 
 function renderHeading(builder: TelegramEntityBuilder, node: Heading): void {
-  const fragment = renderInlineFragment(node.children);
-  const range = builder.appendFormatted(fragment);
-  builder.annotate(range, { type: "bold" });
+  builder.appendFormatted(boldFormattedText(renderInlineFragment(node.children)));
 }
 
 function renderBlockquote(builder: TelegramEntityBuilder, node: Blockquote): void {
   const fragmentBuilder = new TelegramEntityBuilder();
   renderBlockSequence(fragmentBuilder, node.children, "\n\n");
-  const fragment = fragmentBuilder.build();
-  const range = builder.appendFormatted(fragment);
-  builder.annotate(range, { type: "blockquote" });
+  builder.appendFormatted(quoteFormattedText(fragmentBuilder.build()));
 }
 
 function renderCodeBlock(builder: TelegramEntityBuilder, node: Code): void {
-  const range = builder.appendText(node.value);
-  builder.annotate(range, node.lang ? { type: "pre", language: node.lang } : { type: "pre" });
+  builder.appendFormatted(preformattedFormattedText({ text: node.value }, node.lang ?? undefined));
 }
 
 function renderList(builder: TelegramEntityBuilder, node: List): void {
@@ -143,17 +147,16 @@ function renderInline(builder: TelegramEntityBuilder, node: PhrasingContent): vo
       builder.appendText(node.value);
       return;
     case "strong":
-      renderAnnotatedFragment(builder, node, { type: "bold" });
+      renderAnnotatedFragment(builder, node, boldFormattedText);
       return;
     case "emphasis":
-      renderAnnotatedFragment(builder, node, { type: "italic" });
+      renderAnnotatedFragment(builder, node, italicFormattedText);
       return;
     case "delete":
-      renderAnnotatedFragment(builder, node, { type: "strikethrough" });
+      renderAnnotatedFragment(builder, node, strikethroughFormattedText);
       return;
     case "inlineCode": {
-      const range = builder.appendText(node.value);
-      builder.annotate(range, { type: "code" });
+      builder.appendFormatted(codeFormattedText({ text: node.value }));
       return;
     }
     case "link":
@@ -185,17 +188,13 @@ function renderInline(builder: TelegramEntityBuilder, node: PhrasingContent): vo
 function renderAnnotatedFragment(
   builder: TelegramEntityBuilder,
   node: Strong | Emphasis | Delete,
-  annotation: { type: "bold" | "italic" | "strikethrough" }
+  apply: (formatted: FormattedText) => FormattedText
 ): void {
-  const fragment = renderInlineFragment(node.children);
-  const range = builder.appendFormatted(fragment);
-  builder.annotate(range, annotation);
+  builder.appendFormatted(apply(renderInlineFragment(node.children)));
 }
 
 function renderLink(builder: TelegramEntityBuilder, node: Link): void {
-  const fragment = renderInlineFragment(node.children);
-  const range = builder.appendFormatted(fragment);
-  builder.annotate(range, { type: "text_link", url: node.url });
+  builder.appendFormatted(linkFormattedText(renderInlineFragment(node.children), node.url));
 }
 
 function renderInlineFragment(nodes: PhrasingContent[]): FormattedText {

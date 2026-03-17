@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { chunkFormattedText, prependText } from "../src/telegram-format/chunk";
 import { buildFormattedText, TelegramEntityBuilder } from "../src/telegram-format/entity-builder";
+import { boldFormattedText, renderLinkedText } from "../src/telegram-format/formatters";
 import { renderMarkdownToFormattedText } from "../src/telegram-format/markdown";
 import { renderPreformattedText, renderQuotedText } from "../src/telegram-format/preformatted";
 
@@ -63,7 +64,7 @@ describe("telegram-format", () => {
       text: "quoted text\n\nconst answer = 42;",
       entities: [
         {
-          type: "blockquote",
+          type: "expandable_blockquote",
           offset: 0,
           length: 11
         },
@@ -136,6 +137,49 @@ describe("telegram-format", () => {
           type: "blockquote",
           offset: 0,
           length: 13
+        }
+      ]
+    });
+  });
+
+  it("reuses shared wrappers to nest manual formatting over existing entities", () => {
+    expect(
+      boldFormattedText({
+        text: "mix",
+        entities: [
+          {
+            type: "italic",
+            offset: 1,
+            length: 2
+          }
+        ]
+      })
+    ).toEqual({
+      text: "mix",
+      entities: [
+        {
+          type: "bold",
+          offset: 0,
+          length: 3
+        },
+        {
+          type: "italic",
+          offset: 1,
+          length: 2
+        }
+      ]
+    });
+  });
+
+  it("renders manual links through the shared formatter path", () => {
+    expect(renderLinkedText("docs", "https://example.com")).toEqual({
+      text: "docs",
+      entities: [
+        {
+          type: "text_link",
+          offset: 0,
+          length: 4,
+          url: "https://example.com"
         }
       ]
     });
