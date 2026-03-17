@@ -4,7 +4,7 @@ import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
 import { createConsoleLogTarget, createSourceLogger, type AppLogTarget, type LoggerLike } from "./logging";
 import { TemporaryImageStore } from "./media-store";
-import { CodexRpcClient, WebSocketRpcTransport, type SpawnedAppServer } from "./rpc";
+import { CodexRpcClient, StdioRpcTransport, type SpawnedAppServer } from "./rpc";
 import {
   TelegramCommandSync,
   initializeTelegramCommandSyncFailOpen,
@@ -35,6 +35,8 @@ export type CreateKirbotRuntimeOptions = {
   fallbackLogger?: LoggerLike;
   codexApi?: BridgeCodexApi;
 };
+
+const CODEX_INITIALIZE_TIMEOUT_MS = 10_000;
 
 export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): Promise<KirbotRuntime> {
   const config = options.config ?? (await import("./config")).loadConfig();
@@ -111,15 +113,14 @@ async function initializeCodex(
   }
 
   const spawnedAppServer = await spawnCodexAppServer({
-    url: config.codex.appServerUrl,
     logger
   });
-  const transport = new WebSocketRpcTransport(config.codex.appServerUrl);
-  await connectWithRetry(transport);
+  const transport = new StdioRpcTransport(spawnedAppServer.process);
+  await transport.connect();
 
   const rpcClient = new CodexRpcClient(transport);
   const codex = new CodexGateway(rpcClient, config.codex);
-  await codex.initialize();
+  await withTimeout(codex.initialize(), CODEX_INITIALIZE_TIMEOUT_MS, "Timed out waiting for Codex app server initialization");
 
   return {
     codex,
@@ -128,18 +129,18 @@ async function initializeCodex(
   };
 }
 
-async function connectWithRetry(transport: WebSocketRpcTransport, attempts = 30): Promise<void> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      await transport.connect();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }

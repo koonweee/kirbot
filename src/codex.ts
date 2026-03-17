@@ -18,7 +18,7 @@ import type { Turn } from "./generated/codex/v2/Turn";
 import type { TurnSteerResponse } from "./generated/codex/v2/TurnSteerResponse";
 import type { ThreadItem } from "./generated/codex/v2/ThreadItem";
 import { resolvePinnedCodexInvocation } from "./codex-cli";
-import { CodexRpcClient, type SpawnedAppServer, type WebSocketRpcTransport } from "./rpc";
+import { CodexRpcClient, type SpawnedAppServer } from "./rpc";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 import type { LoggerLike } from "./logging";
 
@@ -28,23 +28,13 @@ export type ThreadStartSettings = {
 };
 
 export type AppServerOptions = {
-  url: string;
   logger?: LoggerLike;
 };
 
 export async function spawnCodexAppServer(options: AppServerOptions): Promise<SpawnedAppServer> {
   const codex = resolvePinnedCodexInvocation();
-  const child = spawn(codex.command, [...codex.args, "app-server", "--listen", options.url], {
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-
-  child.stdout?.on("data", (chunk) => {
-    if (options.logger) {
-      options.logger.info(String(chunk).trimEnd());
-      return;
-    }
-
-    process.stdout.write(`[codex-app-server] ${chunk}`);
+  const child = spawn(codex.command, [...codex.args, "app-server"], {
+    stdio: ["pipe", "pipe", "pipe"]
   });
   child.stderr?.on("data", (chunk) => {
     if (options.logger) {
@@ -58,6 +48,10 @@ export async function spawnCodexAppServer(options: AppServerOptions): Promise<Sp
   return {
     process: child,
     stop: async () => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+
       child.kill("SIGTERM");
       await once(child, "exit");
     }

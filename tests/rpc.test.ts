@@ -1,6 +1,9 @@
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+
 import { describe, expect, it } from "vitest";
 
-import { CodexRpcClient, JsonRpcMethodError, type RpcTransport } from "../src/rpc";
+import { CodexRpcClient, JsonRpcMethodError, StdioRpcTransport, type RpcTransport } from "../src/rpc";
 
 class FakeTransport implements RpcTransport {
   readonly sent: unknown[] = [];
@@ -39,7 +42,161 @@ class FakeTransport implements RpcTransport {
   }
 }
 
+class FakeStdioChild extends EventEmitter {
+  readonly stdin = new PassThrough();
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+}
+
+describe("StdioRpcTransport", () => {
+  it("writes newline-delimited JSON payloads to stdin", async () => {
+    const child = new FakeStdioChild();
+    const transport = new StdioRpcTransport(child as never);
+
+    let written = "";
+    child.stdin.setEncoding("utf8");
+    child.stdin.on("data", (chunk) => {
+      written += chunk;
+    });
+
+    await transport.connect();
+    await transport.send({
+      jsonrpc: "2.0",
+      method: "initialized"
+    });
+
+    expect(written).toBe('{"jsonrpc":"2.0","method":"initialized"}\n');
+  });
+
+  it("parses newline-delimited messages from stdout", async () => {
+    const child = new FakeStdioChild();
+    const transport = new StdioRpcTransport(child as never);
+
+    const received: unknown[] = [];
+    transport.onMessage((message) => received.push(message));
+
+    await transport.connect();
+    child.stdout.write("\n");
+    child.stdout.write('{"method":"thread/started","params":{"thread":{"id":"thread-1"}}}\n');
+
+    expect(received).toEqual([
+      {
+        method: "thread/started",
+        params: {
+          thread: {
+            id: "thread-1"
+          }
+        }
+      }
+    ]);
+  });
+
+  it("surfaces invalid JSON as a transport error and closes the transport", async () => {
+    const child = new FakeStdioChild();
+    const transport = new StdioRpcTransport(child as never);
+
+    const errors: Error[] = [];
+    let closeCount = 0;
+    transport.onError((error) => errors.push(error));
+    transport.onClose(() => {
+      closeCount += 1;
+    });
+
+    await transport.connect();
+    child.stdout.write("{not-json}\n");
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain("invalid JSON");
+    expect(closeCount).toBe(1);
+  });
+
+  it("treats child exit as a transport failure", async () => {
+    const child = new FakeStdioChild();
+    const transport = new StdioRpcTransport(child as never);
+
+    const errors: Error[] = [];
+    let closeCount = 0;
+    transport.onError((error) => errors.push(error));
+    transport.onClose(() => {
+      closeCount += 1;
+    });
+
+    await transport.connect();
+    child.emit("exit", 7, null);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain("code 7");
+    expect(closeCount).toBe(1);
+  });
+});
+
 describe("CodexRpcClient", () => {
+  it("completes the initialize handshake with an initialized notification", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+
+    const initializePromise = client.initialize({
+      clientInfo: {
+        name: "test",
+        title: "Test",
+        version: "0.1.0"
+      },
+      capabilities: {
+        experimentalApi: true
+      }
+    });
+    await Promise.resolve();
+
+    expect(transport.sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: {
+            name: "test",
+            title: "Test",
+            version: "0.1.0"
+          },
+          capabilities: {
+            experimentalApi: true
+          }
+        }
+      }
+    ]);
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    expect(transport.sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: {
+            name: "test",
+            title: "Test",
+            version: "0.1.0"
+          },
+          capabilities: {
+            experimentalApi: true
+          }
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        method: "initialized"
+      }
+    ]);
+  });
+
   it("correlates requests and surfaces notifications", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);

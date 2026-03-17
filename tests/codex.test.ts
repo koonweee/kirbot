@@ -2,9 +2,9 @@ import { existsSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { CodexGateway } from "../src/codex";
+import { CodexGateway, spawnCodexAppServer } from "../src/codex";
 import { resolvePinnedCodexExecutablePath } from "../src/codex-cli";
-import { CodexRpcClient, type RpcTransport } from "../src/rpc";
+import { CodexRpcClient, StdioRpcTransport, type RpcTransport } from "../src/rpc";
 
 class FakeTransport implements RpcTransport {
   readonly sent: unknown[] = [];
@@ -47,11 +47,38 @@ describe("CodexGateway", () => {
     expect(executablePath).toContain("@openai/codex");
   });
 
+  it("completes the initialize handshake against the pinned app-server over stdio", async () => {
+    const appServer = await spawnCodexAppServer({});
+    const transport = new StdioRpcTransport(appServer.process);
+    const client = new CodexRpcClient(transport);
+
+    try {
+      await transport.connect();
+      const response = await withTimeout(
+        client.initialize({
+          clientInfo: {
+            name: "telegram-codex-bridge-test",
+            title: "Telegram Codex Bridge Test",
+            version: "0.1.0"
+          },
+          capabilities: {
+            experimentalApi: true
+          }
+        }),
+        10000
+      );
+
+      expect(response.userAgent).toContain("codex");
+    } finally {
+      await client.close();
+      await appServer.stop();
+    }
+  });
+
   it("initializes with explicit capabilities to match codex-cli", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
-      appServerUrl: "ws://127.0.0.1:8787",
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -99,7 +126,6 @@ describe("CodexGateway", () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
-      appServerUrl: "ws://127.0.0.1:8787",
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -152,7 +178,6 @@ describe("CodexGateway", () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
-      appServerUrl: "ws://127.0.0.1:8787",
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -235,7 +260,6 @@ describe("CodexGateway", () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
-      appServerUrl: "ws://127.0.0.1:8787",
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -307,7 +331,6 @@ describe("CodexGateway", () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
-      appServerUrl: "ws://127.0.0.1:8787",
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -375,3 +398,19 @@ describe("CodexGateway", () => {
     });
   });
 });
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
