@@ -127,14 +127,33 @@ export function renderQueuePreview(queueState: QueueStateSnapshot): string | nul
 
 export function buildQueuePreviewKeyboard(
   queueState: QueueStateSnapshot,
-  activeTurnId: string | null
+  activeTurnId: string | null,
+  stopRequested = false
 ): InlineKeyboardMarkup | undefined {
-  if (queueState.pendingSteers.length === 0 || !activeTurnId) {
+  if (queueState.pendingSteers.length === 0 || !activeTurnId || stopRequested) {
     return undefined;
   }
 
   return {
     inline_keyboard: [[{ text: "Send now", callback_data: `turn:${activeTurnId}:sendNow` }]]
+  };
+}
+
+export function renderTurnControlMessage(state: "active" | "stopping" | "finishing"): string {
+  switch (state) {
+    case "stopping":
+      return "Stopping this turn…";
+    case "finishing":
+      return "This turn is already finishing…";
+    case "active":
+    default:
+      return "Working on this request. Send another message to steer, or tap Stop.";
+  }
+}
+
+export function buildTurnControlKeyboard(turnId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{ text: "Stop", callback_data: `turn:${turnId}:stop` }]]
   };
 }
 

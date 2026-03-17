@@ -6,6 +6,7 @@ export type TelegramParseMode = "HTML";
 
 export type TelegramSendOptions = {
   message_thread_id?: number;
+  reply_to_message_id?: number;
   reply_markup?: InlineKeyboardMarkup;
   parse_mode?: TelegramParseMode;
 };
@@ -68,10 +69,12 @@ export class TelegramMessenger {
     topicId?: number | null;
     text: string;
     parseMode?: TelegramParseMode;
+    replyToMessageId?: number;
     replyMarkup?: InlineKeyboardMarkup;
   }): Promise<{ messageId: number }> {
     const message = await this.telegram.sendMessage(input.chatId, input.text, {
       ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...(input.replyToMessageId !== undefined ? { reply_to_message_id: input.replyToMessageId } : {}),
       ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}),
       ...withTelegramParseMode(input.parseMode)
     });

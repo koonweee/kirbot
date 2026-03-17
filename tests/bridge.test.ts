@@ -195,6 +195,7 @@ class FakeTelegram implements TelegramApi {
     text: string;
     options?: {
       message_thread_id?: number;
+      reply_to_message_id?: number;
       reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
       parse_mode?: "HTML";
     };
@@ -235,6 +236,7 @@ class FakeTelegram implements TelegramApi {
     text: string,
     options?: {
       message_thread_id?: number;
+      reply_to_message_id?: number;
       reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
       parse_mode?: "HTML";
     }
@@ -465,6 +467,7 @@ describe("TelegramCodexBridge", () => {
       userId: 42,
       text: "Explain the fix"
     });
+    const stopControlMessageId = telegram.sentMessages.at(-1)?.messageId;
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking");
@@ -494,7 +497,9 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
-    expect(telegram.deletions).toEqual([]);
+    expect(telegram.deletions).toEqual(
+      stopControlMessageId ? [{ chatId: -1001, messageId: stopControlMessageId }] : []
+    );
     expect(telegram.sentMessages.at(-1)?.text).toBe("Working on it");
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
 
@@ -1454,6 +1459,74 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.sentMessages.at(-1)?.options?.reply_markup).toEqual({
       inline_keyboard: [[{ text: "Send now", callback_data: "turn:turn-1:sendNow" }]]
+    });
+  });
+
+  it("sends a stop control reply for each active turn", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 400,
+      updateId: 500,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Working on this request. Send another message to steer, or tap Stop."
+    );
+    expect(telegram.sentMessages.at(-1)?.options).toEqual({
+      message_thread_id: 777,
+      reply_to_message_id: 400,
+      reply_markup: {
+        inline_keyboard: [[{ text: "Stop", callback_data: "turn:turn-1:stop" }]]
+      }
+    });
+  });
+
+  it("interrupts the active turn from the stop control and cleans it up on completion", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 401,
+      updateId: 501,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    const stopControlMessageId = telegram.sentMessages.at(-1)?.messageId;
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-stop",
+      data: "turn:turn-1:stop",
+      chatId: -1001,
+      topicId: 777
+    });
+
+    expect(codex.interruptCalls).toEqual([{ threadId: "thread-1", turnId: "turn-1" }]);
+    expect(telegram.edits).toContainEqual({
+      chatId: -1001,
+      messageId: stopControlMessageId ?? -1,
+      text: "Stopping this turn…"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "interrupted",
+          error: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.deletions).toContainEqual({
+      chatId: -1001,
+      messageId: stopControlMessageId ?? -1
     });
   });
 
