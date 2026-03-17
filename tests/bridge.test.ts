@@ -15,6 +15,7 @@ import type { ServerRequest } from "../src/generated/codex/ServerRequest";
 import type { CommandExecutionApprovalDecision } from "../src/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileChangeApprovalDecision";
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
+import type { ReasoningEffort } from "../src/generated/codex/ReasoningEffort";
 import { JsonRpcMethodError } from "../src/rpc";
 import type { TelegramApi } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
@@ -67,6 +68,7 @@ class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
   ensuredThreads: string[] = [];
   turns: Array<{ threadId: string; text: string; input: UserInput[]; turnId: string }> = [];
+  turnCollaborationModes: Array<{ turnId: string; collaborationMode: unknown | null }> = [];
   steerCalls: Array<{ threadId: string; expectedTurnId: string; text: string; input: UserInput[] }> = [];
   interruptCalls: Array<{ threadId: string; turnId: string }> = [];
   commandApprovals: Array<{ id: string | number; decision: CommandExecutionApprovalDecision }> = [];
@@ -76,6 +78,7 @@ class FakeCodex implements BridgeCodexApi {
   readTurnMessagesResult = "";
   readTurnSnapshotResult: Partial<ResolvedTurnSnapshot> = {};
   model = "gpt-5-codex";
+  reasoningEffort: ReasoningEffort | null = null;
   nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
@@ -83,22 +86,24 @@ class FakeCodex implements BridgeCodexApi {
   #notificationListeners = new Set<(notification: ServerNotification) => void>();
   #requestListeners = new Set<(request: ServerRequest) => void>();
 
-  async createThread(title: string): Promise<{ threadId: string; model: string }> {
+  async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: ReasoningEffort | null }> {
     this.createdThreads.push(title);
     return {
       threadId: "thread-1",
-      model: this.model
+      model: this.model,
+      reasoningEffort: this.reasoningEffort
     };
   }
 
-  async ensureThreadLoaded(threadId: string): Promise<{ model: string }> {
+  async ensureThreadLoaded(threadId: string): Promise<{ model: string; reasoningEffort: ReasoningEffort | null }> {
     this.ensuredThreads.push(threadId);
     return {
-      model: this.model
+      model: this.model,
+      reasoningEffort: this.reasoningEffort
     };
   }
 
-  async sendTurn(threadId: string, input: UserInput[]): Promise<{ id: string }> {
+  async sendTurn(threadId: string, input: UserInput[], collaborationMode?: unknown): Promise<{ id: string }> {
     if (this.nextSendTurnError) {
       const error = this.nextSendTurnError;
       this.nextSendTurnError = null;
@@ -119,6 +124,10 @@ class FakeCodex implements BridgeCodexApi {
       writable: true
     });
     this.turns.push(turn);
+    this.turnCollaborationModes.push({
+      turnId,
+      collaborationMode: collaborationMode ?? null
+    });
     return { id: turnId };
   }
 
@@ -159,6 +168,8 @@ class FakeCodex implements BridgeCodexApi {
   async readTurnSnapshot(): Promise<ResolvedTurnSnapshot> {
     return {
       text: this.readTurnMessagesResult,
+      assistantText: this.readTurnMessagesResult,
+      planText: "",
       changedFiles: 0,
       cwd: "/workspace",
       branch: "main",
@@ -502,6 +513,109 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
     const session = await database.getSessionByTopic(-1001, 778);
     expect(session).toBeUndefined();
+  });
+
+  it("requires an existing session before enabling plan mode", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 780,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "/plan"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This topic does not have a Codex session yet. Send a normal message first to start one."
+    );
+  });
+
+  it("enables plan mode without starting a turn when /plan has no prompt", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 781,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "Investigate the flaky CI run"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 781,
+      messageId: 16,
+      updateId: 26,
+      userId: 42,
+      text: "/plan"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled. Send a message to start planning.");
+    expect(codex.turns).toHaveLength(1);
+    const session = await database.getSessionByTopic(-1001, 781);
+    expect(session?.preferredMode).toBe("plan");
+  });
+
+  it("starts a plan-mode turn immediately when /plan includes a prompt", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 782,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "Set up the topic"
+    });
+
+    codex.reasoningEffort = "high";
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 782,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/plan sketch the migration"
+    });
+
+    expect(codex.turns.at(-1)).toMatchObject({
+      threadId: "thread-1",
+      text: "sketch the migration",
+      turnId: "turn-2"
+    });
+    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
+      mode: "plan",
+      settings: {
+        model: "gpt-5-codex",
+        reasoning_effort: "high",
+        developer_instructions: null
+      }
+    });
   });
 
   it("retains Telegram images until the turn completes", async () => {
@@ -1102,6 +1216,84 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("Planning edits");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(preformattedEntities("Planning edits", "kirbot"));
     expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
+  });
+
+  it("streams and persists plan items separately from assistant output", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 788,
+      messageId: 300,
+      updateId: 400,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: ""
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "drafting the rollout",
+        plan: [
+          {
+            step: "Draft the rollout",
+            status: "inProgress"
+          }
+        ]
+      }
+    });
+    codex.emitNotification({
+      method: "item/plan/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "plan-1",
+        delta: "Draft the rollout"
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.drafts.at(-1)?.text).toBe("Plan\n\nDraft the rollout");
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: "1. Draft the rollout"
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")).toHaveLength(1);
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {
@@ -1820,6 +2012,123 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
   });
 
+  it("rejects /plan while a turn is active instead of steering", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 410,
+      updateId: 510,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 411,
+      updateId: 511,
+      userId: 42,
+      text: "/plan"
+    });
+
+    expect(codex.steerCalls).toEqual([]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing modes."
+    );
+  });
+
+  it("starts a default-mode implementation turn from the latest completed plan", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 412,
+      updateId: 512,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await database.completeTurn("turn-1", 900, "completed", {
+      assistantText: "",
+      planText: "1. Update the bridge\n2. Add tests"
+    });
+    await database.updateSessionPreferredMode(-1001, 784, "plan");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 413,
+      updateId: 513,
+      userId: 42,
+      text: "/implement and keep the diff small"
+    });
+
+    expect(codex.turns.at(-1)?.text).toBe(
+      [
+        "Implement the latest agreed plan for this topic.",
+        "",
+        "Plan:",
+        "1. Update the bridge\n2. Add tests",
+        "",
+        "Additional instructions:",
+        "and keep the diff small"
+      ].join("\n")
+    );
+    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toBeNull();
+    const session = await database.getSessionByTopic(-1001, 784);
+    expect(session?.preferredMode).toBe("default");
+  });
+
+  it("rejects /implement when there is no completed plan yet", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 414,
+      updateId: 514,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 415,
+      updateId: 515,
+      userId: 42,
+      text: "/implement"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("There is no completed plan in this topic yet.");
+    expect(codex.turns).toHaveLength(1);
+  });
+
   it("interrupts the active turn from /stop", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -2153,6 +2462,154 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-2"
       }
     ]);
+  });
+
+  it("walks a multi-question user-input request without requiring JSON replies", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 786,
+      messageId: 420,
+      updateId: 520,
+      userId: 42,
+      text: "Start the topic"
+    });
+
+    codex.emitRequest({
+      method: "item/tool/requestUserInput",
+      id: 90,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-input-1",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "What kind of change do you want?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Refactor",
+                description: "Change structure only"
+              }
+            ]
+          },
+          {
+            id: "notes",
+            header: "Notes",
+            question: "Any extra context?",
+            isOther: false,
+            isSecret: false,
+            options: null
+          }
+        ]
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const pending = await database.getPendingRequest(JSON.stringify(90));
+    expect(telegram.sentMessages.at(-1)?.text).toContain("Question 1/2");
+    expect(telegram.sentMessages.at(-1)?.options?.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Refactor", callback_data: `req:${pending.id}:opt:0` }]]
+    });
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-user-input-1",
+      data: `req:${pending.id}:opt:0`,
+      chatId: -1001,
+      topicId: 786,
+      userId: 42
+    });
+
+    expect(telegram.edits.at(-1)?.text).toContain("Question 2/2");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 786,
+      messageId: 421,
+      updateId: 521,
+      userId: 42,
+      text: "Keep the diff small"
+    });
+
+    expect(codex.userInputs).toEqual([
+      {
+        id: 90,
+        answers: {
+          scope: { answers: ["Refactor"] },
+          notes: { answers: ["Keep the diff small"] }
+        }
+      }
+    ]);
+    expect(telegram.edits.at(-1)?.text).toBe("Sent your answers to Codex.");
+  });
+
+  it("supports option prompts that fall back to free text via Other", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 787,
+      messageId: 422,
+      updateId: 522,
+      userId: 42,
+      text: "Start the topic"
+    });
+
+    codex.emitRequest({
+      method: "item/tool/requestUserInput",
+      id: 91,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-input-2",
+        questions: [
+          {
+            id: "secret_choice",
+            header: "Secret",
+            question: "Choose how to proceed",
+            isOther: true,
+            isSecret: true,
+            options: [
+              {
+                label: "Standard",
+                description: "Use the default flow"
+              }
+            ]
+          }
+        ]
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const pending = await database.getPendingRequest(JSON.stringify(91));
+    expect(telegram.sentMessages.at(-1)?.text).toContain("Sensitive input. Your reply stays visible in this topic.");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("Standard: Use the default flow");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-user-input-2",
+      data: `req:${pending.id}:other`,
+      chatId: -1001,
+      topicId: 787,
+      userId: 42
+    });
+
+    expect(telegram.edits.at(-1)?.text).toContain("Reply with your own answer in this topic.");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 787,
+      messageId: 423,
+      updateId: 523,
+      userId: 42,
+      text: "Use a custom rollout path"
+    });
+
+    expect(codex.userInputs).toContainEqual({
+      id: 91,
+      answers: {
+        secret_choice: { answers: ["Use a custom rollout path"] }
+      }
+    });
   });
 
   it("stores approval requests and resolves them via callback queries", async () => {
