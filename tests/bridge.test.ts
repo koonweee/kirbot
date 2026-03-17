@@ -360,7 +360,6 @@ describe("TelegramCodexBridge", () => {
       },
       codex: {
         appServerUrl: "ws://127.0.0.1:8787",
-        spawnAppServer: false,
         defaultCwd: "/workspace",
         model: undefined,
         modelProvider: undefined,

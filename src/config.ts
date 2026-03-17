@@ -26,10 +26,6 @@ const envSchema = z.object({
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
   CODEX_APP_SERVER_URL: z.string().url().default("ws://127.0.0.1:8787"),
-  CODEX_SPAWN_APP_SERVER: z
-    .enum(["true", "false"])
-    .default("true")
-    .transform((value) => value === "true"),
   CODEX_MODEL: optionalEnvString(z.string()),
   CODEX_MODEL_PROVIDER: optionalEnvString(z.string()),
   CODEX_SANDBOX_MODE: optionalEnvString(
@@ -81,7 +77,6 @@ export type AppConfig = {
   };
   codex: {
     appServerUrl: string;
-    spawnAppServer: boolean;
     defaultCwd: string;
     model: string | undefined;
     modelProvider: string | undefined;
@@ -108,7 +103,6 @@ export function loadConfig(): AppConfig {
     },
     codex: {
       appServerUrl: parsed.CODEX_APP_SERVER_URL,
-      spawnAppServer: parsed.CODEX_SPAWN_APP_SERVER,
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
       model: parsed.CODEX_MODEL,
       modelProvider: parsed.CODEX_MODEL_PROVIDER,

@@ -28,7 +28,6 @@ Prerequisites:
 - Node.js 22 or newer
 - A Telegram bot token
 - The Telegram user ID allowed to use the bot
-- A running `codex app-server`, or permission for kirbot to spawn it
 
 Install dependencies:
 
@@ -49,12 +48,13 @@ Required configuration:
 
 Codex-related configuration:
 
-- `CODEX_APP_SERVER_URL`: WebSocket URL for the Codex app server
-- `CODEX_SPAWN_APP_SERVER`: set to `true` to let kirbot start `codex app-server`
+- `CODEX_APP_SERVER_URL`: WebSocket URL kirbot binds its bundled Codex app server to
 - `CODEX_DEFAULT_CWD`: default working directory for Codex sessions
 - `KIRBOT.md`: the developer-instructions prompt kirbot always sends to Codex
 
 kirbot intentionally leaves Codex base instructions unset and uses `KIRBOT.md` for developer instructions.
+kirbot always starts its own pinned Codex app server from the repo's `@openai/codex` dependency rather than using a globally installed `codex`.
+The generated bindings in `src/generated/codex` are checked in and are expected to match that pinned Codex version.
 
 Build and run:
 
@@ -74,5 +74,35 @@ To run tests:
 ```bash
 npm test
 ```
+
+To intentionally refresh the committed Codex protocol bindings after upgrading the pinned Codex version:
+
+```bash
+npm run generate:codex-types
+```
+
+To verify that the committed bindings still match the pinned Codex version without rewriting files:
+
+```bash
+npm run verify:codex-types
+```
+
+`verify:codex-types` only compares the checked-in generated files against fresh output from the pinned `@openai/codex` package. It does not typecheck kirbot's handwritten code.
+
+To typecheck kirbot's handwritten TypeScript code against the current generated bindings:
+
+```bash
+npm run typecheck
+```
+
+To run the full Codex upgrade workflow after bumping the pinned version:
+
+```bash
+npm run verify:codex-upgrade
+```
+
+That script regenerates the bindings, then runs the TypeScript typecheck and test suite.
+
+CI runs the non-mutating check and fails if the committed generated files drift from the pinned `@openai/codex` version.
 
 Attribution: side profile Kirby by @KIRBYSWARPSTAR on X.

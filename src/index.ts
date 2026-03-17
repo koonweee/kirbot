@@ -41,11 +41,9 @@ async function main(): Promise<void> {
     console.warn(`Expired ${expiredPendingRequests} pending Codex request(s) from a previous run.`);
   }
 
-  const spawnedAppServer = config.codex.spawnAppServer
-    ? await spawnCodexAppServer({
-        url: config.codex.appServerUrl
-      })
-    : null;
+  const spawnedAppServer = await spawnCodexAppServer({
+    url: config.codex.appServerUrl
+  });
 
   const transport = new WebSocketRpcTransport(config.codex.appServerUrl);
   await connectWithRetry(transport);

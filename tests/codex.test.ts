@@ -1,6 +1,9 @@
+import { existsSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { CodexGateway } from "../src/codex";
+import { resolvePinnedCodexExecutablePath } from "../src/codex-cli";
 import { CodexRpcClient, type RpcTransport } from "../src/rpc";
 
 class FakeTransport implements RpcTransport {
@@ -37,12 +40,18 @@ class FakeTransport implements RpcTransport {
 }
 
 describe("CodexGateway", () => {
+  it("resolves the pinned local Codex executable from node_modules", () => {
+    const executablePath = resolvePinnedCodexExecutablePath();
+
+    expect(existsSync(executablePath)).toBe(true);
+    expect(executablePath).toContain("@openai/codex");
+  });
+
   it("initializes with explicit capabilities to match codex-cli", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
       appServerUrl: "ws://127.0.0.1:8787",
-      spawnAppServer: false,
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -91,7 +100,6 @@ describe("CodexGateway", () => {
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
       appServerUrl: "ws://127.0.0.1:8787",
-      spawnAppServer: false,
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,
@@ -145,7 +153,6 @@ describe("CodexGateway", () => {
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
       appServerUrl: "ws://127.0.0.1:8787",
-      spawnAppServer: false,
       defaultCwd: "/workspace",
       model: undefined,
       modelProvider: undefined,

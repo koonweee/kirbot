@@ -14,6 +14,7 @@ import type { ToolRequestUserInputParams } from "./generated/codex/v2/ToolReques
 import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
 import type { Turn } from "./generated/codex/v2/Turn";
 import type { TurnSteerResponse } from "./generated/codex/v2/TurnSteerResponse";
+import { resolvePinnedCodexInvocation } from "./codex-cli";
 import { CodexRpcClient, type SpawnedAppServer, type WebSocketRpcTransport } from "./rpc";
 
 export type AppServerOptions = {
@@ -21,7 +22,8 @@ export type AppServerOptions = {
 };
 
 export async function spawnCodexAppServer(options: AppServerOptions): Promise<SpawnedAppServer> {
-  const child = spawn("codex", ["app-server", "--listen", options.url], {
+  const codex = resolvePinnedCodexInvocation();
+  const child = spawn(codex.command, [...codex.args, "app-server", "--listen", options.url], {
     stdio: ["ignore", "pipe", "pipe"]
   });
 
