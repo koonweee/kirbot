@@ -39,7 +39,6 @@ export type TurnMessageRecord = {
   streamText: string;
   status: "streaming" | "completed" | "failed" | "interrupted";
   resolvedAssistantText: string;
-  resolvedPlanText: string;
   createdAt: string;
   updatedAt: string;
 };

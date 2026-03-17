@@ -457,6 +457,109 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
   });
 
+  it("creates a new plan-mode topic and immediate turn from root /plan with a prompt", async () => {
+    codex.reasoningEffort = "high";
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/plan sketch the migration"
+    });
+
+    expect(telegram.createdTopics).toEqual([
+      {
+        chatId: -1001,
+        name: "sketch the migration"
+      }
+    ]);
+    expect(codex.createdThreads).toEqual(["sketch the migration"]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "sketch the migration",
+        turnId: "turn-1"
+      }
+    ]);
+    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
+      mode: "plan",
+      settings: {
+        model: "gpt-5-codex",
+        reasoning_effort: "high",
+        developer_instructions: null
+      }
+    });
+    expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: 'Created plan topic "sketch the migration". Continue in the new topic.'
+      },
+      {
+        chatId: -1001,
+        text: "Plan mode enabled.",
+        options: {
+          message_thread_id: 101
+        }
+      }
+    ]);
+
+    const session = await database.getSessionByTopic(-1001, 101);
+    expect(session?.preferredMode).toBe("plan");
+  });
+
+  it("creates a new empty plan-mode topic from bare root /plan", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "/plan"
+    });
+
+    expect(telegram.createdTopics).toEqual([
+      {
+        chatId: -1001,
+        name: "New Plan Session"
+      }
+    ]);
+    expect(codex.createdThreads).toEqual(["New Plan Session"]);
+    expect(codex.turns).toHaveLength(0);
+    expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: 'Created plan topic "New Plan Session". Continue in the new topic.'
+      },
+      {
+        chatId: -1001,
+        text: "Plan mode enabled.",
+        options: {
+          message_thread_id: 101
+        }
+      }
+    ]);
+
+    const session = await database.getSessionByTopic(-1001, 101);
+    expect(session?.preferredMode).toBe("plan");
+  });
+
+  it("rejects /implement from root instead of creating a new topic", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "/implement"
+    });
+
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+  });
+
   it("ignores messages from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -563,7 +666,7 @@ describe("TelegramCodexBridge", () => {
       text: "/plan"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled. Send a message to start planning.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled.");
     expect(codex.turns).toHaveLength(1);
     const session = await database.getSessionByTopic(-1001, 781);
     expect(session?.preferredMode).toBe("plan");
@@ -616,6 +719,7 @@ describe("TelegramCodexBridge", () => {
         developer_instructions: null
       }
     });
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled.");
   });
 
   it("retains Telegram images until the turn completes", async () => {
@@ -2037,7 +2141,7 @@ describe("TelegramCodexBridge", () => {
     );
   });
 
-  it("starts a default-mode implementation turn from the latest completed plan", async () => {
+  it("starts a default-mode implementation turn on the existing thread context", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 784,
@@ -2061,10 +2165,6 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    await database.completeTurn("turn-1", 900, "completed", {
-      assistantText: "",
-      planText: "1. Update the bridge\n2. Add tests"
-    });
     await database.updateSessionPreferredMode(-1001, 784, "plan");
 
     await bridge.handleUserTextMessage({
@@ -2076,23 +2176,21 @@ describe("TelegramCodexBridge", () => {
       text: "/implement and keep the diff small"
     });
 
-    expect(codex.turns.at(-1)?.text).toBe(
-      [
-        "Implement the latest agreed plan for this topic.",
-        "",
-        "Plan:",
-        "1. Update the bridge\n2. Add tests",
-        "",
-        "Additional instructions:",
-        "and keep the diff small"
-      ].join("\n")
-    );
-    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toBeNull();
+    expect(codex.turns.at(-1)?.text).toBe(["Implement the plan.", "", "Additional instructions:", "and keep the diff small"].join("\n"));
+    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5-codex",
+        reasoning_effort: null,
+        developer_instructions: config.codex.developerInstructions ?? null
+      }
+    });
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode.");
     const session = await database.getSessionByTopic(-1001, 784);
     expect(session?.preferredMode).toBe("default");
   });
 
-  it("rejects /implement when there is no completed plan yet", async () => {
+  it("starts a default-mode implementation turn without requiring stored plan text", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 785,
@@ -2125,8 +2223,9 @@ describe("TelegramCodexBridge", () => {
       text: "/implement"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("There is no completed plan in this topic yet.");
-    expect(codex.turns).toHaveLength(1);
+    expect(codex.turns).toHaveLength(2);
+    expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode.");
   });
 
   it("interrupts the active turn from /stop", async () => {

@@ -41,7 +41,6 @@ type TurnMessagesTable = {
   stream_text: string;
   status: "streaming" | "completed" | "failed" | "interrupted";
   resolved_assistant_text: string;
-  resolved_plan_text: string;
   created_at: TimestampString;
   updated_at: TimestampString;
 };
@@ -110,7 +109,6 @@ function mapTurnMessage(row: Selectable<TurnMessagesTable>): TurnMessageRecord {
     streamText: row.stream_text,
     status: row.status,
     resolvedAssistantText: row.resolved_assistant_text,
-    resolvedPlanText: row.resolved_plan_text,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -197,7 +195,6 @@ export class BridgeDatabase {
       .addColumn("stream_text", "text", (column) => column.notNull())
       .addColumn("status", "text", (column) => column.notNull())
       .addColumn("resolved_assistant_text", "text", (column) => column.notNull().defaultTo(""))
-      .addColumn("resolved_plan_text", "text", (column) => column.notNull().defaultTo(""))
       .addColumn("created_at", "text", (column) => column.notNull())
       .addColumn("updated_at", "text", (column) => column.notNull())
       .execute();
@@ -247,7 +244,6 @@ export class BridgeDatabase {
 
     this.ensureColumn("topic_sessions", "preferred_mode", "TEXT NOT NULL DEFAULT 'default'");
     this.ensureColumn("turn_messages", "resolved_assistant_text", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("turn_messages", "resolved_plan_text", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("server_requests", "state_json", "TEXT");
   }
 
@@ -422,7 +418,6 @@ export class BridgeDatabase {
         stream_text: "",
         status: "streaming",
         resolved_assistant_text: "",
-        resolved_plan_text: "",
         created_at: timestamp,
         updated_at: timestamp
       })
@@ -453,10 +448,7 @@ export class BridgeDatabase {
     turnId: string,
     finalMessageId: number | null,
     status: "completed" | "failed" | "interrupted",
-    resolvedText?: {
-      assistantText: string;
-      planText: string;
-    }
+    resolvedAssistantText?: string
   ): Promise<TurnMessageRecord | undefined> {
     const existing = await this.getTurnByIdOptional(turnId);
     if (!existing) {
@@ -468,10 +460,9 @@ export class BridgeDatabase {
       .set({
         final_message_id: finalMessageId,
         status,
-        ...(resolvedText
+        ...(resolvedAssistantText !== undefined
           ? {
-              resolved_assistant_text: resolvedText.assistantText,
-              resolved_plan_text: resolvedText.planText
+              resolved_assistant_text: resolvedAssistantText
             }
           : {}),
         updated_at: now()
@@ -497,20 +488,6 @@ export class BridgeDatabase {
       .selectFrom("turn_messages")
       .selectAll()
       .where("codex_turn_id", "=", turnId)
-      .executeTakeFirst();
-
-    return row ? mapTurnMessage(row) : undefined;
-  }
-
-  async getLatestCompletedTurnByTopic(chatId: number, topicId: number): Promise<TurnMessageRecord | undefined> {
-    const row = await this.kysely
-      .selectFrom("turn_messages")
-      .selectAll()
-      .where("telegram_chat_id", "=", String(chatId))
-      .where("telegram_topic_id", "=", topicId)
-      .where("status", "=", "completed")
-      .orderBy("updated_at", "desc")
-      .orderBy("id", "desc")
       .executeTakeFirst();
 
     return row ? mapTurnMessage(row) : undefined;

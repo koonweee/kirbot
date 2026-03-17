@@ -75,8 +75,9 @@ const STOPPING_CURRENT_RESPONSE_TEXT = "Stopping the current response…";
 const RESPONSE_ALREADY_FINISHING_TEXT = "This response is already finishing.";
 const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing modes.";
 const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one.";
-const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled. Send a message to start planning.";
-const NO_COMPLETED_PLAN_TEXT = "There is no completed plan in this topic yet.";
+const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled.";
+const PLAN_MODE_EXITED_TEXT = "Exited plan mode.";
+const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -329,7 +330,12 @@ export class TelegramCodexBridge {
     await this.sendTurnForSession(session, message);
   }
 
-  private async handleRootSlashCommand(message: UserTurnMessage, _command: ParsedSlashCommand): Promise<void> {
+  private async handleRootSlashCommand(message: UserTurnMessage, command: ParsedSlashCommand): Promise<void> {
+    if (command.command === "plan") {
+      await this.startPlanSessionFromRootMessage(message, command.argsText);
+      return;
+    }
+
     await this.sendInvalidSlashCommandMessage(message);
   }
 
@@ -386,6 +392,11 @@ export class TelegramCodexBridge {
       return;
     }
 
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      topicId: message.topicId,
+      text: PLAN_MODE_ENABLED_TEXT
+    });
     await this.sendTurnForSession(updatedSession, replaceMessageText(message, promptText));
   }
 
@@ -404,17 +415,6 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const latestTurn = await this.database.getLatestCompletedTurnByTopic(message.chatId, message.topicId!);
-    const planText = latestTurn?.resolvedPlanText?.trim() ?? "";
-    if (!planText) {
-      await this.#messenger.sendMessage({
-        chatId: message.chatId,
-        topicId: message.topicId,
-        text: NO_COMPLETED_PLAN_TEXT
-      });
-      return;
-    }
-
     const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "default");
     if (!updatedSession) {
       await this.#messenger.sendMessage({
@@ -425,9 +425,17 @@ export class TelegramCodexBridge {
       return;
     }
 
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      topicId: message.topicId,
+      text: PLAN_MODE_EXITED_TEXT
+    });
     await this.sendTurnForSession(
       updatedSession,
-      replaceMessageText(message, buildImplementationPrompt(planText, extraInstructions))
+      replaceMessageText(message, buildImplementationPrompt(extraInstructions)),
+      {
+        forceMode: "default"
+      }
     );
   }
 
@@ -527,7 +535,33 @@ export class TelegramCodexBridge {
         topicId: forumTopic.message_thread_id
       },
       title,
-      `Created session topic "${title}". Continue in the new topic.`
+      {
+        lobbyAnnouncement: `Created session topic "${title}". Continue in the new topic.`
+      }
+    );
+  }
+
+  private async startPlanSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
+    const trimmedPrompt = promptText.trim();
+    const title = trimmedPrompt ? deriveTopicTitle(trimmedPrompt) : DEFAULT_NEW_PLAN_SESSION_TITLE;
+    const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
+    const topicMessage = {
+      ...message,
+      topicId: forumTopic.message_thread_id
+    };
+
+    await this.startSessionInTopic(
+      topicMessage,
+      title,
+      {
+        lobbyAnnouncement: `Created plan topic "${title}". Continue in the new topic.`,
+        initialPreferredMode: "plan",
+        postActivationTopicMessage: PLAN_MODE_ENABLED_TEXT,
+        startInitialTurn: trimmedPrompt.length > 0,
+        ...(trimmedPrompt ? {
+          firstTurnMessage: replaceMessageText(topicMessage, trimmedPrompt)
+        } : {})
+      }
     );
   }
 
@@ -543,7 +577,13 @@ export class TelegramCodexBridge {
   private async startSessionInTopic(
     message: UserTurnMessage,
     title: string,
-    lobbyAnnouncement?: string
+    options?: {
+      lobbyAnnouncement?: string;
+      initialPreferredMode?: SessionMode;
+      startInitialTurn?: boolean;
+      firstTurnMessage?: UserTurnMessage;
+      postActivationTopicMessage?: string;
+    }
   ): Promise<void> {
     if (message.topicId === null) {
       throw new Error("Cannot start a session without a Telegram topic id");
@@ -559,16 +599,34 @@ export class TelegramCodexBridge {
 
     try {
       const thread = await this.codex.createThread(title);
-      const session = await this.database.activateSession(pending.id, thread.threadId);
+      let session = await this.database.activateSession(pending.id, thread.threadId);
 
-      if (lobbyAnnouncement) {
+      if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
+        session = await this.database.updateSessionPreferredMode(
+          Number(session.telegramChatId),
+          session.telegramTopicId,
+          options.initialPreferredMode
+        ) ?? session;
+      }
+
+      if (options?.lobbyAnnouncement) {
         await this.#messenger.sendMessage({
           chatId: message.chatId,
-          text: lobbyAnnouncement
+          text: options.lobbyAnnouncement
         });
       }
 
-      await this.sendTurnForSession(session, message);
+      if (options?.postActivationTopicMessage) {
+        await this.#messenger.sendMessage({
+          chatId: message.chatId,
+          topicId: message.topicId,
+          text: options.postActivationTopicMessage
+        });
+      }
+
+      if (options?.startInitialTurn ?? true) {
+        await this.sendTurnForSession(session, options?.firstTurnMessage ?? message);
+      }
     } catch (error) {
       await this.database.markSessionErrored(pending.id);
       await this.#messenger.sendMessage({
@@ -579,7 +637,13 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async sendTurnForSession(session: TopicSession, message: UserTurnMessage): Promise<void> {
+  private async sendTurnForSession(
+    session: TopicSession,
+    message: UserTurnMessage,
+    options?: {
+      forceMode?: SessionMode;
+    }
+  ): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error(`Session ${session.id} has no Codex thread id`);
     }
@@ -594,7 +658,12 @@ export class TelegramCodexBridge {
         this.codex.sendTurn(
           session.codexThreadId!,
           input,
-          buildTurnCollaborationMode(session.preferredMode, thread)
+          buildTurnCollaborationMode(
+            options?.forceMode ?? session.preferredMode,
+            thread,
+            this.config.codex.developerInstructions ?? null,
+            options?.forceMode === "default"
+          )
         )
     });
 
@@ -970,18 +1039,31 @@ function parseSlashCommand(message: UserTurnMessage): ParsedSlashCommand | null 
 
 function buildTurnCollaborationMode(
   preferredMode: SessionMode,
-  settings: ThreadStartSettings
+  settings: ThreadStartSettings,
+  developerInstructions: string | null,
+  explicitDefault = false
 ): CollaborationMode | null {
-  if (preferredMode !== "plan") {
+  if (preferredMode === "plan") {
+    return {
+      mode: "plan",
+      settings: {
+        model: settings.model,
+        reasoning_effort: settings.reasoningEffort,
+        developer_instructions: null
+      }
+    };
+  }
+
+  if (!explicitDefault) {
     return null;
   }
 
   return {
-    mode: "plan",
+    mode: "default",
     settings: {
       model: settings.model,
       reasoning_effort: settings.reasoningEffort,
-      developer_instructions: null
+      developer_instructions: developerInstructions
     }
   };
 }
@@ -1000,14 +1082,8 @@ function replaceMessageText(message: UserTurnMessage, text: string): UserTurnMes
   };
 }
 
-function buildImplementationPrompt(planText: string, extraInstructions: string): string {
-  const parts = [
-    "Implement the latest agreed plan for this topic.",
-    "",
-    "Plan:",
-    planText.trim()
-  ];
-
+function buildImplementationPrompt(extraInstructions: string): string {
+  const parts = ["Implement the plan."];
   const trimmedInstructions = extraInstructions.trim();
   if (trimmedInstructions) {
     parts.push("", "Additional instructions:", trimmedInstructions);

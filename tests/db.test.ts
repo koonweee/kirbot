@@ -98,7 +98,7 @@ describe("BridgeDatabase", () => {
     expect(expired.responseJson).toBe(JSON.stringify({ reason: "startup" }));
   });
 
-  it("stores resolved assistant and plan text and can fetch the latest completed turn for a topic", async () => {
+  it("stores resolved assistant text for completed turns", async () => {
     await database.recordTurnStart({
       telegramUpdateId: 1,
       telegramChatId: "-1001",
@@ -107,10 +107,7 @@ describe("BridgeDatabase", () => {
       codexTurnId: "turn-1",
       draftId: 10
     });
-    await database.completeTurn("turn-1", 100, "completed", {
-      assistantText: "",
-      planText: "Plan A"
-    });
+    await database.completeTurn("turn-1", 100, "completed", "");
 
     await database.recordTurnStart({
       telegramUpdateId: 2,
@@ -120,14 +117,11 @@ describe("BridgeDatabase", () => {
       codexTurnId: "turn-2",
       draftId: 11
     });
-    await database.completeTurn("turn-2", 101, "completed", {
-      assistantText: "Implemented",
-      planText: "Plan B"
-    });
+    await database.completeTurn("turn-2", 101, "completed", "Implemented");
 
-    const latest = await database.getLatestCompletedTurnByTopic(-1001, 22);
-    expect(latest?.codexTurnId).toBe("turn-2");
-    expect(latest?.resolvedAssistantText).toBe("Implemented");
-    expect(latest?.resolvedPlanText).toBe("Plan B");
+    const first = await database.getTurnById("turn-1");
+    const second = await database.getTurnById("turn-2");
+    expect(first.resolvedAssistantText).toBe("");
+    expect(second.resolvedAssistantText).toBe("Implemented");
   });
 });

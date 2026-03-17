@@ -106,7 +106,7 @@ export class CodexGateway {
         version: "0.1.0"
       },
       capabilities: {
-        experimentalApi: false
+        experimentalApi: true
       }
     });
   }

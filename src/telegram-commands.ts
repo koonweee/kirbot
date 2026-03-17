@@ -16,18 +16,18 @@ const COMMAND_DEFINITIONS: Readonly<Record<TelegramCommandName, TelegramBotComma
   },
   implement: {
     command: "implement",
-    description: "Implement the latest plan in this topic"
+    description: "Implement the plan in this topic"
   }
 };
 
-const ROOT_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = [];
+const ROOT_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = ["plan"];
 const TOPIC_COMMAND_ALLOWLIST: readonly TelegramCommandName[] = ["stop", "plan", "implement"];
 
 const ROOT_COMMANDS = buildTelegramCommands(ROOT_COMMAND_ALLOWLIST);
 const TOPIC_COMMANDS = buildTelegramCommands(TOPIC_COMMAND_ALLOWLIST);
 const ALL_VISIBLE_COMMANDS = buildTelegramCommands([
-  ...ROOT_COMMAND_ALLOWLIST,
-  ...TOPIC_COMMAND_ALLOWLIST
+  ...TOPIC_COMMAND_ALLOWLIST,
+  ...ROOT_COMMAND_ALLOWLIST
 ]);
 
 const ROOT_COMMAND_SET = new Set(ROOT_COMMANDS.map((command) => command.command));

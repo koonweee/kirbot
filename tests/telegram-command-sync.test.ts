@@ -92,7 +92,7 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "implement",
-            description: "Implement the latest plan in this topic"
+            description: "Implement the plan in this topic"
           }
         ],
         options: {
@@ -113,7 +113,7 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "implement",
-            description: "Implement the latest plan in this topic"
+            description: "Implement the plan in this topic"
           }
         ],
         options: {

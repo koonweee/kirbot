@@ -34,7 +34,7 @@ export type TurnLifecycleDependencies = {
     turnId: string,
     messageId: number | null,
     status: TerminalTurnStatus,
-    resolvedText: { assistantText: string; planText: string }
+    resolvedAssistantText?: string
   ): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
@@ -94,10 +94,7 @@ export class TurnFinalizer {
     }
 
     await this.deps.appendTurnStream(context.turnId, finalText);
-    await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus, {
-      assistantText: snapshot.assistantText,
-      planText: snapshot.planText
-    });
+    await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus, snapshot.assistantText);
     await this.deps.releaseTurnFiles(context.turnId);
 
     const queueState = this.deps.runtime.finalizeTurn(context.turnId);
