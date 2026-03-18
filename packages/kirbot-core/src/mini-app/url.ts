@@ -5,17 +5,25 @@ export const MINI_APP_ARTIFACT_FRAGMENT_KEY = "d";
 export const MINI_APP_ARTIFACT_VERSION = 1;
 
 export enum MiniAppArtifactType {
-  Plan = "plan"
+  Plan = "plan",
+  Commentary = "commentary"
 }
 
-export type MiniAppPlanArtifact = {
+type MiniAppMarkdownArtifactBase = {
   v: typeof MINI_APP_ARTIFACT_VERSION;
-  type: MiniAppArtifactType.Plan;
   title: string;
   markdownText: string;
 };
 
-export type MiniAppArtifact = MiniAppPlanArtifact;
+export type MiniAppPlanArtifact = MiniAppMarkdownArtifactBase & {
+  type: MiniAppArtifactType.Plan;
+};
+
+export type MiniAppCommentaryArtifact = MiniAppMarkdownArtifactBase & {
+  type: MiniAppArtifactType.Commentary;
+};
+
+export type MiniAppArtifact = MiniAppPlanArtifact | MiniAppCommentaryArtifact;
 
 export function normalizeTelegramMiniAppPublicUrl(publicUrl: string | undefined): string | null {
   if (!publicUrl) {
@@ -83,13 +91,14 @@ function validateMiniAppArtifact(value: unknown): MiniAppArtifact {
 
   switch (artifact.type) {
     case MiniAppArtifactType.Plan:
+    case MiniAppArtifactType.Commentary:
       if (typeof artifact.title !== "string" || typeof artifact.markdownText !== "string") {
-        throw new Error("invalid_plan_artifact");
+        throw new Error(`invalid_${artifact.type}_artifact`);
       }
 
       return {
         v: MINI_APP_ARTIFACT_VERSION,
-        type: MiniAppArtifactType.Plan,
+        type: artifact.type,
         title: artifact.title,
         markdownText: artifact.markdownText
       };

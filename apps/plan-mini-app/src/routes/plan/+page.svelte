@@ -14,9 +14,10 @@
 
   let state: ViewState = {
     kind: "loading",
-    title: "Plan",
-    status: "Loading plan…"
+    title: "Artifact",
+    status: "Loading artifact…"
   };
+  let artifactLabel = "Artifact";
 
   onMount(() => {
     const telegram = window.Telegram?.WebApp ?? null;
@@ -27,8 +28,8 @@
     if (!encodedArtifact) {
       state = {
         kind: "error",
-        title: "Plan",
-        status: "This plan link is missing artifact details.",
+        title: "Artifact",
+        status: "This artifact link is missing artifact details.",
         detail: "Missing encoded artifact payload."
       };
       return;
@@ -36,21 +37,19 @@
 
     try {
       const artifact = decodeMiniAppArtifact(encodedArtifact);
-      if (artifact.type !== MiniAppArtifactType.Plan) {
-        throw new Error(`Unsupported artifact type: ${artifact.type}`);
-      }
 
+      artifactLabel = artifact.type === MiniAppArtifactType.Commentary ? "Commentary" : "Plan";
       state = {
         kind: "ready",
-        title: artifact.title || "Plan",
-        status: "Completed plan",
+        title: artifact.title || artifactLabel,
+        status: `Completed ${artifactLabel.toLowerCase()} artifact`,
         artifactHtml: renderMarkdownToHtml(artifact.markdownText)
       };
     } catch (error: unknown) {
       state = {
         kind: "error",
-        title: "Plan",
-        status: "Failed to load this plan.",
+        title: "Artifact",
+        status: "Failed to load this artifact.",
         detail: error instanceof Error ? error.message : String(error)
       };
     }
@@ -66,7 +65,7 @@
     <div class="workspace-body">
       <header class="hero">
         <div class="hero-copy">
-          <p class="eyebrow hero-label">KIRBOT • PLAN</p>
+          <p class="eyebrow hero-label">KIRBOT • {artifactLabel.toUpperCase()}</p>
         </div>
         {#if state.kind !== "ready" && state.status}
           <p class="status">{state.status}</p>

@@ -17,6 +17,7 @@ import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import { JsonRpcMethodError, type AppServerEvent } from "@kirbot/codex-client";
+import { renderMarkdownToFormattedText } from "@kirbot/telegram-format";
 import type { TelegramApi, TelegramSendOptions } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
@@ -60,6 +61,11 @@ function quoteEntities(text: string, type: "blockquote" | "expandable_blockquote
 
 function combinedDraft(...parts: string[]): string {
   return parts.join("\n\n");
+}
+
+function commentaryRendered(...blocks: string[]) {
+  const markdown = `Commentary\n\n${blocks.map((block) => `\`\`\`\n${block}\n\`\`\``).join("\n\n")}`;
+  return renderMarkdownToFormattedText(markdown);
 }
 
 function getFinalAnswerMessage(telegram: FakeTelegram) {
@@ -1277,7 +1283,7 @@ describe("TelegramCodexBridge", () => {
     }
   });
 
-  it("streams commentary in its own draft and persists it when the turn finalizes", async () => {
+  it("shows commentary in the status draft and publishes it before the final answer", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1315,11 +1321,11 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Inspecting the files");
-    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(quoteEntities("Inspecting the files"));
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s\nNow: Inspecting the files");
+    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
     expect(telegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
     expect(telegram.appliedDrafts.length).toBeGreaterThan(initialDraftCount);
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
+    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s\nNow: Inspecting the files")).toBe(true);
 
     codex.emitNotification({
       method: "item/started",
@@ -1347,8 +1353,10 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Here is the answer.");
-    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
+    expect(telegram.drafts.some((draft) => draft.text === "Here is the answer.")).toBe(true);
+    expect(
+      telegram.drafts.findLast((draft) => draft.text === "Here is the answer.")?.options?.entities
+    ).toBeUndefined();
 
     codex.emitNotification({
       method: "turn/completed",
@@ -1364,14 +1372,19 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    const renderedCommentary = commentaryRendered("Inspecting the files");
     expect(telegram.sentMessages).toContainEqual(
       expect.objectContaining({
-        text: "Inspecting the files",
+        text: renderedCommentary.text,
         options: expect.objectContaining({
-          entities: quoteEntities("Inspecting the files")
+          entities: renderedCommentary.entities
         })
       })
     );
+    const commentaryIndex = telegram.sentMessages.findIndex((message) => message.text === renderedCommentary.text);
+    const answerIndex = telegram.sentMessages.findIndex((message) => message.text === "Here is the answer.");
+    expect(commentaryIndex).toBeGreaterThanOrEqual(0);
+    expect(answerIndex).toBeGreaterThan(commentaryIndex);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Here is the answer.");
   });
 
@@ -1439,12 +1452,12 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.length).toBeGreaterThan(0);
-    expect(telegram.drafts.at(-1)?.text.length).toBeLessThanOrEqual(3500);
-    expect(telegram.drafts.at(-1)?.text).toContain("[preview truncated]");
+    const previewDraft = telegram.drafts.find((draft) => draft.text.includes("[preview truncated]"));
+    expect(previewDraft).toBeTruthy();
+    expect(previewDraft?.text.length).toBeLessThanOrEqual(3500);
   });
 
-  it("windows oversized commentary drafts inside an expandable quote block", async () => {
+  it("folds oversized commentary into the live status snippet instead of a separate draft", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1481,10 +1494,17 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.length).toBeGreaterThan(0);
-    expect(telegram.drafts.some((draft) => draft.options?.entities?.[0]?.type === "expandable_blockquote")).toBe(true);
+    expect(telegram.drafts.at(-1)?.text.startsWith("thinking · 0s\nNow: commentary content")).toBe(true);
+    expect(telegram.drafts.at(-1)?.text.endsWith("...")).toBe(true);
+    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
-  it("persists one commentary message per commentary item on item completion", async () => {
+  it("combines commentary items into one commentary message when the turn finalizes", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1576,11 +1596,32 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.at(-2)?.text).toBe("Inspecting files");
-    expect(telegram.sentMessages.at(-2)?.options?.entities).toEqual(quoteEntities("Inspecting files"));
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Planning edits");
-    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(quoteEntities("Planning edits"));
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s")).toBe(true);
+    expect(telegram.sentMessages.some((message) => message.text.includes("Inspecting files"))).toBe(false);
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const renderedCommentary = commentaryRendered("Inspecting files", "Planning edits");
+    expect(telegram.sentMessages).toContainEqual(
+      expect.objectContaining({
+        text: renderedCommentary.text,
+        options: expect.objectContaining({
+          entities: renderedCommentary.entities
+        })
+      })
+    );
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Final answer");
   });
 
   it("streams and persists plan items separately from assistant output", async () => {
@@ -1735,9 +1776,9 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready. Open in Mini App.")).toHaveLength(1);
+    expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan is ready")).toHaveLength(1);
     expect(miniAppTelegram.sentMessages.some((message) => message.text === "Plan\n\n1. Draft the rollout")).toBe(false);
-    const stub = miniAppTelegram.sentMessages.find((message) => message.text === "Plan ready. Open in Mini App.");
+    const stub = miniAppTelegram.sentMessages.find((message) => message.text === "Plan is ready");
     const url =
       (((stub?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
         ?.inline_keyboard?.[0]?.[0]?.web_app?.url) ?? null);
@@ -1812,7 +1853,7 @@ describe("TelegramCodexBridge", () => {
       invalidMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")
     ).toHaveLength(1);
     expect(
-      invalidMiniAppTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+      invalidMiniAppTelegram.sentMessages.some((message) => message.text === "Plan is ready")
     ).toBe(false);
   });
 
@@ -1878,14 +1919,14 @@ describe("TelegramCodexBridge", () => {
       oversizeMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready, but too large for Mini App link.")
     ).toHaveLength(1);
     expect(
-      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Plan is ready")
     ).toBe(false);
     expect(
       oversizeMiniAppTelegram.sentMessages.some((message) => message.text.startsWith("Plan\n\n"))
     ).toBe(false);
   });
 
-  it("does not resend commentary as a normal message after publishing completed plan artifacts", async () => {
+  it("publishes one consolidated commentary message before completed plan artifacts", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 789,
@@ -1977,11 +2018,16 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.sentMessages.filter((message) => message.text === "Inspecting files")).toHaveLength(1);
+    const renderedCommentary = commentaryRendered("Inspecting files");
+    expect(telegram.sentMessages.filter((message) => message.text === renderedCommentary.text)).toHaveLength(1);
     expect(
-      telegram.sentMessages.find((message) => message.text === "Inspecting files")?.options?.entities
-    ).toEqual(quoteEntities("Inspecting files"));
-    expect(telegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")).toHaveLength(1);
+      telegram.sentMessages.find((message) => message.text === renderedCommentary.text)?.options?.entities
+    ).toEqual(renderedCommentary.entities);
+    const planIndex = telegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
+    expect(planIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      telegram.sentMessages.findIndex((message) => message.text === renderedCommentary.text)
+    ).toBeLessThan(planIndex);
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {

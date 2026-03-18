@@ -23,6 +23,18 @@ describe("Mini App URL codec", () => {
     expect(decodeMiniAppArtifact(encoded)).toEqual(artifact);
   });
 
+  it("round-trips commentary artifacts through the encoded fragment payload", () => {
+    const artifact = {
+      v: 1 as const,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: "```\nInspect the repo\n```"
+    };
+
+    const encoded = encodeMiniAppArtifact(artifact);
+    expect(decodeMiniAppArtifact(encoded)).toEqual(artifact);
+  });
+
   it("builds plan URLs with compressed hash payloads", () => {
     const url = buildMiniAppArtifactUrl("https://example.com/mini-app", {
       v: 1,
