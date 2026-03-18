@@ -48,11 +48,15 @@ function preformattedEntities(text: string, language?: string): MessageEntity[] 
   ];
 }
 
-function quoteEntities(text: string, type: "blockquote" | "expandable_blockquote" = "expandable_blockquote"): MessageEntity[] {
+function quoteEntities(
+  text: string,
+  type: "blockquote" | "expandable_blockquote" = "expandable_blockquote",
+  offset = 0
+): MessageEntity[] {
   return [
     {
       type,
-      offset: 0,
+      offset,
       length: text.length
     }
   ];
@@ -683,6 +687,71 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
+  });
+
+  it("surfaces reasoning summaries in the live status draft and clears them when tool work starts", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 778,
+      messageId: 10,
+      updateId: 23,
+      userId: 42,
+      text: "Investigate the status flow"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "reasoning",
+          id: "reasoning-1",
+          summary: [],
+          content: []
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        summaryIndex: 0,
+        delta: "Check the current status renderer."
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const quotedDraft = combinedDraft("thinking · 0s", "Check the current status renderer.");
+    expect(telegram.drafts.at(-1)?.text).toBe(quotedDraft);
+    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(
+      quoteEntities("Check the current status renderer.", "blockquote", "thinking · 0s\n\n".length)
+    );
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "npm test",
+          cwd: "/workspace",
+          processId: null,
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null
+        }
+      }
+    });
+    await waitForCondition(() => telegram.drafts.at(-1)?.text === "running: npm test · 0s");
+
+    expect(telegram.drafts.at(-1)?.text).toBe("running: npm test · 0s");
   });
 
   it("replays turn completion that arrives before the turn is locally activated", async () => {

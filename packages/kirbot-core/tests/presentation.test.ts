@@ -55,4 +55,19 @@ describe("status presentation", () => {
       text: "waiting: approval · 6s"
     });
   });
+
+  it("renders thinking summaries as quoted previews below the status line", () => {
+    const summary = "Check the current status pipeline before changing the renderer.";
+
+    expect(renderTelegramStatusDraft(buildStatusDraft("thinking", null, summary), 3000)).toEqual({
+      text: `thinking · 3s\n\n${summary}`,
+      entities: [
+        {
+          type: "blockquote",
+          offset: "thinking · 3s\n\n".length,
+          length: summary.length
+        }
+      ]
+    });
+  });
 });

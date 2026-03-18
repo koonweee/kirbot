@@ -53,6 +53,8 @@ Verified by:
 User experience:
 
 - kirbot shows a temporary status while Codex is thinking or using tools.
+- When Codex emits reasoning summaries, kirbot can surface the latest summary in
+  the live thinking status as a quoted preview under the status line.
 - Commentary, plan text, and final assistant output are treated differently so Telegram stays readable.
 - When Mini App support is configured, commentary is exposed through a `View commentary` button on the next assistant message, or through a compact stub when no assistant message follows. Without Mini App support, commentary is not shown.
 - In-progress planning stays in the status path; kirbot no longer streams partial plan text into Telegram bubbles.

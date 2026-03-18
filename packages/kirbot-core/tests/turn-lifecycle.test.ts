@@ -592,6 +592,43 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
+  it("surfaces reasoning summaries in the status draft and preserves them across elapsed-time refreshes", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const harness = createHarness();
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+      await harness.coordinator.publishCurrentStatus("turn-1", true);
+
+      await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "Inspect the current");
+      await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, " status pipeline.");
+
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nInspect the current status pipeline.");
+      expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
+        {
+          type: "blockquote",
+          offset: "thinking · 0s\n\n".length,
+          length: "Inspect the current status pipeline.".length
+        }
+      ]);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 3s\n\nInspect the current status pipeline.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the surfaced reasoning summary when a new summary index starts", async () => {
+    const harness = createHarness();
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "First summary.");
+    await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 1, "Second summary.");
+
+    expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nSecond summary.");
+  });
+
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
     const harness = createHarness({
       text: "Final answer",

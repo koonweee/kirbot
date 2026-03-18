@@ -11,6 +11,12 @@ export type PlanStreamState = {
   text: string;
 };
 
+export type ReasoningSummaryState = {
+  itemId: string;
+  summaryIndex: number;
+  text: string;
+};
+
 export type TurnContext = {
   chatId: number;
   topicId: number;
@@ -26,6 +32,7 @@ export type TurnContext = {
   statusElapsedTimer: NodeJS.Timeout | null;
   finalStream: TelegramStreamMessageHandle;
   planStreams: Map<string, PlanStreamState>;
+  reasoningSummary: ReasoningSummaryState | null;
   publishedPlanMessages: number;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
