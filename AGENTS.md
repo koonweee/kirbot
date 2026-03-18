@@ -54,7 +54,7 @@ That directory owns:
 - Markdown-to-Telegram-entity rendering
 - manual Telegram formatting producers
 - UTF-16 entity offset handling
-- entity-aware chunking and prefix shifting
+- entity-aware truncation and clipping
 
 Do not reimplement Telegram formatting logic elsewhere in the repo when it
 belongs in `packages/telegram-format/src`.

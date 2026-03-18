@@ -2,7 +2,7 @@
 
 <img src="./kirbot.png" alt="kirbot" width="128" />
 
-kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can start sessions from the lobby, continue them inside topics, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Completed plans open in a separate Telegram Mini App instead of dumping the full plan into message bubbles.
+kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can start sessions from the lobby, continue them inside topics, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
 
 ## Start Here
 
@@ -20,7 +20,7 @@ Formatting work has its own local guide in [packages/telegram-format/README.md](
 kirbot sits between Telegram and a pinned local Codex app server:
 
 - Telegram is the user-facing UI.
-- Completed plans can be encoded directly into shared static Mini App URLs when configured.
+- Final responses, commentary, and completed plans are encoded into shared static Mini App URLs.
 - `packages/kirbot-core/src/bridge.ts` translates Telegram events into session and turn actions.
 - `packages/codex-client/src/codex.ts` and `packages/codex-client/src/rpc.ts` manage the Codex app-server connection.
 - `packages/kirbot-core/src/db.ts` stores topic/session state, turn records, and pending requests.

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { parseMarkdownToMdast } from "../src/ast";
-import { chunkFormattedText, prependText } from "../src/chunk";
 import { buildFormattedText, TelegramEntityBuilder } from "../src/entity-builder";
 import { boldFormattedText, renderLinkedText, renderSpoilerText } from "../src/formatters";
 import { renderMdastToFormattedText } from "../src/mdast";
 import { renderMarkdownToFormattedText } from "../src/markdown";
 import { renderPreformattedText, renderQuotedText } from "../src/preformatted";
+import { truncateFormattedText } from "../src/truncate";
 
 describe("telegram-format", () => {
   it("supports manual entity annotations over plain text", () => {
@@ -312,7 +312,7 @@ describe("telegram-format", () => {
     });
   });
 
-  it("chunks formatted text and preserves clipped entities", () => {
+  it("truncates formatted text and preserves clipped entities", () => {
     const formatted = buildFormattedText("alpha beta gamma delta", [
       {
         type: "bold",
@@ -321,49 +321,38 @@ describe("telegram-format", () => {
       }
     ]);
 
-    expect(chunkFormattedText(formatted, 12)).toEqual([
-      {
-        text: "alpha beta",
-        entities: [
-          {
-            type: "bold",
-            offset: 6,
-            length: 4
-          }
-        ]
-      },
-      {
-        text: "gamma delta",
-        entities: [
-          {
-            type: "bold",
-            offset: 0,
-            length: 5
-          }
-        ]
-      }
-    ]);
-  });
-
-  it("shifts entity offsets when prefixing chunk headers", () => {
-    expect(
-      prependText(
-        "Part 1/2\n\n",
-        buildFormattedText("bold", [
-          {
-            type: "bold",
-            offset: 0,
-            length: 4
-          }
-        ])
-      )
-    ).toEqual({
-      text: "Part 1/2\n\nbold",
+    expect(truncateFormattedText(formatted, 18, "\n[cut]")).toEqual({
+      text: "alpha beta g\n[cut]",
       entities: [
         {
           type: "bold",
-          offset: 10,
-          length: 4
+          offset: 6,
+          length: 6
+        }
+      ]
+    });
+  });
+
+  it("preserves UTF-16 entity offsets when truncating around emoji", () => {
+    expect(
+      truncateFormattedText(
+        buildFormattedText("🙂 bold text", [
+          {
+            type: "bold",
+            offset: 3,
+            length: 9
+          }
+        ]),
+        11,
+        "…"
+      )
+    ).toEqual({
+      text: "🙂 bold te…",
+      entities: [
+        {
+          type: "bold",
+          offset: 3,
+          length: 7
         }
       ]
     });

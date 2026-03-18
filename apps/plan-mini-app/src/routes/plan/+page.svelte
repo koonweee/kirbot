@@ -38,7 +38,12 @@
     try {
       const artifact = decodeMiniAppArtifact(encodedArtifact);
 
-      artifactLabel = artifact.type === MiniAppArtifactType.Commentary ? "Commentary" : "Plan";
+      artifactLabel =
+        artifact.type === MiniAppArtifactType.Commentary
+          ? "Commentary"
+          : artifact.type === MiniAppArtifactType.Response
+            ? "Response"
+            : "Plan";
       state = {
         kind: "ready",
         title: artifact.title || artifactLabel,

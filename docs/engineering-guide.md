@@ -88,7 +88,7 @@ Telegram-facing status/footer/queue preview text:
 Draft delivery and final Telegram messages:
 [`packages/kirbot-core/src/telegram-messenger.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-messenger.ts)
 
-Telegram formatting entities, chunking, UTF-16 offsets:
+Telegram formatting entities, truncation, UTF-16 offsets:
 [`packages/telegram-format/src`](/home/jtkw/kirbot/packages/telegram-format/src)
 
 Codex app-server interaction:

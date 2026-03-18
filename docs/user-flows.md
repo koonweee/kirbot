@@ -56,21 +56,22 @@ User experience:
 - When Codex emits reasoning summaries, kirbot can surface the latest summary in
   the live thinking status as a quoted preview under the status line.
 - Commentary, plan text, and final assistant output are treated differently so Telegram stays readable.
-- Commentary is exposed through a `View commentary` button on the next assistant message, or through a compact stub when no assistant message follows.
+- Final assistant output is published as a single Telegram message with a `View response` Mini App button, and oversized messages are truncated with a note to continue in View.
+- When commentary also exists, the same assistant message gets a second `View commentary` button. If no assistant message follows, commentary is exposed through a compact stub instead.
 - In-progress planning stays in the status path; kirbot no longer streams partial plan text into Telegram bubbles.
-- When the final plan item completes, kirbot posts a compact Telegram stub with an `Open plan` button whose URL contains the typed plan payload.
+- When the final plan item completes, kirbot posts a compact Telegram stub with a `View plan` button whose URL contains the typed plan payload.
 - When the turn finishes, kirbot clears drafts, sends durable final messages, and posts a completion footer with execution context.
 
 Owned by:
 
 - active-turn lifecycle in [`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
-- status, footer, and chunk rendering in [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
+- status, footer, truncation, and Mini App button rendering in [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
 - draft and final delivery in [`packages/kirbot-core/src/telegram-messenger.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-messenger.ts)
 - Markdown/entity formatting in [`packages/telegram-format/src`](/home/jtkw/kirbot/packages/telegram-format/src)
 
 Verified by:
 
-- streaming, chunking, commentary, and footer tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- streaming, truncation, commentary, response-button, and footer tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - terminal-path tests in [`packages/kirbot-core/tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/turn-lifecycle.test.ts)
 - draft-delivery tests in [`packages/kirbot-core/tests/telegram-messenger.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-messenger.test.ts)
 

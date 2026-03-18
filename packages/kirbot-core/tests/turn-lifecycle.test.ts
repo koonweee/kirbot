@@ -29,17 +29,26 @@ function message(text: string, updateId = 1): UserTurnMessage {
   };
 }
 
-function getWebAppUrl(entry: { options?: Record<string, unknown> } | undefined): string | null {
+function getInlineButtonTexts(entry: { options?: Record<string, unknown> } | undefined): string[] {
   return (
-    ((entry?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
-      ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null)
+    ((entry?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)?.inline_keyboard
+      ?.flat()
+      .map((button) => button.text)
+      .filter((text): text is string => typeof text === "string")) ?? []
   );
 }
 
-function getInlineButtonText(entry: { options?: Record<string, unknown> } | undefined): string | null {
+function getWebAppUrlByButtonText(
+  entry: { options?: Record<string, unknown> } | undefined,
+  buttonText: string
+): string | null {
   return (
-    ((entry?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)
-      ?.inline_keyboard?.[0]?.[0]?.text ?? null)
+    ((entry?.options?.reply_markup as {
+      inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>>;
+    } | undefined)
+      ?.inline_keyboard?.flat()
+      .find((button) => button.text === buttonText)
+      ?.web_app?.url ?? null)
   );
 }
 
@@ -320,9 +329,7 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const stub = telegram.sentMessages.find((entry) => entry.text.startsWith("Plan"));
-    const url =
-      ((stub?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
-        ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null);
+    const url = getWebAppUrlByButtonText(stub, "View plan");
     expect(url).toBeTruthy();
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(encoded).toBeTruthy();
@@ -334,7 +341,7 @@ describe("TurnLifecycleCoordinator", () => {
     });
   });
 
-  it("attaches the commentary Mini App button to the final answer when assistant output follows", async () => {
+  it("attaches response and commentary Mini App buttons to the final answer when assistant output follows", async () => {
     const telegram = new FakeTelegram();
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
@@ -375,8 +382,16 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(telegram.sentMessages.some((entry) => entry.text.startsWith("Commentary"))).toBe(false);
     const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
-    expect(getInlineButtonText(finalAnswer)).toBe("View commentary");
-    const url = getWebAppUrl(finalAnswer);
+    expect(getInlineButtonTexts(finalAnswer)).toEqual(["View response", "View commentary"]);
+    const responseUrl = getWebAppUrlByButtonText(finalAnswer, "View response");
+    const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
+    expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Response,
+      title: "Response",
+      markdownText: "Final answer"
+    });
+    const url = getWebAppUrlByButtonText(finalAnswer, "View commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -436,8 +451,8 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available.");
-    expect(getInlineButtonText(stub)).toBe("View commentary");
-    const url = getWebAppUrl(stub);
+    expect(getInlineButtonTexts(stub)).toEqual(["View commentary"]);
+    const url = getWebAppUrlByButtonText(stub, "View commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -491,11 +506,44 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     expect(
-      telegram.sentMessages.find((entry) => entry.text === "Commentary ready, but too large for Mini App link.")
+      telegram.sentMessages.find((entry) => entry.text === "Commentary artifact was too large to encode.")
     ).toBeTruthy();
     expect(
-      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary ready, but too large for Mini App link.")
+      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary artifact was too large to encode.")
     ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Final answer"));
+  });
+
+  it("publishes a non-blocking notice when the response artifact is too large to encode", async () => {
+    const telegram = new FakeTelegram();
+    const finalAnswer = longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90);
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`,
+      releaseTurnFiles: async () => undefined,
+      appendTurnStream: async () => undefined,
+      completePersistedTurn: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: finalAnswer,
+        assistantText: finalAnswer,
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    const publishedAnswer = telegram.sentMessages.find((entry) => entry.text.includes("[response truncated]"));
+    expect(publishedAnswer).toBeTruthy();
+    expect(getInlineButtonTexts(publishedAnswer)).toEqual([]);
+    expect(telegram.sentMessages.some((entry) => entry.text === "Response artifact was too large to encode.")).toBe(true);
   });
 
   it("submits merged pending steers when an interrupted turn is finalized with send-now intent", async () => {

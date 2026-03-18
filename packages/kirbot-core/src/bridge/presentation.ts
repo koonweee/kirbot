@@ -1,15 +1,18 @@
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import {
-  chunkFormattedText,
-  prependText,
   renderCodeText,
   renderMarkdownToFormattedText,
   renderPreformattedText,
   renderQuotedText,
-  TelegramEntityBuilder
+  TelegramEntityBuilder,
+  truncateFormattedText
 } from "@kirbot/telegram-format";
-import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
+import type {
+  InlineKeyboardMarkup,
+  TelegramInlineKeyboardButton,
+  TelegramRenderedMessage
+} from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
 import {
   buildMiniAppArtifactUrl,
@@ -20,6 +23,8 @@ import {
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
 const TELEGRAM_STATUS_QUOTE_PREVIEW_CHAR_LIMIT = 280;
+const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
+const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
 
 export type TurnStatusState =
   | "thinking"
@@ -186,8 +191,8 @@ export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
   return renderMarkdownToFormattedText(buildPlanPreviewText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT)));
 }
 
-export function buildCommentaryArtifactReplyMarkup(publicUrl: string, items: string[]): InlineKeyboardMarkup {
-  return buildMarkdownArtifactReplyMarkup({
+export function buildCommentaryArtifactButton(publicUrl: string, items: string[]): TelegramInlineKeyboardButton {
+  return buildMarkdownArtifactButton({
     publicUrl,
     artifact: {
       v: 1,
@@ -197,6 +202,25 @@ export function buildCommentaryArtifactReplyMarkup(publicUrl: string, items: str
     },
     buttonText: "View commentary"
   });
+}
+
+export function buildResponseArtifactButton(publicUrl: string, markdownText: string): TelegramInlineKeyboardButton {
+  return buildMarkdownArtifactButton({
+    publicUrl,
+    artifact: {
+      v: 1,
+      type: MiniAppArtifactType.Response,
+      title: "Response",
+      markdownText
+    },
+    buttonText: "View response"
+  });
+}
+
+export function buildArtifactReplyMarkup(buttons: TelegramInlineKeyboardButton[]): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [buttons]
+  };
 }
 
 export function buildCommentaryArtifactStubMessage(replyMarkup: InlineKeyboardMarkup): {
@@ -211,7 +235,13 @@ export function buildCommentaryArtifactStubMessage(replyMarkup: InlineKeyboardMa
 
 export function buildOversizeCommentaryArtifactMessage(): { text: string } {
   return {
-    text: "Commentary ready, but too large for Mini App link."
+    text: "Commentary artifact was too large to encode."
+  };
+}
+
+export function buildOversizeResponseArtifactMessage(): { text: string } {
+  return {
+    text: "Response artifact was too large to encode."
   };
 }
 
@@ -223,8 +253,15 @@ export function buildRenderedInitialPromptMessage(text: string): TelegramRendere
   return renderPreformattedText(text, "user prompt");
 }
 
-export function buildRenderedPlanMessages(text: string): TelegramRenderedMessage[] {
-  return buildHeaderedMarkdownMessages(text, "Plan");
+export function buildRenderedAssistantMessage(
+  text: string,
+  options?: { includeContinueInViewNote?: boolean }
+): TelegramRenderedMessage {
+  return truncateFormattedText(
+    renderMarkdownToFormattedText(text),
+    TELEGRAM_MESSAGE_CHAR_LIMIT,
+    options?.includeContinueInViewNote ? RESPONSE_TRUNCATED_VIEW_SUFFIX : RESPONSE_TRUNCATED_SUFFIX
+  );
 }
 
 export function buildPlanArtifactMessage(publicUrl: string, markdownText: string): {
@@ -233,55 +270,33 @@ export function buildPlanArtifactMessage(publicUrl: string, markdownText: string
 } {
   return {
     text: "Plan is ready",
-    replyMarkup: buildMarkdownArtifactReplyMarkup({
-      publicUrl,
-      artifact: {
-        v: 1,
-        type: MiniAppArtifactType.Plan,
-        title: "Plan",
-        markdownText
-      },
-      buttonText: "Open plan"
-    })
+    replyMarkup: buildArtifactReplyMarkup([
+      buildMarkdownArtifactButton({
+        publicUrl,
+        artifact: {
+          v: 1,
+          type: MiniAppArtifactType.Plan,
+          title: "Plan",
+          markdownText
+        },
+        buttonText: "View plan"
+      })
+    ])
   };
 }
 
 export function buildOversizePlanArtifactMessage(): { text: string } {
   return {
-    text: "Plan ready, but too large for Mini App link."
+    text: "Plan artifact was too large to encode."
   };
 }
 
-export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
-  return buildHeaderedMarkdownMessages(text);
-}
-
-function buildHeaderedMarkdownMessages(text: string, header?: string): TelegramRenderedMessage[] {
-  return buildHeaderedFormattedMessages(renderMarkdownToFormattedText(text), header);
-}
-
-function buildMarkdownArtifactReplyMarkup(input: {
+function buildMarkdownArtifactButton(input: {
   publicUrl: string;
   artifact: MiniAppArtifact;
   buttonText: string;
-}): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [[{ text: input.buttonText, web_app: { url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) } }]]
-  };
-}
-
-function buildHeaderedFormattedMessages(formatted: TelegramRenderedMessage, header?: string): TelegramRenderedMessage[] {
-  const reservedHeaderChars = 32;
-  const chunks = chunkFormattedText(formatted, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
-
-  if (chunks.length === 1) {
-    return header ? [prependText(`${header}\n\n`, chunks[0]!)] : chunks;
-  }
-
-  return chunks.map((chunk, index) => {
-    const prefix = header ? `${header} ${index + 1}/${chunks.length}\n\n` : `Part ${index + 1}/${chunks.length}\n\n`;
-    return prependText(prefix, chunk);
-  });
+}): TelegramInlineKeyboardButton {
+  return { text: input.buttonText, web_app: { url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) } };
 }
 
 function truncateStatus(text: string): string {

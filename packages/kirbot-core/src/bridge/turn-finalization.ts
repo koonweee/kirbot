@@ -1,14 +1,21 @@
 import type { UserTurnMessage } from "../domain";
 import {
-  buildRenderedAssistantMessages,
-  buildCommentaryArtifactReplyMarkup,
+  buildArtifactReplyMarkup,
+  buildCommentaryArtifactButton,
   buildCommentaryArtifactStubMessage,
-  buildRenderedPlanMessages,
+  buildOversizeResponseArtifactMessage,
+  buildRenderedAssistantMessage,
+  buildResponseArtifactButton,
   buildOversizeCommentaryArtifactMessage,
   buildRenderedCompletionFooter,
   type CompletionFooterDetails
 } from "./presentation";
-import type { InlineKeyboardMarkup, TelegramApi, TelegramMessenger, TelegramRenderedMessage } from "../telegram-messenger";
+import type {
+  InlineKeyboardMarkup,
+  TelegramApi,
+  TelegramInlineKeyboardButton,
+  TelegramMessenger
+} from "../telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../turn-runtime";
 import {
   type TerminalTurnStatus,
@@ -62,9 +69,13 @@ export type FinalizationPolicy = {
 
 type CommentaryPublication =
   | { kind: "hidden" }
-  | { kind: "attach_to_assistant"; replyMarkup: InlineKeyboardMarkup }
+  | { kind: "assistant_button"; button: TelegramInlineKeyboardButton }
   | { kind: "standalone_stub"; text: string; replyMarkup: InlineKeyboardMarkup }
-  | { kind: "oversize_stub"; text: string };
+  | { kind: "oversize_notice"; text: string };
+
+type ResponsePublication =
+  | { kind: "assistant_button"; button: TelegramInlineKeyboardButton }
+  | { kind: "oversize_notice"; text: string };
 
 export class TurnFinalizer {
   constructor(
@@ -93,7 +104,8 @@ export class TurnFinalizer {
     const commentaryItems = this.deps.runtime.renderCommentaryItems(context.turnId);
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
     const hasAssistantText = snapshot.assistantText.trim().length > 0;
-    const commentaryPublication = this.buildCommentaryPublication(commentaryItems, hasAssistantText);
+    const publishesPlanOnly = policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0;
+    const commentaryPublication = this.buildCommentaryPublication(commentaryItems, !publishesPlanOnly);
     await this.publishStandaloneCommentary(context, commentaryPublication);
     const publishedPlanMessageId =
       snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
@@ -103,17 +115,17 @@ export class TurnFinalizer {
           })
         : null;
     const finalText = policy.buildFinalText(snapshot.text);
+    const responsePublication = publishesPlanOnly ? null : this.buildResponsePublication(finalText);
     const messageId =
-      policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0
+      publishesPlanOnly
         ? publishedPlanMessageId
         : finalText.trim().length > 0 || policy.publishWhenEmpty
-          ? await this.publishFinalTurnText(
-              context,
-              finalText,
-              hasAssistantText ? "assistant" : "plan",
-              commentaryPublication.kind === "attach_to_assistant" ? commentaryPublication.replyMarkup : undefined
-            )
+          ? await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication)
           : null;
+
+    if (responsePublication?.kind === "oversize_notice") {
+      await this.publishArtifactOversizeNotice(context, responsePublication.text);
+    }
 
     if (policy.publishFooter) {
       await this.publishCompletionFooter(context, snapshot);
@@ -188,44 +200,54 @@ export class TurnFinalizer {
   private async publishFinalTurnText(
     context: TurnContext,
     text: string,
-    kind: "assistant" | "plan",
-    replyMarkup?: InlineKeyboardMarkup
+    commentaryPublication: CommentaryPublication,
+    responsePublication: ResponsePublication | null
   ): Promise<number> {
-    const outputs = kind === "assistant" ? buildRenderedAssistantMessages(text) : buildRenderedPlanMessages(text);
-    if (kind === "assistant") {
-      const messageId = await context.finalStream.finalize(outputs, {
-        ...(replyMarkup ? { firstMessageReplyMarkup: replyMarkup } : {})
-      });
-      if (messageId !== null) {
-        return messageId;
-      }
+    const buttons: TelegramInlineKeyboardButton[] = [];
+    if (responsePublication?.kind === "assistant_button") {
+      buttons.push(responsePublication.button);
+    }
+    if (commentaryPublication.kind === "assistant_button") {
+      buttons.push(commentaryPublication.button);
     }
 
-    return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
+    const messageId = await context.finalStream.finalize(
+      buildRenderedAssistantMessage(text, {
+        includeContinueInViewNote: responsePublication?.kind === "assistant_button"
+      }),
+      {
+        ...(buttons.length > 0 ? { firstMessageReplyMarkup: buildArtifactReplyMarkup(buttons) } : {})
+      }
+    );
+    if (messageId === null) {
+      throw new Error("Failed to publish final assistant message");
+    }
+
+    return messageId;
   }
 
-  private buildCommentaryPublication(items: string[], hasAssistantText: boolean): CommentaryPublication {
+  private buildCommentaryPublication(items: string[], attachToAssistant: boolean): CommentaryPublication {
     if (items.length === 0) {
       return { kind: "hidden" };
     }
 
     try {
-      const replyMarkup = buildCommentaryArtifactReplyMarkup(this.deps.planArtifactPublicUrl, items);
-      if (hasAssistantText) {
+      const button = buildCommentaryArtifactButton(this.deps.planArtifactPublicUrl, items);
+      if (attachToAssistant) {
         return {
-          kind: "attach_to_assistant",
-          replyMarkup
+          kind: "assistant_button",
+          button
         };
       }
 
       return {
         kind: "standalone_stub",
-        ...buildCommentaryArtifactStubMessage(replyMarkup)
+        ...buildCommentaryArtifactStubMessage(buildArtifactReplyMarkup([button]))
       };
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
         return {
-          kind: "oversize_stub",
+          kind: "oversize_notice",
           ...buildOversizeCommentaryArtifactMessage()
         };
       }
@@ -234,8 +256,26 @@ export class TurnFinalizer {
     }
   }
 
+  private buildResponsePublication(text: string): ResponsePublication {
+    try {
+      return {
+        kind: "assistant_button",
+        button: buildResponseArtifactButton(this.deps.planArtifactPublicUrl, text)
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
+        return {
+          kind: "oversize_notice",
+          ...buildOversizeResponseArtifactMessage()
+        };
+      }
+
+      throw error;
+    }
+  }
+
   private async publishStandaloneCommentary(context: TurnContext, publication: CommentaryPublication): Promise<void> {
-    if (publication.kind === "hidden" || publication.kind === "attach_to_assistant") {
+    if (publication.kind === "hidden" || publication.kind === "assistant_button") {
       return;
     }
 
@@ -249,11 +289,7 @@ export class TurnFinalizer {
       return;
     }
 
-    await this.deps.messenger.sendMessage({
-      chatId: context.chatId,
-      topicId: context.topicId,
-      text: publication.text
-    });
+    await this.publishArtifactOversizeNotice(context, publication.text);
   }
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {
@@ -279,30 +315,12 @@ export class TurnFinalizer {
     };
   }
 
-  private async sendRenderedMessages(
-    chatId: number,
-    topicId: number,
-    renderedMessages: TelegramRenderedMessage[]
-  ): Promise<number> {
-    let firstMessageId: number | null = null;
-
-    for (const rendered of renderedMessages) {
-      const message = await this.deps.messenger.sendMessage({
-        chatId,
-        topicId,
-        text: rendered.text,
-        ...(rendered.entities ? { entities: rendered.entities } : {})
-      });
-      if (firstMessageId === null) {
-        firstMessageId = message.messageId;
-      }
-    }
-
-    if (firstMessageId === null) {
-      throw new Error("Failed to publish Telegram message chunks");
-    }
-
-    return firstMessageId;
+  private async publishArtifactOversizeNotice(context: TurnContext, text: string): Promise<void> {
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text
+    });
   }
 }
 

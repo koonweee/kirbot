@@ -5,7 +5,6 @@ import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/T
 import type { LoggerLike } from "../logging";
 import {
   buildPlanArtifactMessage,
-  buildRenderedPlanMessages,
   buildOversizePlanArtifactMessage,
   buildStableDraftId,
   buildStatusDraft,
@@ -495,27 +494,5 @@ export class TurnLifecycleCoordinator {
 
       throw error;
     }
-  }
-
-  private async sendRenderedPlanMessages(context: TurnContext, renderedMessages: ReturnType<typeof buildRenderedPlanMessages>): Promise<number> {
-    let firstMessageId: number | null = null;
-
-    for (const rendered of renderedMessages) {
-      const message = await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        text: rendered.text,
-        ...(rendered.entities ? { entities: rendered.entities } : {})
-      });
-      if (firstMessageId === null) {
-        firstMessageId = message.messageId;
-      }
-    }
-
-    if (firstMessageId === null) {
-      throw new Error("Failed to publish rendered plan messages");
-    }
-
-    return firstMessageId;
   }
 }

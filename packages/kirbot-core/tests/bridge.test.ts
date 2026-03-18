@@ -66,17 +66,26 @@ function combinedDraft(...parts: string[]): string {
   return parts.join("\n\n");
 }
 
-function getWebAppUrl(message: { options?: TelegramSendOptions } | undefined): string | null {
+function getInlineButtonTexts(message: { options?: TelegramSendOptions } | undefined): string[] {
   return (
-    ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
-      ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null)
+    ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)?.inline_keyboard
+      ?.flat()
+      .map((button) => button.text)
+      .filter((text): text is string => typeof text === "string")) ?? []
   );
 }
 
-function getInlineButtonText(message: { options?: TelegramSendOptions } | undefined): string | null {
+function getWebAppUrlByButtonText(
+  message: { options?: TelegramSendOptions } | undefined,
+  buttonText: string
+): string | null {
   return (
-    ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)
-      ?.inline_keyboard?.[0]?.[0]?.text ?? null)
+    ((message?.options?.reply_markup as {
+      inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>>;
+    } | undefined)
+      ?.inline_keyboard?.flat()
+      .find((button) => button.text === buttonText)
+      ?.web_app?.url ?? null)
   );
 }
 
@@ -1465,9 +1474,17 @@ describe("TelegramCodexBridge", () => {
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
     const answerMessage = getFinalAnswerMessage(miniAppTelegram);
     expect(answerMessage?.text).toBe("Here is the answer.");
-    expect(getInlineButtonText(answerMessage)).toBe("View commentary");
-    const url = getWebAppUrl(answerMessage);
-    expect(url?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
+    expect(getInlineButtonTexts(answerMessage)).toEqual(["View response", "View commentary"]);
+    const responseUrl = getWebAppUrlByButtonText(answerMessage, "View response");
+    expect(responseUrl?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
+    const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
+    expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Response,
+      title: "Response",
+      markdownText: "Here is the answer."
+    });
+    const url = getWebAppUrlByButtonText(answerMessage, "View commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -1477,7 +1494,7 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
-  it("chunks long final assistant output into multiple Telegram messages", async () => {
+  it("truncates long final assistant output into one Telegram message with a response button", async () => {
     codex.readTurnMessagesResult = longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90);
 
     await bridge.handleUserTextMessage({
@@ -1514,13 +1531,22 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const partMessages = telegram.sentMessages.filter((message) => message.text.startsWith("Part "));
-    expect(partMessages.length).toBeGreaterThan(1);
-    expect(partMessages[0]?.text).toContain("Part 1/");
-    expect(partMessages[1]?.text).toContain("Part 2/");
+    expect(telegram.sentMessages.some((message) => message.text.startsWith("Part "))).toBe(false);
+    const answerMessage = getFinalAnswerMessage(telegram);
+    expect(answerMessage?.text).toContain("[response truncated, continue in View]");
+    expect(answerMessage?.text.length).toBeLessThanOrEqual(4000);
+    expect(getInlineButtonTexts(answerMessage)).toEqual(["View response"]);
+    const responseUrl = getWebAppUrlByButtonText(answerMessage, "View response");
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Response,
+      title: "Response",
+      markdownText: longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90)
+    });
   });
 
-  it("attaches the commentary Mini App button only to the first chunk of a long final answer", async () => {
+  it("attaches response and commentary Mini App buttons to a truncated long final answer", async () => {
     const miniAppConfig: AppConfig = {
       ...config,
       telegram: {
@@ -1608,10 +1634,10 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
-    const partMessages = miniAppTelegram.sentMessages.filter((message) => message.text.startsWith("Part "));
-    expect(partMessages.length).toBeGreaterThan(1);
-    expect(getInlineButtonText(partMessages[0])).toBe("View commentary");
-    expect(partMessages[1]?.options?.reply_markup).toBeUndefined();
+    expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Part "))).toBe(false);
+    const answerMessage = getFinalAnswerMessage(miniAppTelegram);
+    expect(answerMessage?.text).toContain("[response truncated, continue in View]");
+    expect(getInlineButtonTexts(answerMessage)).toEqual(["View response", "View commentary"]);
   });
 
   it("truncates oversized streaming draft previews", async () => {
@@ -1809,8 +1835,16 @@ describe("TelegramCodexBridge", () => {
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
     const answerMessage = getFinalAnswerMessage(miniAppTelegram);
     expect(answerMessage?.text).toBe("Final answer");
-    expect(getInlineButtonText(answerMessage)).toBe("View commentary");
-    const url = getWebAppUrl(answerMessage);
+    expect(getInlineButtonTexts(answerMessage)).toEqual(["View response", "View commentary"]);
+    const responseUrl = getWebAppUrlByButtonText(answerMessage, "View response");
+    const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
+    expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Response,
+      title: "Response",
+      markdownText: "Final answer"
+    });
+    const url = getWebAppUrlByButtonText(answerMessage, "View commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -1897,9 +1931,7 @@ describe("TelegramCodexBridge", () => {
     expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan is ready")).toHaveLength(1);
     expect(miniAppTelegram.sentMessages.some((message) => message.text === "Plan\n\n1. Draft the rollout")).toBe(false);
     const stub = miniAppTelegram.sentMessages.find((message) => message.text === "Plan is ready");
-    const url =
-      (((stub?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
-        ?.inline_keyboard?.[0]?.[0]?.web_app?.url) ?? null);
+    const url = getWebAppUrlByButtonText(stub, "View plan");
     expect(url).toBeTruthy();
     expect(url?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
@@ -1971,7 +2003,7 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(
-      oversizeMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready, but too large for Mini App link.")
+      oversizeMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan artifact was too large to encode.")
     ).toHaveLength(1);
     expect(
       oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Plan is ready")
@@ -2088,8 +2120,8 @@ describe("TelegramCodexBridge", () => {
 
     const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available.");
     expect(commentaryStub).toBeTruthy();
-    expect(getInlineButtonText(commentaryStub)).toBe("View commentary");
-    const url = getWebAppUrl(commentaryStub);
+    expect(getInlineButtonTexts(commentaryStub)).toEqual(["View commentary"]);
+    const url = getWebAppUrlByButtonText(commentaryStub, "View commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -2100,6 +2132,64 @@ describe("TelegramCodexBridge", () => {
     const planIndex = miniAppTelegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
     expect(planIndex).toBeGreaterThanOrEqual(0);
     expect(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available.")).toBeLessThan(planIndex);
+  });
+
+  it("publishes a non-blocking notice when the response artifact is too large to encode", async () => {
+    const oversizeMiniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`
+        }
+      }
+    };
+    const finalAnswer = longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90);
+    const oversizeMiniAppCodex = new FakeCodex();
+    oversizeMiniAppCodex.readTurnSnapshotResult = {
+      text: finalAnswer,
+      assistantText: finalAnswer
+    };
+    const oversizeMiniAppTelegram = new FakeTelegram();
+    const oversizeMiniAppBridge = new TelegramCodexBridge(
+      oversizeMiniAppConfig,
+      database,
+      oversizeMiniAppTelegram,
+      oversizeMiniAppCodex,
+      mediaStore
+    );
+
+    await oversizeMiniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 76,
+      updateId: 86,
+      userId: 42,
+      text: "Explain the fix"
+    });
+
+    oversizeMiniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const answerMessage = oversizeMiniAppTelegram.sentMessages.find((message) =>
+      message.text.includes("[response truncated]")
+    );
+    expect(answerMessage?.text).toContain("[response truncated]");
+    expect(getInlineButtonTexts(answerMessage)).toEqual([]);
+    expect(
+      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Response artifact was too large to encode.")
+    ).toBe(true);
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {

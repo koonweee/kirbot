@@ -6,7 +6,8 @@ export const MINI_APP_ARTIFACT_VERSION = 1;
 
 export enum MiniAppArtifactType {
   Plan = "plan",
-  Commentary = "commentary"
+  Commentary = "commentary",
+  Response = "response"
 }
 
 type MiniAppMarkdownArtifactBase = {
@@ -23,7 +24,11 @@ export type MiniAppCommentaryArtifact = MiniAppMarkdownArtifactBase & {
   type: MiniAppArtifactType.Commentary;
 };
 
-export type MiniAppArtifact = MiniAppPlanArtifact | MiniAppCommentaryArtifact;
+export type MiniAppResponseArtifact = MiniAppMarkdownArtifactBase & {
+  type: MiniAppArtifactType.Response;
+};
+
+export type MiniAppArtifact = MiniAppPlanArtifact | MiniAppCommentaryArtifact | MiniAppResponseArtifact;
 
 export function encodeMiniAppArtifact(artifact: MiniAppArtifact): string {
   return compressToEncodedURIComponent(JSON.stringify(validateMiniAppArtifact(artifact)));
@@ -83,6 +88,7 @@ function validateMiniAppArtifact(value: unknown): MiniAppArtifact {
   switch (artifact.type) {
     case MiniAppArtifactType.Plan:
     case MiniAppArtifactType.Commentary:
+    case MiniAppArtifactType.Response:
       if (typeof artifact.title !== "string" || typeof artifact.markdownText !== "string") {
         throw new Error(`invalid_${artifact.type}_artifact`);
       }

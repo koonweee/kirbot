@@ -26,7 +26,7 @@ All relevant Telegram formatting logic should live in this directory, including:
 - manual formatting producers for plain text
 - shared entity wrapper helpers
 - UTF-16 offset handling
-- entity-aware chunking and prefix shifting
+- entity-aware truncation and clipping
 
 Code outside this directory should treat the output here as the source of truth
 for Telegram formatting.
@@ -44,16 +44,15 @@ Choose the entrypoint based on the producer:
   - use shared wrappers in `formatters.ts`
   - examples: `boldFormattedText`, `linkFormattedText`,
     `preformattedFormattedText`, `quoteFormattedText`
-- Multipart Telegram output:
-  - use `chunkFormattedText`
-  - use `prependText` when adding `Part x/n` headers
+- Truncated Telegram output:
+  - use `truncateFormattedText`
 
 ## Design Rules
 
 - Keep Markdown parsing separate from manual producers.
 - Share lower-level Telegram entity behavior through common helpers.
 - Prefer extending shared helpers over adding one-off entity logic in callers.
-- Preserve UTF-16 correctness for all entity offsets and chunk boundaries.
+- Preserve UTF-16 correctness for all entity offsets and truncation boundaries.
 - If a Telegram entity has no natural Markdown source, add it as a manual path
   here rather than leaking ad hoc construction into callers.
 
