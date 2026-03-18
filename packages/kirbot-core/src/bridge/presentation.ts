@@ -339,19 +339,31 @@ function buildRenderedStatusText(
   statusDraft: TurnStatusDraft,
   elapsedMs: number | null
 ): TelegramRenderedMessage {
-  if (statusDraft.state !== "running" || !statusDraft.details?.trim()) {
+  const details = buildStatusDetails(statusDraft);
+  if (!details || !shouldRenderStatusDetailsAsCode(statusDraft.state)) {
     return { text: buildStatusText(statusDraft, elapsedMs) };
   }
 
   const builder = new TelegramEntityBuilder();
   builder.appendText(`${statusDraft.state}: `);
-  builder.appendFormatted(renderCodeText(buildStatusDetails(statusDraft) ?? ""));
+  builder.appendFormatted(renderCodeText(details));
 
   if (elapsedMs !== null) {
     builder.appendText(` · ${formatElapsedDuration(elapsedMs)}`);
   }
 
   return builder.build();
+}
+
+function shouldRenderStatusDetailsAsCode(state: TurnStatusState): boolean {
+  switch (state) {
+    case "running":
+    case "editing":
+    case "using tool":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function buildCompletionFooterText(details: CompletionFooterDetails): string {
