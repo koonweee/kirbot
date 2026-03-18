@@ -326,6 +326,7 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleFileChangeOutput(turnId: string): Promise<void> {
+    // TODO: Surface concise file-change progress details in Telegram once we have a stable summary format.
     await this.updateStatus(turnId, buildStatusDraft("editing"), {
       preserveDetails: true
     });
