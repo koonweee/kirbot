@@ -137,7 +137,7 @@ describe("BridgeTurnRuntime", () => {
     });
   });
 
-  it("keeps commentary in the draft while reserving final output for final-answer items", () => {
+  it("keeps commentary out of the assistant draft while reserving final output for final-answer items", () => {
     const runtime = new BridgeTurnRuntime();
     runtime.registerTurn({
       chatId: -1001,
@@ -153,13 +153,11 @@ describe("BridgeTurnRuntime", () => {
       itemId: "item-1",
       itemText: "Inspecting the repo",
       itemPhase: "commentary",
-      commentarySnippet: "Inspecting the repo",
       draftText: "",
       draftKind: null,
       finalText: "",
       startedAssistantText: true
     });
-    expect(runtime.renderCommentarySnippet("turn-1")).toBe("Inspecting the repo");
     expect(runtime.renderCommentaryItems("turn-1")).toEqual(["Inspecting the repo"]);
 
     runtime.registerAssistantItem("turn-1", "item-2", "final_answer");
@@ -169,13 +167,11 @@ describe("BridgeTurnRuntime", () => {
       itemId: "item-2",
       itemText: "Here is the fix.",
       itemPhase: "final_answer",
-      commentarySnippet: null,
       draftText: "Here is the fix.",
       draftKind: "assistant",
       finalText: "Here is the fix.",
       startedAssistantText: false
     });
-    expect(runtime.renderCommentarySnippet("turn-1")).toBeNull();
     expect(runtime.renderAssistantDraft("turn-1")).toEqual({
       text: "Here is the fix.",
       kind: "assistant"

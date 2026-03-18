@@ -46,12 +46,9 @@ is usually the status draft message in Telegram.
 
 `commentary`
 
-Intermediate assistant narration about ongoing work. Commentary is shown
-separately from the final answer so the topic stays readable.
-
-`commentary draft`
-
-The temporary Telegram draft used while a commentary item is still streaming.
+Intermediate assistant narration about ongoing work. Commentary is buffered
+during the turn, then published separately from the final answer so the topic
+stays readable.
 
 `commentary block` / `commentary message`
 

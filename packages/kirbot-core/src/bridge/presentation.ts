@@ -36,7 +36,6 @@ export type TurnStatusDraft = {
   state: TurnStatusState;
   emoji: string;
   details: string | null;
-  snippet: string | null;
 };
 
 export type CompletionFooterDetails = {
@@ -65,32 +64,31 @@ export function buildStableDraftId(seed: string): number {
 
 export function buildStatusDraft(
   state: TurnStatusState,
-  details: string | null = null,
-  snippet: string | null = null
+  details: string | null = null
 ): TurnStatusDraft {
   switch (state) {
     case "thinking":
-      return { state, emoji: "🤔", details, snippet };
+      return { state, emoji: "🤔", details };
     case "planning":
-      return { state, emoji: "🗺️", details, snippet };
+      return { state, emoji: "🗺️", details };
     case "using tool":
-      return { state, emoji: "🛠️", details, snippet };
+      return { state, emoji: "🛠️", details };
     case "running":
-      return { state, emoji: "💻", details, snippet };
+      return { state, emoji: "💻", details };
     case "editing":
-      return { state, emoji: "✏️", details, snippet };
+      return { state, emoji: "✏️", details };
     case "searching":
-      return { state, emoji: "🔎", details, snippet };
+      return { state, emoji: "🔎", details };
     case "streaming":
-      return { state, emoji: "✍️", details, snippet };
+      return { state, emoji: "✍️", details };
     case "waiting":
-      return { state, emoji: "⏸️", details, snippet };
+      return { state, emoji: "⏸️", details };
     case "done":
-      return { state, emoji: "✅", details, snippet };
+      return { state, emoji: "✅", details };
     case "failed":
-      return { state, emoji: "❌", details, snippet };
+      return { state, emoji: "❌", details };
     case "interrupted":
-      return { state, emoji: "⏹️", details, snippet };
+      return { state, emoji: "⏹️", details };
   }
 }
 
@@ -118,12 +116,7 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
 }
 
 export function isSameStatusDraft(left: TurnStatusDraft | null, right: TurnStatusDraft | null): boolean {
-  return (
-    left?.state === right?.state &&
-    left?.emoji === right?.emoji &&
-    left?.details === right?.details &&
-    left?.snippet === right?.snippet
-  );
+  return left?.state === right?.state && left?.emoji === right?.emoji && left?.details === right?.details;
 }
 
 export function renderQueuePreview(queueState: QueueStateSnapshot): string | null {
@@ -346,9 +339,7 @@ function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null)
     parts.push(formatElapsedDuration(elapsedMs));
   }
 
-  const firstLine = parts.join(" · ");
-  const snippet = buildStatusSnippet(statusDraft.snippet);
-  return snippet ? `${firstLine}\nNow: ${snippet}` : firstLine;
+  return parts.join(" · ");
 }
 
 function buildRenderedStatusText(
@@ -365,11 +356,6 @@ function buildRenderedStatusText(
 
   if (elapsedMs !== null) {
     builder.appendText(` · ${formatElapsedDuration(elapsedMs)}`);
-  }
-
-  const snippet = buildStatusSnippet(statusDraft.snippet);
-  if (snippet) {
-    builder.appendText(`\nNow: ${snippet}`);
   }
 
   return builder.build();
@@ -408,19 +394,6 @@ function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = fals
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
-
-function buildStatusSnippet(text: string | null): string | null {
-  if (!text) {
-    return null;
-  }
-
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length === 0) {
-    return null;
-  }
-
-  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
 function buildStatusDetails(statusDraft: TurnStatusDraft): string | null {

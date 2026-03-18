@@ -193,7 +193,7 @@ export class TurnLifecycleCoordinator {
   async updateStatus(
     turnId: string,
     statusDraft: TurnStatusDraft,
-    options?: { force?: boolean; preserveDetails?: boolean; preserveSnippet?: boolean }
+    options?: { force?: boolean; preserveDetails?: boolean }
   ): Promise<void> {
     const context = this.#turns.get(turnId);
     if (!context || context.phase !== "active") {
@@ -207,10 +207,7 @@ export class TurnLifecycleCoordinator {
       context.statusDraft.details
         ? { ...statusDraft, details: context.statusDraft.details }
         : statusDraft;
-    await this.setStatusDraft(context, {
-      ...nextStatus,
-      snippet: options?.preserveSnippet === false ? statusDraft.snippet : statusDraft.snippet ?? context.statusDraft?.snippet ?? null
-    }, now, options?.force ?? false);
+    await this.setStatusDraft(context, nextStatus, now, options?.force ?? false);
   }
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
@@ -235,9 +232,7 @@ export class TurnLifecycleCoordinator {
     } else if (item.type === "plan") {
       this.deps.runtime.registerPlanItem(turnId, item.id);
     }
-    await this.updateStatus(turnId, buildStatusDraftForItem(item), {
-      preserveSnippet: !(item.type === "agentMessage" && item.phase !== "commentary")
-    });
+    await this.updateStatus(turnId, buildStatusDraftForItem(item));
   }
 
   async handlePlanUpdated(turnId: string, details: string | null): Promise<void> {
@@ -280,7 +275,7 @@ export class TurnLifecycleCoordinator {
     }
 
     await this.deps.appendTurnStream(context.turnId, update.finalText);
-    await this.handleAssistantRenderUpdate(context, update, "delta", update.startedAssistantText);
+    await this.handleAssistantRenderUpdate(context, update, update.startedAssistantText);
   }
 
   async handleItemCompleted(turnId: string, item: ThreadItem): Promise<void> {
@@ -314,7 +309,7 @@ export class TurnLifecycleCoordinator {
     }
 
     await this.deps.appendTurnStream(context.turnId, update.finalText);
-    await this.handleAssistantRenderUpdate(context, update, "completed", true);
+    await this.handleAssistantRenderUpdate(context, update, true);
   }
 
   async completeTurn(threadId: string, turnId: string): Promise<void> {
@@ -378,11 +373,10 @@ export class TurnLifecycleCoordinator {
   private async handleAssistantRenderUpdate(
     context: TurnContext,
     update: AssistantRenderUpdate,
-    stage: "delta" | "completed",
     forceDraft = false
   ): Promise<void> {
     if (update.itemPhase === "commentary") {
-      await this.updateCommentarySnippet(context.turnId, stage === "completed" ? null : update.commentarySnippet, forceDraft);
+      void forceDraft;
       return;
     }
 
@@ -400,23 +394,6 @@ export class TurnLifecycleCoordinator {
     void context;
     void update;
     void stage;
-  }
-
-  private async updateCommentarySnippet(turnId: string, snippet: string | null, force = false): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (!context || context.phase !== "active" || !context.statusDraft) {
-      return;
-    }
-
-    await this.setStatusDraft(
-      context,
-      {
-        ...context.statusDraft,
-        snippet
-      },
-      Date.now(),
-      force
-    );
   }
 
   private async clearStatusDraft(context: TurnContext): Promise<void> {

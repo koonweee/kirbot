@@ -20,7 +20,6 @@ export type RuntimeTurn = {
   turnId: string;
   assistantItemOrder: string[];
   assistantItems: Map<string, AssistantItemState>;
-  activeCommentaryItemId: string | null;
   planItemOrder: string[];
   planItems: Map<string, PlanItemState>;
   hasAssistantText: boolean;
@@ -56,7 +55,6 @@ export type AssistantRenderUpdate = {
   itemId: string;
   itemText: string;
   itemPhase: MessagePhase | null;
-  commentarySnippet: string | null;
   draftText: string;
   draftKind: AssistantDraftKind | null;
   finalText: string;
@@ -87,7 +85,6 @@ export class BridgeTurnRuntime {
       turnId: input.turnId,
       assistantItemOrder: [],
       assistantItems: new Map<string, AssistantItemState>(),
-      activeCommentaryItemId: null,
       planItemOrder: [],
       planItems: new Map<string, PlanItemState>(),
       hasAssistantText: false
@@ -207,11 +204,6 @@ export class BridgeTurnRuntime {
     }
 
     ensureAssistantItem(turn, itemId).phase = phase;
-    if (phase === "commentary") {
-      turn.activeCommentaryItemId = itemId;
-    } else {
-      turn.activeCommentaryItemId = null;
-    }
   }
 
   registerPlanItem(turnId: string, itemId: string): void {
@@ -253,9 +245,6 @@ export class BridgeTurnRuntime {
     const item = ensureAssistantItem(turn, itemId);
     item.phase = phase;
     item.text = text;
-    if (phase === "commentary" && turn.activeCommentaryItemId === itemId) {
-      turn.activeCommentaryItemId = null;
-    }
 
     return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
@@ -290,11 +279,6 @@ export class BridgeTurnRuntime {
   renderCommentaryItems(turnId: string): string[] {
     const turn = this.#turns.get(turnId);
     return turn ? renderCommentaryTexts(turn) : [];
-  }
-
-  renderCommentarySnippet(turnId: string): string | null {
-    const turn = this.#turns.get(turnId);
-    return turn ? renderActiveCommentarySnippet(turn) : null;
   }
 
   renderPlanItems(turnId: string): string {
@@ -421,7 +405,6 @@ function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAs
     itemId,
     itemText: item?.text ?? "",
     itemPhase: item?.phase ?? null,
-    commentarySnippet: renderActiveCommentarySnippet(turn),
     draftText: draft.text,
     draftKind: draft.kind,
     finalText: renderFinalAssistantText(turn),
@@ -480,20 +463,6 @@ function renderCommentaryTexts(turn: RuntimeTurn): string[] {
   return getAssistantItemsWithText(turn)
     .filter((item) => item.phase === "commentary")
     .map((item) => item.text);
-}
-
-function renderActiveCommentarySnippet(turn: RuntimeTurn): string | null {
-  const itemId = turn.activeCommentaryItemId;
-  if (!itemId) {
-    return null;
-  }
-
-  const item = turn.assistantItems.get(itemId);
-  if (!item || item.phase !== "commentary" || item.text.length === 0) {
-    return null;
-  }
-
-  return item.text;
 }
 
 function getAssistantItemsWithText(turn: RuntimeTurn): AssistantItemState[] {

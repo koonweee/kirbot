@@ -1283,7 +1283,7 @@ describe("TelegramCodexBridge", () => {
     }
   });
 
-  it("shows commentary in the status draft and publishes it before the final answer", async () => {
+  it("keeps commentary out of the status draft and publishes it before the final answer", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1321,11 +1321,11 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s\nNow: Inspecting the files");
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
     expect(telegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
-    expect(telegram.appliedDrafts.length).toBeGreaterThan(initialDraftCount);
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "thinking · 0s\nNow: Inspecting the files")).toBe(true);
+    expect(telegram.appliedDrafts.length).toBe(initialDraftCount);
+    expect(telegram.appliedDrafts.some((draft) => draft.text.includes("\nNow:"))).toBe(false);
 
     codex.emitNotification({
       method: "item/started",
@@ -1457,7 +1457,7 @@ describe("TelegramCodexBridge", () => {
     expect(previewDraft?.text.length).toBeLessThanOrEqual(3500);
   });
 
-  it("folds oversized commentary into the live status snippet instead of a separate draft", async () => {
+  it("does not fold oversized commentary into the live status draft", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -1494,8 +1494,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(telegram.drafts.length).toBeGreaterThan(0);
-    expect(telegram.drafts.at(-1)?.text.startsWith("thinking · 0s\nNow: commentary content")).toBe(true);
-    expect(telegram.drafts.at(-1)?.text.endsWith("...")).toBe(true);
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
