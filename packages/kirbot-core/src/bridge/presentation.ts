@@ -6,7 +6,6 @@ import {
   renderCodeText,
   renderMarkdownToFormattedText,
   renderPreformattedText,
-  renderQuotedText,
   TelegramEntityBuilder,
   truncateFormattedText
 } from "@kirbot/telegram-format";
@@ -24,7 +23,6 @@ import {
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
-const TELEGRAM_STATUS_QUOTE_PREVIEW_CHAR_LIMIT = 280;
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
 const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
 export const TOPIC_IMPLEMENT_CALLBACK_DATA = "topic:implement";
@@ -44,9 +42,6 @@ export type TurnStatusState =
 
 export type TurnStatusDraft = {
   state: TurnStatusState;
-  emoji: string;
-  inlineDetails: string | null;
-  quotedDetails: string | null;
 };
 
 export type CompletionFooterDetails = {
@@ -73,35 +68,8 @@ export function buildStableDraftId(seed: string): number {
   return (hash >>> 1) || 1;
 }
 
-export function buildStatusDraft(
-  state: TurnStatusState,
-  inlineDetails: string | null = null,
-  quotedDetails: string | null = null
-): TurnStatusDraft {
-  switch (state) {
-    case "thinking":
-      return { state, emoji: "🤔", inlineDetails, quotedDetails };
-    case "planning":
-      return { state, emoji: "🗺️", inlineDetails, quotedDetails };
-    case "using tool":
-      return { state, emoji: "🛠️", inlineDetails, quotedDetails };
-    case "running":
-      return { state, emoji: "💻", inlineDetails, quotedDetails };
-    case "editing":
-      return { state, emoji: "✏️", inlineDetails, quotedDetails };
-    case "searching":
-      return { state, emoji: "🔎", inlineDetails, quotedDetails };
-    case "streaming":
-      return { state, emoji: "✍️", inlineDetails, quotedDetails };
-    case "waiting":
-      return { state, emoji: "⏸️", inlineDetails, quotedDetails };
-    case "done":
-      return { state, emoji: "✅", inlineDetails, quotedDetails };
-    case "failed":
-      return { state, emoji: "❌", inlineDetails, quotedDetails };
-    case "interrupted":
-      return { state, emoji: "⏹️", inlineDetails, quotedDetails };
-  }
+export function buildStatusDraft(state: TurnStatusState): TurnStatusDraft {
+  return { state };
 }
 
 export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
@@ -109,19 +77,19 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
     case "reasoning":
       return buildStatusDraft("thinking");
     case "commandExecution":
-      return buildStatusDraft("running", null, item.command);
+      return buildStatusDraft("running");
     case "fileChange":
-      return buildStatusDraft("editing", null, summarizeFileChanges(item.changes));
+      return buildStatusDraft("editing");
     case "plan":
       return buildStatusDraft("planning");
     case "mcpToolCall":
-      return buildStatusDraft("using tool", null, `${item.server}.${item.tool}`);
+      return buildStatusDraft("using tool");
     case "dynamicToolCall":
-      return buildStatusDraft("using tool", null, item.tool);
+      return buildStatusDraft("using tool");
     case "collabAgentToolCall":
-      return buildStatusDraft("using tool", null, item.tool);
+      return buildStatusDraft("using tool");
     case "webSearch":
-      return buildStatusDraft("searching", item.query);
+      return buildStatusDraft("searching");
     default:
       return buildStatusDraft("thinking");
   }
@@ -130,31 +98,25 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
 export function buildCompletedStatusDraftForItem(item: ThreadItem): TurnStatusDraft | null {
   switch (item.type) {
     case "commandExecution":
-      return buildStatusDraft("done", null, item.command);
+      return buildStatusDraft("done");
     case "fileChange":
-      return buildStatusDraft("done", null, summarizeFileChanges(item.changes));
+      return buildStatusDraft("done");
     case "mcpToolCall":
-      return buildStatusDraft("done", null, `${item.server}.${item.tool}`);
+      return buildStatusDraft("done");
     case "dynamicToolCall":
-      return buildStatusDraft("done", null, item.tool);
+      return buildStatusDraft("done");
     case "collabAgentToolCall":
-      return buildStatusDraft("done", null, item.tool);
+      return buildStatusDraft("done");
     case "webSearch":
-      return buildStatusDraft("done", null, item.query);
+      return buildStatusDraft("done");
     case "imageView":
-      return buildStatusDraft("done", null, basename(item.path) || item.path);
+      return buildStatusDraft("done");
     case "imageGeneration":
-      return isImageGenerationSuccess(item) ? buildStatusDraft("done", null, "image generated") : null;
-    case "enteredReviewMode": {
-      const review = item.review.trim();
-      return buildStatusDraft("done", null, review ? `review mode: ${review}` : "review mode");
-    }
-    case "exitedReviewMode": {
-      const review = item.review.trim();
-      return buildStatusDraft("done", null, review ? `exited review mode: ${review}` : "exited review mode");
-    }
+      return isImageGenerationSuccess(item) ? buildStatusDraft("done") : null;
+    case "enteredReviewMode":
+    case "exitedReviewMode":
     case "contextCompaction":
-      return buildStatusDraft("done", null, "context compacted");
+      return buildStatusDraft("done");
     default:
       return null;
   }
@@ -224,12 +186,7 @@ export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRen
 }
 
 export function isSameStatusDraft(left: TurnStatusDraft | null, right: TurnStatusDraft | null): boolean {
-  return (
-    left?.state === right?.state &&
-    left?.emoji === right?.emoji &&
-    left?.inlineDetails === right?.inlineDetails &&
-    left?.quotedDetails === right?.quotedDetails
-  );
+  return left?.state === right?.state;
 }
 
 export function renderQueuePreview(queueState: QueueStateSnapshot): string | null {
@@ -555,13 +512,7 @@ function buildTruncatedPreview(text: string, limit: number, prefix: string, suff
 
 function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null): string {
   const parts: string[] = [];
-  const details = buildInlineStatusDetails(statusDraft);
-
-  if (!details) {
-    parts.push(statusDraft.state);
-  } else {
-    parts.push(`${statusDraft.state}: ${details}`);
-  }
+  parts.push(statusDraft.state);
 
   if (elapsedMs !== null) {
     parts.push(formatElapsedDuration(elapsedMs));
@@ -574,18 +525,7 @@ function buildRenderedStatusText(
   statusDraft: TurnStatusDraft,
   elapsedMs: number | null
 ): TelegramRenderedMessage {
-  const quotedDetails = buildQuotedStatusDetails(statusDraft);
-  const text = buildStatusText(statusDraft, elapsedMs);
-
-  if (!quotedDetails) {
-    return { text };
-  }
-
-  const builder = new TelegramEntityBuilder();
-  builder.appendText(text);
-  builder.appendText("\n\n");
-  builder.appendFormatted(renderQuotedText(quotedDetails, { kind: "blockquote" }));
-  return builder.build();
+  return { text: buildStatusText(statusDraft, elapsedMs) };
 }
 
 function buildCompletionFooterText(details: CompletionFooterDetails): string {
@@ -620,35 +560,7 @@ function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = fals
 
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
-
-function buildInlineStatusDetails(statusDraft: TurnStatusDraft): string | null {
-  if (!statusDraft.inlineDetails) {
-    return null;
-  }
-
-  const normalized = statusDraft.inlineDetails.replace(/\s+/g, " ").trim();
-  if (normalized.length === 0) {
-    return null;
-  }
-
-  return normalized;
-}
-
-function buildQuotedStatusDetails(statusDraft: TurnStatusDraft): string | null {
-  if (!statusDraft.quotedDetails) {
-    return null;
-  }
-
-  const normalized = statusDraft.quotedDetails.replace(/\s+/g, " ").trim();
-  if (normalized.length === 0) {
-    return null;
-  }
-
-  return normalized.length > TELEGRAM_STATUS_QUOTE_PREVIEW_CHAR_LIMIT
-    ? `${normalized.slice(0, TELEGRAM_STATUS_QUOTE_PREVIEW_CHAR_LIMIT - 3)}...`
-    : normalized;
+  return `${minutes}m ${seconds}s`;
 }
 
 function buildFencedCodeBlock(text: string): string {

@@ -49,24 +49,6 @@ function preformattedEntities(text: string, language?: string): MessageEntity[] 
   ];
 }
 
-function quoteEntities(
-  text: string,
-  type: "blockquote" | "expandable_blockquote" = "expandable_blockquote",
-  offset = 0
-): MessageEntity[] {
-  return [
-    {
-      type,
-      offset,
-      length: text.length
-    }
-  ];
-}
-
-function combinedDraft(...parts: string[]): string {
-  return parts.join("\n\n");
-}
-
 function getInlineButtonTexts(message: { options?: TelegramSendOptions } | undefined): string[] {
   return (
     ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)?.inline_keyboard
@@ -713,7 +695,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
-  it("surfaces reasoning summaries in the live status draft and clears them when tool work starts", async () => {
+  it("keeps live status drafts minimal while tool work updates the state", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 778,
@@ -748,11 +730,8 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    const quotedDraft = combinedDraft("thinking · 0s", "Check the current status renderer.");
-    expect(telegram.drafts.at(-1)?.text).toBe(quotedDraft);
-    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(
-      quoteEntities("Check the current status renderer.", "blockquote", "thinking · 0s\n\n".length)
-    );
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
+    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
 
     codex.emitNotification({
       method: "item/started",
@@ -773,16 +752,14 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    const commandDraft = combinedDraft("running · 0s", "npm test");
+    const commandDraft = "running · 0s";
     await waitForCondition(() => telegram.drafts.at(-1)?.text === commandDraft);
 
     expect(telegram.drafts.at(-1)?.text).toBe(commandDraft);
-    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(
-      quoteEntities("npm test", "blockquote", "running · 0s\n\n".length)
-    );
+    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
-  it("falls back to raw reasoning deltas when the app server does not send summaries", async () => {
+  it("ignores raw reasoning deltas in the live status draft", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -817,11 +794,8 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    const quotedDraft = combinedDraft("thinking · 0s", "Inspect current renderer");
-    expect(telegram.drafts.at(-1)?.text).toBe(quotedDraft);
-    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(
-      quoteEntities("Inspect current renderer", "blockquote", "thinking · 0s\n\n".length)
-    );
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
+    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
   it("replays turn completion that arrives before the turn is locally activated", async () => {
@@ -2565,7 +2539,7 @@ describe("TelegramCodexBridge", () => {
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello from the inside.");
   });
 
-  it("shows command status details on a quoted second line before assistant text arrives", async () => {
+  it("keeps command status drafts minimal before assistant text arrives", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -2599,28 +2573,13 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(
-      telegram.drafts.some(
-        (draft) => draft.text === combinedDraft("running · 0s", "npm test")
-      )
+      telegram.drafts.some((draft) => draft.text === "running · 0s")
     ).toBe(true);
-    expect(
-      telegram.drafts.some(
-        (draft) =>
-          draft.text === combinedDraft("running · 0s", "npm test") &&
-          JSON.stringify(draft.options?.entities) ===
-            JSON.stringify([
-              {
-                type: "blockquote",
-                offset: "running · 0s\n\n".length,
-                length: "npm test".length
-              }
-            ])
-      )
-    ).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.text === "running · 0s" && !draft.options?.entities)).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
-  it("shows editing status details on a quoted second line before assistant text arrives", async () => {
+  it("keeps editing status drafts minimal before assistant text arrives", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -2633,7 +2592,6 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 600));
 
-    const path = "packages/kirbot-core/src/bridge/presentation.ts";
     codex.emitNotification({
       method: "item/started",
       params: {
@@ -2644,7 +2602,7 @@ describe("TelegramCodexBridge", () => {
           id: "item-1",
           changes: [
             {
-              path,
+              path: "packages/kirbot-core/src/bridge/presentation.ts",
               kind: {
                 type: "update",
                 move_path: null
@@ -2658,23 +2616,8 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(
-      telegram.drafts.some((draft) => draft.text === combinedDraft("editing · 0s", path))
-    ).toBe(true);
-    expect(
-      telegram.drafts.some(
-        (draft) =>
-          draft.text === combinedDraft("editing · 0s", path) &&
-          JSON.stringify(draft.options?.entities) ===
-            JSON.stringify([
-              {
-                type: "blockquote",
-                offset: "editing · 0s\n\n".length,
-                length: path.length
-              }
-            ])
-      )
-    ).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.text === "editing · 0s")).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.text === "editing · 0s" && !draft.options?.entities)).toBe(true);
   });
 
   it("keeps a stable status draft and sends the final text separately when no assistant delta arrives", async () => {

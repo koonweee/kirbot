@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommentaryArtifactButton,
   buildPlanArtifactMessage,
+  buildRenderedCompletionFooter,
   buildStatusDraft,
   renderTelegramStatusDraft,
   TOPIC_IMPLEMENT_CALLBACK_DATA
@@ -11,69 +12,52 @@ import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifa
 import type { ActivityLogEntry } from "../src/turn-runtime";
 
 describe("status presentation", () => {
-  it("renders command status details as a quoted second line", () => {
-    expect(renderTelegramStatusDraft(buildStatusDraft("running", null, "npm test"), 2000)).toEqual({
-      text: "running · 2s\n\nnpm test",
-      entities: [
-        {
-          type: "blockquote",
-          offset: "running · 2s\n\n".length,
-          length: "npm test".length
-        }
-      ]
+  it("renders status drafts as state plus elapsed time only", () => {
+    expect(renderTelegramStatusDraft(buildStatusDraft("running"), 2000)).toEqual({
+      text: "running · 2s"
+    });
+    expect(renderTelegramStatusDraft(buildStatusDraft("editing"), 3000)).toEqual({
+      text: "editing · 3s"
+    });
+    expect(renderTelegramStatusDraft(buildStatusDraft("using tool"), 1000)).toEqual({
+      text: "using tool · 1s"
+    });
+    expect(renderTelegramStatusDraft(buildStatusDraft("planning"), 4000)).toEqual({
+      text: "planning · 4s"
+    });
+    expect(renderTelegramStatusDraft(buildStatusDraft("searching"), 5000)).toEqual({
+      text: "searching · 5s"
+    });
+    expect(renderTelegramStatusDraft(buildStatusDraft("waiting"), 6000)).toEqual({
+      text: "waiting · 6s"
+    });
+    expect(renderTelegramStatusDraft(buildStatusDraft("thinking"), 3000)).toEqual({
+      text: "thinking · 3s"
     });
   });
 
-  it("renders editing status details as a quoted second line", () => {
-    const path = "packages/kirbot-core/src/bridge/presentation.ts";
-
-    expect(renderTelegramStatusDraft(buildStatusDraft("editing", null, path), 3000)).toEqual({
-      text: `editing · 3s\n\n${path}`,
+  it("renders elapsed minutes without leading zero padding", () => {
+    expect(renderTelegramStatusDraft(buildStatusDraft("thinking"), 69_000)).toEqual({
+      text: "thinking · 1m 9s"
+    });
+    expect(
+      buildRenderedCompletionFooter({
+        model: "gpt-5",
+        reasoningEffort: null,
+        durationMs: 60_000,
+        changedFiles: 0,
+        contextLeftPercent: 100,
+        cwd: "/workspace",
+        branch: "main"
+      })
+    ).toEqual({
+      text: "gpt-5 • 1m 0s • 0 files • 100% left • /workspace • main",
       entities: [
         {
-          type: "blockquote",
-          offset: "editing · 3s\n\n".length,
-          length: path.length
-        }
-      ]
-    });
-  });
-
-  it("renders tool status details as a quoted second line", () => {
-    expect(renderTelegramStatusDraft(buildStatusDraft("using tool", null, "web.search"), 1000)).toEqual({
-      text: "using tool · 1s\n\nweb.search",
-      entities: [
-        {
-          type: "blockquote",
-          offset: "using tool · 1s\n\n".length,
-          length: "web.search".length
-        }
-      ]
-    });
-  });
-
-  it("keeps planning, searching, and waiting details as plain text", () => {
-    expect(renderTelegramStatusDraft(buildStatusDraft("planning", "Review the current flow"), 4000)).toEqual({
-      text: "planning: Review the current flow · 4s"
-    });
-    expect(renderTelegramStatusDraft(buildStatusDraft("searching", "telegram inline code"), 5000)).toEqual({
-      text: "searching: telegram inline code · 5s"
-    });
-    expect(renderTelegramStatusDraft(buildStatusDraft("waiting", "approval"), 6000)).toEqual({
-      text: "waiting: approval · 6s"
-    });
-  });
-
-  it("renders thinking summaries as quoted previews below the status line", () => {
-    const summary = "Check the current status pipeline before changing the renderer.";
-
-    expect(renderTelegramStatusDraft(buildStatusDraft("thinking", null, summary), 3000)).toEqual({
-      text: `thinking · 3s\n\n${summary}`,
-      entities: [
-        {
-          type: "blockquote",
-          offset: "thinking · 3s\n\n".length,
-          length: summary.length
+          type: "pre",
+          offset: 0,
+          length: "gpt-5 • 1m 0s • 0 files • 100% left • /workspace • main".length,
+          language: "status"
         }
       ]
     });

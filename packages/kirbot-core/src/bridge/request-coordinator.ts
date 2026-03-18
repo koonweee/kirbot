@@ -54,8 +54,7 @@ export class BridgeRequestCoordinator {
     private readonly updateTurnStatus: (
       turnId: string,
       statusDraft: ReturnType<typeof buildStatusDraft>,
-      force?: boolean,
-      preserveDetails?: boolean
+      force?: boolean
     ) => Promise<void>
   ) {
     this.#messenger = new TelegramMessenger(telegram);
@@ -190,7 +189,7 @@ export class BridgeRequestCoordinator {
 
     await this.updateTurnStatus(
       request.params.turnId,
-      buildStatusDraft("waiting", request.method === "item/commandExecution/requestApproval" ? "approval" : "file approval"),
+      buildStatusDraft("waiting"),
       true
     );
 
@@ -226,7 +225,7 @@ export class BridgeRequestCoordinator {
       throw new Error("Expected session.codexThreadId for user-input request handling");
     }
 
-    await this.updateTurnStatus(request.params.turnId, buildStatusDraft("waiting", "input"), true);
+    await this.updateTurnStatus(request.params.turnId, buildStatusDraft("waiting"), true);
 
     const pending = await this.database.createPendingRequest({
       requestIdJson: JSON.stringify(request.id),

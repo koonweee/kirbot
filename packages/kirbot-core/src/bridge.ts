@@ -118,10 +118,9 @@ export class TelegramCodexBridge {
       database,
       telegram,
       codex,
-      (turnId, statusDraft, force, preserveDetails) =>
+      (turnId, statusDraft, force) =>
         this.#lifecycle.updateStatus(turnId, statusDraft, {
-          ...(force !== undefined ? { force } : {}),
-          ...(preserveDetails !== undefined ? { preserveDetails } : {})
+          ...(force !== undefined ? { force } : {})
         })
     );
     void this.consumeCodexEvents().catch((error) => {

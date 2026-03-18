@@ -11,18 +11,6 @@ export type PlanStreamState = {
   text: string;
 };
 
-export type ReasoningSummaryState = {
-  itemId: string;
-  summaryIndex: number;
-  text: string;
-};
-
-export type ReasoningFallbackState = {
-  itemId: string;
-  buffer: string;
-  preview: string | null;
-};
-
 export type TurnContext = {
   chatId: number;
   topicId: number;
@@ -38,8 +26,6 @@ export type TurnContext = {
   statusElapsedTimer: NodeJS.Timeout | null;
   finalStream: TelegramStreamMessageHandle;
   planStreams: Map<string, PlanStreamState>;
-  reasoningSummary: ReasoningSummaryState | null;
-  reasoningFallback: ReasoningFallbackState | null;
   compactionNoticeSent: boolean;
   publishedPlanMessages: number;
   model: string | null;

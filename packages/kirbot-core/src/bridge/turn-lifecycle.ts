@@ -28,9 +28,6 @@ import {
 
 export type { TurnContext } from "./turn-context";
 
-const RAW_REASONING_BUFFER_LIMIT = 2_000;
-const RAW_REASONING_PREVIEW_LIMIT = 140;
-
 export class TurnLifecycleCoordinator {
   readonly #turns = new Map<string, TurnContext>();
   readonly #finalizer: TurnFinalizer;
@@ -79,8 +76,6 @@ export class TurnLifecycleCoordinator {
         draftId: buildStableDraftId(`${turnId}:final`)
       }),
       planStreams: new Map(),
-      reasoningSummary: null,
-      reasoningFallback: null,
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       model,
@@ -217,25 +212,14 @@ export class TurnLifecycleCoordinator {
   async updateStatus(
     turnId: string,
     statusDraft: TurnStatusDraft,
-    options?: { force?: boolean; preserveDetails?: boolean }
+    options?: { force?: boolean }
   ): Promise<void> {
     const context = this.#turns.get(turnId);
     if (!context || context.phase !== "active") {
       return;
     }
 
-    const now = Date.now();
-    const nextStatus =
-      options?.preserveDetails &&
-      context.statusDraft?.state === statusDraft.state &&
-      (context.statusDraft.inlineDetails || context.statusDraft.quotedDetails)
-        ? {
-            ...statusDraft,
-            inlineDetails: context.statusDraft.inlineDetails,
-            quotedDetails: context.statusDraft.quotedDetails
-          }
-        : statusDraft;
-    await this.setStatusDraft(context, nextStatus, now, options?.force ?? false);
+    await this.setStatusDraft(context, statusDraft, Date.now(), options?.force ?? false);
   }
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
@@ -251,21 +235,10 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleTurnStarted(turnId: string): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (context) {
-      context.reasoningSummary = null;
-      context.reasoningFallback = null;
-    }
     await this.updateStatus(turnId, buildStatusDraft("thinking"));
   }
 
   async handleItemStarted(turnId: string, item: ThreadItem): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (context && item.type === "reasoning") {
-      context.reasoningSummary = null;
-      context.reasoningFallback = null;
-    }
-
     if (item.type === "agentMessage") {
       this.deps.runtime.registerAssistantItem(turnId, item.id, item.phase);
     } else if (item.type === "plan") {
@@ -280,7 +253,8 @@ export class TurnLifecycleCoordinator {
   }
 
   async handlePlanUpdated(turnId: string, details: string | null): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("planning", details));
+    void details;
+    await this.updateStatus(turnId, buildStatusDraft("planning"));
   }
 
   async handlePlanDelta(turnId: string, itemId: string, delta: string): Promise<void> {
@@ -290,76 +264,28 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleReasoningDelta(turnId: string, itemId: string, summaryIndex: number, delta: string): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (!context || context.phase !== "active") {
-      return;
-    }
-
-    const resetPreview =
-      !context.reasoningSummary ||
-      context.reasoningSummary.itemId !== itemId ||
-      context.reasoningSummary.summaryIndex !== summaryIndex;
-    const previousText = resetPreview ? "" : (context.reasoningSummary?.text ?? "");
-    const nextText = `${previousText}${delta}`;
-
-    context.reasoningSummary = {
-      itemId,
-      summaryIndex,
-      text: nextText
-    };
-    await this.updateStatus(turnId, buildStatusDraft("thinking", null, nextText), {
-      force: true
-    });
+    void turnId;
+    void itemId;
+    void summaryIndex;
+    void delta;
   }
 
   async handleReasoningTextDelta(turnId: string, itemId: string, delta: string): Promise<void> {
-    const context = this.#turns.get(turnId);
-    if (!context || context.phase !== "active") {
-      return;
-    }
-
-    const previousFallback = context.reasoningFallback;
-    const resetPreview = !previousFallback || previousFallback.itemId !== itemId;
-    const previousBuffer = resetPreview ? "" : previousFallback.buffer;
-    const nextBuffer = `${previousBuffer}${delta}`.slice(-RAW_REASONING_BUFFER_LIMIT);
-    const nextPreview = deriveRawReasoningPreview(nextBuffer);
-
-    context.reasoningFallback = {
-      itemId,
-      buffer: nextBuffer,
-      preview: nextPreview
-    };
-
-    if (context.reasoningSummary?.itemId === itemId && context.reasoningSummary.text.trim().length > 0) {
-      return;
-    }
-
-    if (!nextPreview) {
-      return;
-    }
-
-    await this.updateStatus(turnId, buildStatusDraft("thinking", null, nextPreview), {
-      force: true
-    });
+    void turnId;
+    void itemId;
+    void delta;
   }
 
   async handleToolProgress(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("using tool"), {
-      preserveDetails: true
-    });
+    await this.updateStatus(turnId, buildStatusDraft("using tool"));
   }
 
   async handleCommandOutput(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("running"), {
-      preserveDetails: true
-    });
+    await this.updateStatus(turnId, buildStatusDraft("running"));
   }
 
   async handleFileChangeOutput(turnId: string): Promise<void> {
-    // TODO: Surface concise file-change progress details in Telegram once we have a stable summary format.
-    await this.updateStatus(turnId, buildStatusDraft("editing"), {
-      preserveDetails: true
-    });
+    await this.updateStatus(turnId, buildStatusDraft("editing"));
   }
 
   async handleAssistantDelta(turnId: string, itemId: string, delta: string): Promise<void> {
@@ -414,12 +340,6 @@ export class TurnLifecycleCoordinator {
     }
 
     if (item.type === "reasoning") {
-      if (context.reasoningSummary?.itemId === item.id) {
-        context.reasoningSummary = null;
-      }
-      if (context.reasoningFallback?.itemId === item.id) {
-        context.reasoningFallback = null;
-      }
       return;
     }
 
@@ -536,8 +456,6 @@ export class TurnLifecycleCoordinator {
   }
 
   private async clearStatusDraft(context: TurnContext): Promise<void> {
-    context.reasoningSummary = null;
-    context.reasoningFallback = null;
     if (!context.statusDraft) {
       return;
     }
@@ -552,21 +470,6 @@ export class TurnLifecycleCoordinator {
     now: number,
     force: boolean
   ): Promise<void> {
-    if (nextStatus.state !== "thinking") {
-      context.reasoningSummary = null;
-      context.reasoningFallback = null;
-    } else if (!nextStatus.quotedDetails && context.reasoningSummary?.text) {
-      nextStatus = {
-        ...nextStatus,
-        quotedDetails: context.reasoningSummary.text
-      };
-    } else if (!nextStatus.quotedDetails && context.reasoningFallback?.preview) {
-      nextStatus = {
-        ...nextStatus,
-        quotedDetails: context.reasoningFallback.preview
-      };
-    }
-
     if (isSameStatusDraft(context.statusDraft, nextStatus)) {
       return;
     }
@@ -609,37 +512,4 @@ export class TurnLifecycleCoordinator {
       throw error;
     }
   }
-}
-
-function deriveRawReasoningPreview(buffer: string): string | null {
-  const boldPreview = extractFirstBoldMarkdown(buffer);
-  if (boldPreview) {
-    return truncateReasoningPreview(boldPreview);
-  }
-
-  const normalized = normalizeReasoningPreview(buffer);
-  if (!normalized) {
-    return null;
-  }
-
-  const sentenceMatch = normalized.match(/^(.{1,140}?[.!?])(?:\s|$)/);
-  if (sentenceMatch?.[1]) {
-    return truncateReasoningPreview(sentenceMatch[1]);
-  }
-
-  return truncateReasoningPreview(normalized);
-}
-
-function extractFirstBoldMarkdown(text: string): string | null {
-  const match = /\*\*([^*]+)\*\*/.exec(text);
-  return match?.[1] ? normalizeReasoningPreview(match[1]) : null;
-}
-
-function normalizeReasoningPreview(text: string): string | null {
-  const normalized = text.replace(/\*\*/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function truncateReasoningPreview(text: string): string {
-  return text.length > RAW_REASONING_PREVIEW_LIMIT ? `${text.slice(0, RAW_REASONING_PREVIEW_LIMIT - 3)}...` : text;
 }

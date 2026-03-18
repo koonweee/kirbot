@@ -662,17 +662,11 @@ describe("TurnLifecycleCoordinator", () => {
         exitCode: null,
         durationMs: null
       });
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s\n\nnpm test");
-      expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
-        {
-          type: "blockquote",
-          offset: "running · 2s\n\n".length,
-          length: "npm test".length
-        }
-      ]);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s");
+      expect(harness.telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(1000);
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 3s\n\nnpm test");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 3s");
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
     } finally {
@@ -680,7 +674,7 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("surfaces reasoning summaries in the status draft and preserves them across elapsed-time refreshes", async () => {
+  it("keeps reasoning summaries out of the status draft across elapsed-time refreshes", async () => {
     vi.useFakeTimers();
 
     try {
@@ -691,49 +685,36 @@ describe("TurnLifecycleCoordinator", () => {
       await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "Inspect the current");
       await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, " status pipeline.");
 
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nInspect the current status pipeline.");
-      expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
-        {
-          type: "blockquote",
-          offset: "thinking · 0s\n\n".length,
-          length: "Inspect the current status pipeline.".length
-        }
-      ]);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
+      expect(harness.telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(3000);
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 3s\n\nInspect the current status pipeline.");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 3s");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("resets the surfaced reasoning summary when a new summary index starts", async () => {
+  it("ignores reasoning summary index changes for the live status draft", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
     await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "First summary.");
     await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 1, "Second summary.");
 
-    expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nSecond summary.");
+    expect(harness.telegram.drafts).toEqual([]);
   });
 
-  it("surfaces raw reasoning deltas when no reasoning summary is available", async () => {
+  it("ignores raw reasoning deltas for the live status draft", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
     await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", "**Inspect current renderer**");
 
-    expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nInspect current renderer");
-    expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
-      {
-        type: "blockquote",
-        offset: "thinking · 0s\n\n".length,
-        length: "Inspect current renderer".length
-      }
-    ]);
+    expect(harness.telegram.drafts).toEqual([]);
   });
 
-  it("prefers reasoning summaries over raw reasoning fallback previews", async () => {
+  it("ignores both reasoning summaries and raw reasoning fallback previews", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
@@ -741,7 +722,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "Use the summary instead.");
     await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", " Additional raw detail.");
 
-    expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nUse the summary instead.");
+    expect(harness.telegram.drafts).toEqual([]);
   });
 
   it("keeps successful command and file completions transient", async () => {
@@ -771,30 +752,10 @@ describe("TurnLifecycleCoordinator", () => {
     });
 
     expect(harness.telegram.sentMessages).toEqual([]);
-    expect(harness.telegram.drafts.at(-2)).toMatchObject({
-      text: "done · 0s\n\nnpm test",
-      options: {
-        entities: [
-          {
-            type: "blockquote",
-            offset: "done · 0s\n\n".length,
-            length: "npm test".length
-          }
-        ]
-      }
-    });
     expect(harness.telegram.drafts.at(-1)).toMatchObject({
-      text: "done · 0s\n\nsrc/app.ts, src/server.ts",
-      options: {
-        entities: [
-          {
-            type: "blockquote",
-            offset: "done · 0s\n\n".length,
-            length: "src/app.ts, src/server.ts".length
-          }
-        ]
-      }
+      text: "done · 0s"
     });
+    expect(harness.telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
   it("keeps successful item completions transient but still publishes failures durably", async () => {
@@ -872,30 +833,8 @@ describe("TurnLifecycleCoordinator", () => {
     });
 
     expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed: lookup_docs"]);
-    expect(harness.telegram.drafts.map((entry) => entry.text)).toEqual([
-      "done · 0s\n\ngithub.search",
-      "done · 0s\n\nspawnAgent",
-      "done · 0s\n\nkirbot issues",
-      "done · 0s\n\nerror.png",
-      "done · 0s\n\nimage generated",
-      "done · 0s\n\nreview mode: Security review",
-      "done · 0s\n\nexited review mode",
-      "done · 0s\n\ncontext compacted"
-    ]);
-    expect(harness.telegram.drafts[0]?.options?.entities).toEqual([
-      {
-        type: "blockquote",
-        offset: "done · 0s\n\n".length,
-        length: "github.search".length
-      }
-    ]);
-    expect(harness.telegram.drafts[3]?.options?.entities).toEqual([
-      {
-        type: "blockquote",
-        offset: "done · 0s\n\n".length,
-        length: "error.png".length
-      }
-    ]);
+    expect(harness.telegram.drafts.map((entry) => entry.text)).toEqual(["done · 0s"]);
+    expect(harness.telegram.drafts.every((entry) => !entry.options?.entities)).toBe(true);
   });
 
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
