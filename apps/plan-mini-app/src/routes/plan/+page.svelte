@@ -1,17 +1,18 @@
 <script lang="ts">
   import { env } from "$env/dynamic/public";
   import { onMount } from "svelte";
+  import { renderMdastToHtml } from "$lib/mdast-render";
 
   type PlanArtifact = {
-    turnId: string;
-    itemId: string;
+    artifactId: string;
     title: string;
-    text: string;
+    markdownText: string;
+    mdast: unknown;
   };
 
   type ViewState =
     | { kind: "loading"; title: string; status: string }
-    | { kind: "ready"; title: string; status: string; artifact: PlanArtifact }
+    | { kind: "ready"; title: string; status: string; artifactHtml: string }
     | { kind: "error"; title: string; status: string; detail: string };
 
   let state: ViewState = {
@@ -25,19 +26,18 @@
     telegram?.ready();
     telegram?.expand();
 
-    const turnId = new URLSearchParams(window.location.search).get("turnId")?.trim() ?? "";
-    const itemId = new URLSearchParams(window.location.search).get("itemId")?.trim() ?? "";
-    if (!turnId || !itemId) {
+    const artifactId = new URLSearchParams(window.location.search).get("artifactId")?.trim() ?? "";
+    if (!artifactId) {
       state = {
         kind: "error",
         title: "Plan",
         status: "This plan link is missing artifact details.",
-        detail: "Missing turnId or itemId."
+        detail: "Missing artifactId."
       };
       return;
     }
 
-    const apiUrl = buildArtifactUrl(turnId, itemId);
+    const apiUrl = buildArtifactUrl(artifactId);
     if (!apiUrl) {
       state = {
         kind: "error",
@@ -65,7 +65,7 @@
           kind: "ready",
           title: artifact.title || "Plan",
           status: "Completed plan artifact",
-          artifact
+          artifactHtml: renderMdastToHtml(artifact.mdast, artifact.markdownText)
         };
       })
       .catch((error: unknown) => {
@@ -78,7 +78,7 @@
       });
   });
 
-  function buildArtifactUrl(turnId: string, itemId: string): string | null {
+  function buildArtifactUrl(artifactId: string): string | null {
     const apiBaseUrl = env.PUBLIC_KIRBOT_PLAN_API_BASE_URL;
     if (!apiBaseUrl) {
       return null;
@@ -90,8 +90,7 @@
       if (url.protocol !== "https:") {
         return null;
       }
-      url.searchParams.set("turnId", turnId);
-      url.searchParams.set("itemId", itemId);
+      url.searchParams.set("artifactId", artifactId);
       return url.toString();
     } catch {
       return null;
@@ -112,7 +111,9 @@
     </header>
 
     {#if state.kind === "ready"}
-      <pre class="plan-text">{state.artifact.text || "(empty plan)"}</pre>
+      <article class="plan-text plan-document">
+        {@html state.artifactHtml}
+      </article>
     {:else if state.kind === "error"}
       <pre class="plan-text error-copy">{state.detail}</pre>
     {:else}

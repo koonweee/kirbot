@@ -6,14 +6,14 @@ import { BridgeDatabase } from "../db";
 import type { LoggerLike } from "../logging";
 import { deriveMiniAppBasePath, deriveUrlOrigin, normalizeTelegramMiniAppPublicUrl } from "./url";
 
-export type PlanArtifactSnapshot = {
-  turnId: string;
-  itemId: string;
-  text: string;
-};
-
-type MiniAppCodexApi = {
-  readPlanArtifact(threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null>;
+export type MiniAppArtifactPayload = {
+  artifactId: string;
+  kind: "plan";
+  title: string;
+  markdownText: string;
+  mdast: unknown;
+  topicId: number;
+  generatedAt: string;
 };
 
 export type MiniAppServer = {
@@ -23,7 +23,6 @@ export type MiniAppServer = {
 export async function startMiniAppServer(input: {
   config: AppConfig["telegram"];
   database: BridgeDatabase;
-  codex: MiniAppCodexApi;
   logger?: LoggerLike;
 }): Promise<MiniAppServer | null> {
   const logger = input.logger ?? console;
@@ -47,7 +46,6 @@ export async function startMiniAppServer(input: {
       allowedOrigin,
       config: input.config,
       database: input.database,
-      codex: input.codex,
       logger
     }).catch((error) => {
       logger.error("Mini App request failed", error);
@@ -88,7 +86,6 @@ async function handleRequest(
     allowedOrigin: string | null;
     config: AppConfig["telegram"];
     database: BridgeDatabase;
-    codex: MiniAppCodexApi;
     logger: LoggerLike;
   }
 ): Promise<void> {
@@ -122,10 +119,9 @@ async function handleRequest(
     return;
   }
 
-  const turnId = url.searchParams.get("turnId")?.trim() ?? "";
-  const itemId = url.searchParams.get("itemId")?.trim() ?? "";
-  if (!turnId || !itemId) {
-    sendJson(response, 400, { error: "missing_turn_or_item" });
+  const artifactId = url.searchParams.get("artifactId")?.trim() ?? "";
+  if (!artifactId) {
+    sendJson(response, 400, { error: "missing_artifact_id" });
     return;
   }
 
@@ -146,32 +142,25 @@ async function handleRequest(
     return;
   }
 
-  const turn = await deps.database.getTurnByIdOptional(turnId);
-  if (!turn) {
-    sendJson(response, 404, { error: "unknown_turn" });
+  const artifact = await deps.database.getArtifactByArtifactIdOptional(artifactId);
+  if (!artifact || artifact.kind !== "plan") {
+    sendJson(response, 404, { error: "unknown_plan_artifact" });
     return;
   }
 
   try {
-    const artifact = await deps.codex.readPlanArtifact(turn.codexThreadId, turnId, itemId);
-    if (!artifact) {
-      sendJson(response, 404, { error: "unknown_plan_artifact" });
-      return;
-    }
-
     sendJson(response, 200, {
-      turnId,
-      itemId,
-      topicId: turn.telegramTopicId,
-      title: "Plan",
-      text: artifact.text,
-      generatedAt: new Date().toISOString()
-    });
-    return;
+      artifactId: artifact.artifactId,
+      kind: artifact.kind,
+      title: artifact.title,
+      markdownText: artifact.markdownText,
+      mdast: JSON.parse(artifact.mdastJson),
+      topicId: artifact.telegramTopicId,
+      generatedAt: artifact.updatedAt
+    } satisfies MiniAppArtifactPayload);
   } catch (error) {
     deps.logger.error("Failed to load Mini App plan artifact", error);
     sendJson(response, 502, { error: "artifact_lookup_failed" });
-    return;
   }
 }
 

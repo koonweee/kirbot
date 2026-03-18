@@ -15,7 +15,6 @@ import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileC
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { createTelegramHarness, type TelegramHarness } from "../src/harness";
-import type { PlanArtifactSnapshot } from "../src/mini-app/server";
 import type { AppServerEvent } from "../src/rpc";
 
 class ScriptedCodex implements BridgeCodexApi {
@@ -189,14 +188,6 @@ class ScriptedCodex implements BridgeCodexApi {
       changedFiles: 0,
       cwd: "/workspace",
       branch: "main"
-    };
-  }
-
-  async readPlanArtifact(_threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null> {
-    return {
-      turnId,
-      itemId,
-      text: this.finalText
     };
   }
 
@@ -477,9 +468,11 @@ describe("Telegram harness", () => {
 
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
     const stub = topicMessages.find((message) => message.text === "Plan ready. Open in Mini App.");
-    expect(stub?.buttons).toEqual([
-      [{ text: "Open plan", web_app: { url: "https://example.com/mini-app/plan?turnId=turn-1&itemId=plan-1" } }]
-    ]);
+    const button = stub?.buttons?.[0]?.[0];
+    expect(button?.text).toBe("Open plan");
+    expect(button && "web_app" in button ? button.web_app.url : null).toMatch(
+      /^https:\/\/example\.com\/mini-app\/plan\?artifactId=/
+    );
   });
 });
 

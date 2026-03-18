@@ -19,7 +19,6 @@ import type { ReasoningEffort } from "../src/generated/codex/ReasoningEffort";
 import { JsonRpcMethodError, type AppServerEvent } from "../src/rpc";
 import type { TelegramApi, TelegramSendOptions } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
-import type { PlanArtifactSnapshot } from "../src/mini-app/server";
 
 const EMPTY_DRAFT_TEXT = "";
 
@@ -105,7 +104,6 @@ class FakeCodex implements BridgeCodexApi {
   nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
-  planArtifacts = new Map<string, string>();
   beforeSendTurnResolve:
     | ((input: { threadId: string; turnId: string; input: UserInput[] }) => Promise<void> | void)
     | null = null;
@@ -207,17 +205,6 @@ class FakeCodex implements BridgeCodexApi {
       branch: "main",
       ...this.readTurnSnapshotResult
     };
-  }
-
-  async readPlanArtifact(_threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null> {
-    const text = this.planArtifacts.get(`${turnId}:${itemId}`);
-    return text
-      ? {
-          turnId,
-          itemId,
-          text
-        }
-      : null;
   }
 
   async respondToCommandApproval(
@@ -1517,7 +1504,7 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Plan\n\nDraft the rollout");
+    expect(telegram.drafts.some((draft) => draft.text === "Plan\n\nDraft the rollout")).toBe(false);
 
     codex.emitNotification({
       method: "item/completed",
@@ -1627,10 +1614,12 @@ describe("TelegramCodexBridge", () => {
 
     expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready. Open in Mini App.")).toHaveLength(1);
     expect(miniAppTelegram.sentMessages.some((message) => message.text === "Plan\n\n1. Draft the rollout")).toBe(false);
+    const artifact = await database.getArtifactByTurnItem("plan", "turn-1", "plan-1");
+    expect(artifact?.artifactId).toBeTruthy();
     expect(
       miniAppTelegram.sentMessages.find((message) => message.text === "Plan ready. Open in Mini App.")?.options?.reply_markup
     ).toEqual({
-      inline_keyboard: [[{ text: "Open plan", web_app: { url: "https://example.com/mini-app/plan?turnId=turn-1&itemId=plan-1" } }]]
+      inline_keyboard: [[{ text: "Open plan", web_app: { url: `https://example.com/mini-app/plan?artifactId=${artifact?.artifactId}` } }]]
     });
   });
 

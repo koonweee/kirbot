@@ -16,10 +16,9 @@ export function deriveUrlOrigin(publicUrl: string): string {
   return new URL(publicUrl).origin;
 }
 
-export function buildPlanArtifactMiniAppUrl(publicUrl: string, turnId: string, itemId: string): string {
+export function buildPlanArtifactMiniAppUrl(publicUrl: string, artifactId: string): string {
   const normalizedBaseUrl = publicUrl.endsWith("/") ? publicUrl : `${publicUrl}/`;
   const url = new URL("plan", normalizedBaseUrl);
-  url.searchParams.set("turnId", turnId);
-  url.searchParams.set("itemId", itemId);
+  url.searchParams.set("artifactId", artifactId);
   return url.toString();
 }

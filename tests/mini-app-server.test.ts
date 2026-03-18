@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { BridgeDatabase } from "../src/db";
-import { startMiniAppServer, type MiniAppServer, type PlanArtifactSnapshot } from "../src/mini-app/server";
+import { MARKDOWN_AST_VERSION, parseMarkdownToMdast, serializeMarkdownAst } from "../src/markdown/ast";
+import { startMiniAppServer, type MiniAppServer } from "../src/mini-app/server";
 
 type StartedHarness = {
   database: BridgeDatabase;
@@ -32,29 +33,15 @@ afterEach(async () => {
 
 describe("Mini App server", () => {
   it("serves exact plan artifacts for authorized Telegram users", async () => {
-    const artifactRequests: Array<{ threadId: string; turnId: string; itemId: string }> = [];
-    const harness = await startServer({
-      readPlanArtifact: async (threadId, turnId, itemId) => {
-        artifactRequests.push({ threadId, turnId, itemId });
-        return {
-          turnId,
-          itemId,
-          text: "1. Draft the rollout"
-        };
-      }
-    });
-
-    await harness.database.recordTurnStart({
-      telegramUpdateId: 1,
-      telegramChatId: String(-1001),
-      telegramTopicId: 777,
-      codexThreadId: "thread-1",
+    const harness = await startServer();
+    const artifact = await insertPlanArtifact(harness.database, {
       codexTurnId: "turn-1",
-      draftId: 1
+      itemId: "plan-1",
+      markdownText: "1. Draft the rollout"
     });
 
     const response = await fetch(
-      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?artifactId=${artifact.artifactId}`,
       {
         headers: {
           "X-Telegram-Init-Data": buildTelegramInitData("token", 42)
@@ -64,26 +51,20 @@ describe("Mini App server", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      turnId: "turn-1",
-      itemId: "plan-1",
+      artifactId: artifact.artifactId,
+      kind: "plan",
       topicId: 777,
       title: "Plan",
-      text: "1. Draft the rollout"
+      markdownText: "1. Draft the rollout",
+      mdast: parseMarkdownToMdast("1. Draft the rollout")
     });
-    expect(artifactRequests).toEqual([{ threadId: "thread-1", turnId: "turn-1", itemId: "plan-1" }]);
   });
 
   it("rejects requests with invalid Telegram init data", async () => {
-    const harness = await startServer({
-      readPlanArtifact: async () => ({
-        turnId: "turn-1",
-        itemId: "plan-1",
-        text: "unreachable"
-      })
-    });
+    const harness = await startServer();
 
     const response = await fetch(
-      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?artifactId=artifact-1`,
       {
         headers: {
           "X-Telegram-Init-Data": "hash=bad"
@@ -96,21 +77,10 @@ describe("Mini App server", () => {
   });
 
   it("returns not found when the requested plan artifact is missing", async () => {
-    const harness = await startServer({
-      readPlanArtifact: async () => null
-    });
-
-    await harness.database.recordTurnStart({
-      telegramUpdateId: 1,
-      telegramChatId: String(-1001),
-      telegramTopicId: 777,
-      codexThreadId: "thread-1",
-      codexTurnId: "turn-1",
-      draftId: 1
-    });
+    const harness = await startServer();
 
     const response = await fetch(
-      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=missing`,
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?artifactId=missing`,
       {
         headers: {
           "X-Telegram-Init-Data": buildTelegramInitData("token", 42)
@@ -123,9 +93,7 @@ describe("Mini App server", () => {
   });
 
   it("returns 404 for the removed preview route", async () => {
-    const harness = await startServer({
-      readPlanArtifact: async () => null
-    });
+    const harness = await startServer();
 
     const response = await fetch(`http://127.0.0.1:${harness.port}/mini-app/preview/plan`);
 
@@ -134,12 +102,10 @@ describe("Mini App server", () => {
   });
 
   it("answers CORS preflight requests for the configured app origin", async () => {
-    const harness = await startServer({
-      readPlanArtifact: async () => null
-    });
+    const harness = await startServer();
 
     const response = await fetch(
-      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?artifactId=artifact-1`,
       {
         method: "OPTIONS",
         headers: {
@@ -155,12 +121,10 @@ describe("Mini App server", () => {
   });
 
   it("rejects CORS preflight requests from other origins", async () => {
-    const harness = await startServer({
-      readPlanArtifact: async () => null
-    });
+    const harness = await startServer();
 
     const response = await fetch(
-      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?artifactId=artifact-1`,
       {
         method: "OPTIONS",
         headers: {
@@ -174,25 +138,15 @@ describe("Mini App server", () => {
   });
 
   it("rejects artifact fetches from other browser origins", async () => {
-    const harness = await startServer({
-      readPlanArtifact: async () => ({
-        turnId: "turn-1",
-        itemId: "plan-1",
-        text: "1. Draft the rollout"
-      })
-    });
-
-    await harness.database.recordTurnStart({
-      telegramUpdateId: 1,
-      telegramChatId: String(-1001),
-      telegramTopicId: 777,
-      codexThreadId: "thread-1",
+    const harness = await startServer();
+    const artifact = await insertPlanArtifact(harness.database, {
       codexTurnId: "turn-1",
-      draftId: 1
+      itemId: "plan-1",
+      markdownText: "1. Draft the rollout"
     });
 
     const response = await fetch(
-      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?artifactId=${artifact.artifactId}`,
       {
         headers: {
           Origin: "https://other.example.com",
@@ -223,10 +177,7 @@ describe("Mini App server", () => {
             port: await findAvailablePort()
           }
         },
-        database,
-        codex: {
-          readPlanArtifact: async () => null
-        }
+        database
       });
 
       expect(server).toBeNull();
@@ -237,9 +188,7 @@ describe("Mini App server", () => {
   });
 });
 
-async function startServer(input: {
-  readPlanArtifact(threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null>;
-}): Promise<StartedHarness> {
+async function startServer(): Promise<StartedHarness> {
   const tempDir = mkdtempSync(join(tmpdir(), "kirbot-mini-app-test-"));
   const database = new BridgeDatabase(join(tempDir, "bridge.sqlite"));
   await database.migrate();
@@ -256,10 +205,7 @@ async function startServer(input: {
         port
       }
     },
-    database,
-    codex: {
-      readPlanArtifact: input.readPlanArtifact
-    }
+    database
   });
 
   if (!server) {
@@ -274,6 +220,24 @@ async function startServer(input: {
   };
   started.push(startedHarness);
   return startedHarness;
+}
+
+async function insertPlanArtifact(
+  database: BridgeDatabase,
+  input: { codexTurnId: string; itemId: string; markdownText: string }
+) {
+  return database.upsertArtifact({
+    kind: "plan",
+    title: "Plan",
+    telegramChatId: String(-1001),
+    telegramTopicId: 777,
+    codexThreadId: "thread-1",
+    codexTurnId: input.codexTurnId,
+    itemId: input.itemId,
+    markdownText: input.markdownText,
+    mdastJson: serializeMarkdownAst(parseMarkdownToMdast(input.markdownText)),
+    astVersion: MARKDOWN_AST_VERSION
+  });
 }
 
 function buildTelegramInitData(botToken: string, userId: number): string {

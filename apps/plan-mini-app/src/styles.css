@@ -80,10 +80,84 @@ h1 {
     linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 250, 242, 0.92)),
     var(--accent-soft);
   color: var(--ink);
-  font: 500 0.96rem/1.7 "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.plan-document {
+  font: 500 1rem/1.72 "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+
+.plan-document :global(*) {
+  box-sizing: border-box;
+}
+
+.plan-document :global(h1),
+.plan-document :global(h2),
+.plan-document :global(h3),
+.plan-document :global(h4),
+.plan-document :global(h5),
+.plan-document :global(h6) {
+  margin: 0 0 0.8em;
+  line-height: 1.1;
+}
+
+.plan-document :global(p),
+.plan-document :global(blockquote),
+.plan-document :global(pre),
+.plan-document :global(ol),
+.plan-document :global(ul) {
+  margin: 0 0 1em;
+}
+
+.plan-document :global(ol),
+.plan-document :global(ul) {
+  padding-left: 1.45rem;
+}
+
+.plan-document :global(li + li) {
+  margin-top: 0.45em;
+}
+
+.plan-document :global(code) {
+  padding: 0.08em 0.32em;
+  border-radius: 0.38rem;
+  background: rgba(15, 118, 110, 0.1);
+  font: 500 0.92em/1.35 "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+.plan-document :global(pre) {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+  overflow-x: auto;
+}
+
+.plan-document :global(pre code) {
+  padding: 0;
+  background: transparent;
+}
+
+.plan-document :global(blockquote) {
+  padding-left: 1rem;
+  border-left: 3px solid rgba(15, 118, 110, 0.28);
+  color: var(--muted);
+}
+
+.plan-document :global(a) {
+  color: var(--accent);
+  text-decoration-thickness: 0.08em;
+}
+
+.plan-document :global(hr) {
+  border: 0;
+  border-top: 1px solid rgba(31, 44, 44, 0.12);
+}
+
+.plan-text pre {
   white-space: pre-wrap;
   word-break: break-word;
-  overflow-wrap: anywhere;
 }
 
 .error-copy {

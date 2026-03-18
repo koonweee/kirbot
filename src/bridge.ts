@@ -28,10 +28,10 @@ import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 import type { LoggerLike } from "./logging";
+import { MARKDOWN_AST_VERSION, parseMarkdownToMdast, serializeMarkdownAst } from "./markdown/ast";
 import { isAllowedRootCommand, isAllowedTopicCommand } from "./telegram-commands";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
-import type { PlanArtifactSnapshot } from "./mini-app/server";
 import { normalizeTelegramMiniAppPublicUrl } from "./mini-app/url";
 import type { AppServerEvent } from "./rpc";
 
@@ -51,7 +51,6 @@ export interface BridgeCodexApi {
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   archiveThread(threadId: string): Promise<void>;
   readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
-  readPlanArtifact(threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null>;
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
   respondToUserInputRequest(id: RequestId, response: ToolRequestUserInputResponse): Promise<void>;
@@ -114,6 +113,7 @@ export class TelegramCodexBridge {
         normalizedMiniAppPublicUrl && normalizedMiniAppApiPublicUrl
           ? normalizedMiniAppPublicUrl
           : null,
+      upsertPlanArtifact: this.upsertPlanArtifact.bind(this),
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
       completePersistedTurn: (turnId, messageId, status, resolvedText) =>
@@ -957,6 +957,29 @@ export class TelegramCodexBridge {
             ? streamedAssistantText
             : streamedPlanText
     };
+  }
+
+  private async upsertPlanArtifact(input: {
+    chatId: number;
+    topicId: number;
+    threadId: string;
+    turnId: string;
+    itemId: string;
+    markdownText: string;
+  }) {
+    const ast = parseMarkdownToMdast(input.markdownText);
+    return this.database.upsertArtifact({
+      kind: "plan",
+      title: "Plan",
+      telegramChatId: String(input.chatId),
+      telegramTopicId: input.topicId,
+      codexThreadId: input.threadId,
+      codexTurnId: input.turnId,
+      itemId: input.itemId,
+      markdownText: input.markdownText,
+      mdastJson: serializeMarkdownAst(ast),
+      astVersion: MARKDOWN_AST_VERSION
+    });
   }
 
   private async trySteerTurn(activeTurn: TurnContext, message: UserTurnMessage): Promise<void> {

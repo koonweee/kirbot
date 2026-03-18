@@ -100,9 +100,6 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   const miniAppServer = await startMiniAppServer({
     config: effectiveConfig.telegram,
     database,
-    codex: {
-      readPlanArtifact: (threadId, turnId, itemId) => codex.readPlanArtifact(threadId, turnId, itemId)
-    },
     logger: appLogger
   }).catch((error) => {
     appLogger.warn("Mini App server failed during startup; continuing without Mini App support.", error);

@@ -21,7 +21,6 @@ import { resolvePinnedCodexInvocation } from "./codex-cli";
 import { CodexRpcClient, type AppServerEvent, type SpawnedAppServer } from "./rpc";
 import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 import type { LoggerLike } from "./logging";
-import type { PlanArtifactSnapshot } from "./mini-app/server";
 
 export type ThreadStartSettings = {
   model: string;
@@ -236,27 +235,6 @@ export class CodexGateway {
       changedFiles: countChangedFiles(turn.items),
       cwd: response.thread.cwd,
       branch: response.thread.gitInfo?.branch ?? null
-    };
-  }
-
-  async readPlanArtifact(threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null> {
-    const response = await this.client.readThread({
-      threadId,
-      includeTurns: true
-    });
-    const turn = response.thread.turns.find((candidate) => candidate.id === turnId);
-    const item = turn?.items.find(
-      (candidate): candidate is Extract<(typeof turn.items)[number], { type: "plan" }> =>
-        candidate.id === itemId && candidate.type === "plan"
-    );
-    if (!item) {
-      return null;
-    }
-
-    return {
-      turnId,
-      itemId,
-      text: item.text
     };
   }
 

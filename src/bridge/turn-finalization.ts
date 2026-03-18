@@ -1,7 +1,6 @@
-import type { UserTurnMessage } from "../domain";
+import type { ArtifactRecord, UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
-  buildPlanArtifactMessage,
   buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
   buildRenderedCompletionFooter,
@@ -30,6 +29,14 @@ export type TurnLifecycleDependencies = {
   messenger: TelegramMessenger;
   telegram: TelegramApi;
   planArtifactPublicUrl: string | null;
+  upsertPlanArtifact(input: {
+    chatId: number;
+    topicId: number;
+    threadId: string;
+    turnId: string;
+    itemId: string;
+    markdownText: string;
+  }): Promise<ArtifactRecord>;
   releaseTurnFiles(turnId: string): Promise<void>;
   appendTurnStream(turnId: string, streamText: string): Promise<void>;
   completePersistedTurn(
@@ -44,6 +51,10 @@ export type TurnLifecycleDependencies = {
   submitQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): Promise<void>;
 };
 
+type TurnFinalizerCallbacks = {
+  publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number>;
+};
+
 export type FinalizationPolicy = {
   terminalStatus: TerminalTurnStatus;
   threadId: string;
@@ -56,7 +67,10 @@ export type FinalizationPolicy = {
 };
 
 export class TurnFinalizer {
-  constructor(private readonly deps: TurnLifecycleDependencies) {}
+  constructor(
+    private readonly deps: TurnLifecycleDependencies,
+    private readonly callbacks: TurnFinalizerCallbacks
+  ) {}
 
   async finalizeTurn(
     turns: Map<string, TurnContext>,
@@ -78,18 +92,18 @@ export class TurnFinalizer {
     await this.beginFinalization(context);
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
     const finalText = policy.buildFinalText(snapshot.text);
-    const shouldReusePublishedPlanOutput =
-      policy.terminalStatus === "completed" &&
-      snapshot.assistantText.trim().length === 0 &&
-      context.publishedPlanMessages > 0;
+    const hasAssistantText = snapshot.assistantText.trim().length > 0;
     const messageId =
-      !shouldReusePublishedPlanOutput && (finalText.trim().length > 0 || policy.publishWhenEmpty)
-        ? await this.publishFinalTurnText(
-            context,
-            finalText,
-            snapshot.assistantText.trim().length > 0 ? "assistant" : "plan"
-          )
-        : null;
+      policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0
+        ? context.publishedPlanMessages > 0
+          ? null
+          : await this.callbacks.publishCompletedPlan(context, {
+              itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
+              text: snapshot.planText
+            })
+        : finalText.trim().length > 0 || policy.publishWhenEmpty
+          ? await this.publishFinalTurnText(context, finalText, hasAssistantText ? "assistant" : "plan")
+          : null;
 
     if (policy.publishFooter) {
       await this.publishCompletionFooter(context, snapshot);
@@ -158,13 +172,11 @@ export class TurnFinalizer {
 
     for (const [itemId, plan] of context.planStreams) {
       if (plan.text.trim().length > 0) {
-        if (this.deps.planArtifactPublicUrl) {
-          await plan.handle.clear();
-          await this.publishPlanArtifactMessage(context, itemId);
-        } else {
-          await plan.handle.finalize(buildRenderedPlanMessages(plan.text));
-        }
-        context.publishedPlanMessages += 1;
+        await plan.handle.clear();
+        await this.callbacks.publishCompletedPlan(context, {
+          itemId,
+          text: plan.text
+        });
       } else {
         await plan.handle.clear();
       }
@@ -186,21 +198,6 @@ export class TurnFinalizer {
     }
 
     return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
-  }
-
-  private async publishPlanArtifactMessage(context: TurnContext, itemId: string): Promise<void> {
-    const publicUrl = this.deps.planArtifactPublicUrl;
-    if (!publicUrl) {
-      throw new Error("Plan artifact publishing requires a configured Mini App public URL");
-    }
-
-    const artifact = buildPlanArtifactMessage(publicUrl, context.turnId, itemId);
-    await this.deps.messenger.sendMessage({
-      chatId: context.chatId,
-      topicId: context.topicId,
-      text: artifact.text,
-      replyMarkup: artifact.replyMarkup
-    });
   }
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { BridgeDatabase } from "../src/db";
+import { MARKDOWN_AST_VERSION, parseMarkdownToMdast, serializeMarkdownAst } from "../src/markdown/ast";
 
 describe("BridgeDatabase", () => {
   let database: BridgeDatabase;
@@ -123,5 +124,37 @@ describe("BridgeDatabase", () => {
     const second = await database.getTurnById("turn-2");
     expect(first.resolvedAssistantText).toBe("");
     expect(second.resolvedAssistantText).toBe("Implemented");
+  });
+
+  it("upserts artifacts by turn and item while keeping a stable public artifact id", async () => {
+    const initial = await database.upsertArtifact({
+      kind: "plan",
+      title: "Plan",
+      telegramChatId: "-1001",
+      telegramTopicId: 22,
+      codexThreadId: "thread-1",
+      codexTurnId: "turn-1",
+      itemId: "plan-1",
+      markdownText: "1. Draft the rollout",
+      mdastJson: serializeMarkdownAst(parseMarkdownToMdast("1. Draft the rollout")),
+      astVersion: MARKDOWN_AST_VERSION
+    });
+
+    const updated = await database.upsertArtifact({
+      kind: "plan",
+      title: "Plan",
+      telegramChatId: "-1001",
+      telegramTopicId: 22,
+      codexThreadId: "thread-1",
+      codexTurnId: "turn-1",
+      itemId: "plan-1",
+      markdownText: "1. Draft the rollout\n2. Ship it",
+      mdastJson: serializeMarkdownAst(parseMarkdownToMdast("1. Draft the rollout\n2. Ship it")),
+      astVersion: MARKDOWN_AST_VERSION
+    });
+
+    expect(updated.artifactId).toBe(initial.artifactId);
+    expect((await database.getArtifactByArtifactId(initial.artifactId)).markdownText).toBe("1. Draft the rollout\n2. Ship it");
+    expect((await database.getArtifactByTurnItem("plan", "turn-1", "plan-1"))?.artifactId).toBe(initial.artifactId);
   });
 });

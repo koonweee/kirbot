@@ -281,6 +281,11 @@ export class BridgeTurnRuntime {
     return turn ? renderPlanText(turn) : "";
   }
 
+  getLatestPlanItemId(turnId: string): string | null {
+    const turn = this.#turns.get(turnId);
+    return turn?.planItemOrder.at(-1) ?? null;
+  }
+
   renderAssistantDraft(turnId: string): { text: string; kind: AssistantDraftKind | null } {
     const turn = this.#turns.get(turnId);
     return turn ? renderAssistantDraft(turn) : { text: "", kind: null };

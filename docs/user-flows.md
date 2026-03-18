@@ -54,8 +54,8 @@ User experience:
 
 - kirbot shows a temporary status while Codex is thinking or using tools.
 - Commentary, plan text, and final assistant output are treated differently so Telegram stays readable.
-- When Mini App support is configured, completed plan artifacts are posted as compact Telegram stubs with an `Open plan` button instead of full plan bubbles.
-- In-progress planning still stays in the Telegram status path; the separate Mini App is for completed artifacts only.
+- In-progress planning stays in the status path; kirbot no longer streams partial plan text into Telegram bubbles.
+- When the final plan item completes, kirbot persists the plan artifact and either posts a compact Telegram stub with an `Open plan` button or renders the completed plan from the stored artifact when Mini App support is disabled.
 - When the turn finishes, kirbot clears drafts, sends durable final messages, and posts a completion footer with execution context.
 
 Owned by:
