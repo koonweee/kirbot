@@ -4,6 +4,7 @@ import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
 import {
+  buildPlanArtifactMessage,
   buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
   buildStableDraftId,
@@ -421,9 +422,24 @@ export class TurnLifecycleCoordinator {
     plan.text = update.itemText;
 
     if (stage === "completed") {
-      await plan.handle.finalize(buildRenderedPlanMessages(update.itemText));
+      if (this.deps.planArtifactPublicUrl) {
+        await plan.handle.clear();
+        const artifact = buildPlanArtifactMessage(this.deps.planArtifactPublicUrl, context.turnId, update.itemId);
+        await this.deps.messenger.sendMessage({
+          chatId: context.chatId,
+          topicId: context.topicId,
+          text: artifact.text,
+          replyMarkup: artifact.replyMarkup
+        });
+      } else {
+        await plan.handle.finalize(buildRenderedPlanMessages(update.itemText));
+      }
       context.planStreams.delete(update.itemId);
       context.publishedPlanMessages += 1;
+      return;
+    }
+
+    if (this.deps.planArtifactPublicUrl) {
       return;
     }
 

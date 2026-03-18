@@ -1,6 +1,7 @@
 import type { UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
+  buildPlanArtifactMessage,
   buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
   buildRenderedCompletionFooter,
@@ -28,6 +29,7 @@ export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
   messenger: TelegramMessenger;
   telegram: TelegramApi;
+  planArtifactPublicUrl: string | null;
   releaseTurnFiles(turnId: string): Promise<void>;
   appendTurnStream(turnId: string, streamText: string): Promise<void>;
   completePersistedTurn(
@@ -156,7 +158,12 @@ export class TurnFinalizer {
 
     for (const [itemId, plan] of context.planStreams) {
       if (plan.text.trim().length > 0) {
-        await plan.handle.finalize(buildRenderedPlanMessages(plan.text));
+        if (this.deps.planArtifactPublicUrl) {
+          await plan.handle.clear();
+          await this.publishPlanArtifactMessage(context, itemId);
+        } else {
+          await plan.handle.finalize(buildRenderedPlanMessages(plan.text));
+        }
         context.publishedPlanMessages += 1;
       } else {
         await plan.handle.clear();
@@ -179,6 +186,21 @@ export class TurnFinalizer {
     }
 
     return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
+  }
+
+  private async publishPlanArtifactMessage(context: TurnContext, itemId: string): Promise<void> {
+    const publicUrl = this.deps.planArtifactPublicUrl;
+    if (!publicUrl) {
+      throw new Error("Plan artifact publishing requires a configured Mini App public URL");
+    }
+
+    const artifact = buildPlanArtifactMessage(publicUrl, context.turnId, itemId);
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text: artifact.text,
+      replyMarkup: artifact.replyMarkup
+    });
   }
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {

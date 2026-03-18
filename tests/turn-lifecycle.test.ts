@@ -140,6 +140,7 @@ function createHarness(
     runtime,
     messenger: new TelegramMessenger(telegram),
     telegram,
+    planArtifactPublicUrl: null,
     releaseTurnFiles: async (turnId) => {
       releasedTurnIds.push(turnId);
     },

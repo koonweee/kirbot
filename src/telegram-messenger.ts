@@ -1,8 +1,20 @@
 import type { MessageEntity } from "grammy/types";
 import type { LoggerLike } from "./logging";
 
+export type TelegramInlineKeyboardButton =
+  | {
+      text: string;
+      callback_data: string;
+    }
+  | {
+      text: string;
+      web_app: {
+        url: string;
+      };
+    };
+
 export type InlineKeyboardMarkup = {
-  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  inline_keyboard: Array<Array<TelegramInlineKeyboardButton>>;
 };
 
 export type TelegramSendOptions = {

@@ -31,6 +31,8 @@ import type { LoggerLike } from "./logging";
 import { isAllowedRootCommand, isAllowedTopicCommand } from "./telegram-commands";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
+import type { PlanArtifactSnapshot } from "./mini-app/server";
+import { normalizeTelegramMiniAppPublicUrl } from "./mini-app/url";
 import type { AppServerEvent } from "./rpc";
 
 export type CallbackQueryEvent = {
@@ -49,6 +51,7 @@ export interface BridgeCodexApi {
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   archiveThread(threadId: string): Promise<void>;
   readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
+  readPlanArtifact(threadId: string, turnId: string, itemId: string): Promise<PlanArtifactSnapshot | null>;
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
   respondToUserInputRequest(id: RequestId, response: ToolRequestUserInputResponse): Promise<void>;
@@ -105,6 +108,7 @@ export class TelegramCodexBridge {
       runtime: new BridgeTurnRuntime(),
       messenger: this.#messenger,
       telegram,
+      planArtifactPublicUrl: normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl),
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
       completePersistedTurn: (turnId, messageId, status, resolvedText) =>

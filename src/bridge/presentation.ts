@@ -5,6 +5,7 @@ import { renderMarkdownToFormattedText } from "../telegram-format/markdown";
 import { renderPreformattedText, renderQuotedText } from "../telegram-format/preformatted";
 import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
+import { buildPlanArtifactMiniAppUrl } from "../mini-app/url";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
@@ -182,6 +183,18 @@ export function buildRenderedInitialPromptMessage(text: string): TelegramRendere
 
 export function buildRenderedPlanMessages(text: string): TelegramRenderedMessage[] {
   return buildHeaderedMarkdownMessages(text, "Plan");
+}
+
+export function buildPlanArtifactMessage(publicUrl: string, turnId: string, itemId: string): {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+} {
+  return {
+    text: "Plan ready. Open in Mini App.",
+    replyMarkup: {
+      inline_keyboard: [[{ text: "Open plan", web_app: { url: buildPlanArtifactMiniAppUrl(publicUrl, turnId, itemId) } }]]
+    }
+  };
 }
 
 export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {

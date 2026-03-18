@@ -6,7 +6,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.json && node scripts/copy-mini-app-assets.mjs",
     "dev": "node --watch --watch-path=src --watch-path=KIRBOT.md --watch-path=.env --import tsx src/index.ts",
     "dev:tmux": "node scripts/tmux-session.mjs ensure dev",
     "dev:tmux:attach": "node scripts/tmux-session.mjs attach dev",
