@@ -13,7 +13,7 @@ New to the repo:
 - Read [docs/engineering-guide.md](docs/engineering-guide.md) for setup, tests, change boundaries, and documentation maintenance.
 - Read [docs/telegram-harness.md](docs/telegram-harness.md) if you want to drive kirbot without a real Telegram client.
 
-Formatting work has its own local guide in [src/telegram-format/README.md](src/telegram-format/README.md) and [src/telegram-format/AGENTS.md](src/telegram-format/AGENTS.md).
+Formatting work has its own local guide in [packages/telegram-format/README.md](packages/telegram-format/README.md) and [packages/telegram-format/AGENTS.md](packages/telegram-format/AGENTS.md).
 
 ## Mental Model
 
@@ -21,10 +21,10 @@ kirbot sits between Telegram and a pinned local Codex app server:
 
 - Telegram is the user-facing UI.
 - A same-process Mini App HTTP API serves persisted completed plan artifacts when configured.
-- `src/bridge.ts` translates Telegram events into session and turn actions.
-- `src/codex.ts` and `src/rpc.ts` manage the Codex app-server connection.
-- `src/db.ts` stores topic/session state, turn records, and pending requests.
-- `src/telegram-messenger.ts` and `src/telegram-format/*` own Telegram delivery and formatting.
+- `packages/kirbot-core/src/bridge.ts` translates Telegram events into session and turn actions.
+- `packages/codex-client/src/codex.ts` and `packages/codex-client/src/rpc.ts` manage the Codex app-server connection.
+- `packages/kirbot-core/src/db.ts` stores topic/session state, turn records, and pending requests.
+- `packages/kirbot-core/src/telegram-messenger.ts` and `packages/telegram-format/src/*` own Telegram delivery and formatting.
 - `apps/plan-mini-app` is a separate SvelteKit frontend for reading completed plan artifacts.
 
 The bridge is intentionally topic-centric:
@@ -131,9 +131,9 @@ npm run verify:codex-upgrade
 Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
-- `KIRBOT.md` is sent as Codex developer instructions.
+- `apps/bot/KIRBOT.md` is sent as Codex developer instructions.
 - Codex base instructions are intentionally left unset.
-- `src/generated/codex` is checked in and should stay aligned with the pinned `@openai/codex` version.
+- `packages/codex-client/src/generated/codex` is checked in and should stay aligned with the pinned `@openai/codex` version.
 - `npm run dev` is the watched local development entrypoint.
 - `apps/plan-mini-app` is built and deployed separately; it uses `PUBLIC_KIRBOT_PLAN_API_BASE_URL` to call kirbot's artifact API by opaque artifact id.
 - Detached tmux sessions use stable names: `kirbot-dev` for `npm run dev` and `kirbot-prod` for `npm start`.

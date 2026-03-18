@@ -1,5 +1,5 @@
 {
-  "name": "kirbot-plan-mini-app",
+  "name": "@kirbot/plan-mini-app",
   "private": true,
   "type": "module",
   "scripts": {

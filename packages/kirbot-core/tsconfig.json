@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../codex-client" },
+    { "path": "../telegram-format" }
+  ],
+  "include": ["src/**/*.ts"]
+}

@@ -65,7 +65,7 @@ directory, or Codex workspace unless a caller explicitly opts into that.
 Create a harness from code:
 
 ```ts
-import { createTelegramHarness } from "../src/harness";
+import { createTelegramHarness } from "../packages/telegram-harness/src";
 
 const harness = await createTelegramHarness();
 await harness.start();
@@ -115,7 +115,7 @@ be inspected without pretending those drafts were permanent messages.
 
 When kirbot adds new Telegram-facing behavior, update the harness in this order:
 
-1. Extend the recording Telegram transport in `src/harness/recording-telegram.ts`.
+1. Extend the recording Telegram transport in `packages/telegram-harness/src/recording-telegram.ts`.
 2. Update transcript synthesis if the new behavior changes visible chat state.
 3. Extend the library API or CLI only if callers need a new control surface.
 4. Add or update a harness test that covers the new behavior.

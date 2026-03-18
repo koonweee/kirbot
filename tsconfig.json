@@ -1,21 +1,18 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
-    "lib": ["ES2023"],
-    "rootDir": ".",
-    "outDir": "dist",
-    "strict": true,
-    "noImplicitOverride": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "sourceMap": true,
-    "resolveJsonModule": true,
-    "types": ["node", "vitest/globals"]
-  },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.mjs", "vitest.config.ts"],
-  "exclude": ["dist", "node_modules"]
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "apps/bot/src/**/*.ts",
+    "apps/bot/tests/**/*.ts",
+    "packages/**/*.ts",
+    "scripts/**/*.mjs",
+    "src/types.d.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": [
+    "apps/plan-mini-app",
+    "node_modules",
+    "dist",
+    "apps/*/dist",
+    "packages/*/dist"
+  ]
 }
