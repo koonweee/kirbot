@@ -3615,6 +3615,54 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.edits.at(-1)?.text).toContain("accept");
   });
 
+  it("cleans up pending approval prompts when the app server resolves them elsewhere", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 21,
+      userId: 42,
+      text: "Run the deployment fix"
+    });
+
+    codex.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      id: 89,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm publish",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "decline", "cancel"]
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text).toContain("Codex requested command approval.");
+
+    codex.emitNotification({
+      method: "serverRequest/resolved",
+      params: {
+        threadId: "thread-1",
+        requestId: 89
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(codex.commandApprovals).toEqual([]);
+    expect(telegram.edits.at(-1)).toMatchObject({
+      chatId: -1001,
+      messageId: promptMessage?.messageId,
+      text: "Request resolved."
+    });
+
+    const resolved = await database.getPendingRequest(JSON.stringify(89));
+    expect(resolved.status).toBe("resolved");
+    expect(resolved.responseJson).toBe("{}");
+  });
+
   it("ignores callback queries from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

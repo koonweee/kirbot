@@ -6,6 +6,7 @@ import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerRequest";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
+import type { ServerRequestResolvedNotification } from "@kirbot/codex-client/generated/codex/v2/ServerRequestResolvedNotification";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { TelegramApi } from "../telegram-messenger";
 import { TelegramMessenger } from "../telegram-messenger";
@@ -159,6 +160,27 @@ export class BridgeRequestCoordinator {
     const nextState = answerCurrentUserInputQuestion(payload.questions, state, [answer]);
     await this.progressUserInputRequest(pending, payload, nextState);
     return true;
+  }
+
+  async handleServerRequestResolved(params: ServerRequestResolvedNotification): Promise<void> {
+    const request = await this.database.getPendingRequest(JSON.stringify(params.requestId)).catch(() => undefined);
+    if (!request || request.status !== "pending") {
+      return;
+    }
+
+    const resolved = await this.database.resolveRequestExternally(request.requestIdJson);
+    if (!resolved.telegramMessageId) {
+      return;
+    }
+
+    await this.telegram.editMessageText(
+      Number.parseInt(resolved.telegramChatId, 10),
+      resolved.telegramMessageId,
+      "Request resolved.",
+      {
+        message_thread_id: resolved.telegramTopicId
+      }
+    );
   }
 
   private async handleApprovalRequest(session: TopicSession, request: ApprovalServerRequest): Promise<void> {

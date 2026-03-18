@@ -874,6 +874,11 @@ export class TelegramCodexBridge {
           await this.#lifecycle.handleFileChangeOutput(notification.params.turnId);
         }
       },
+      "serverRequest/resolved": async () => {
+        if (notification.method === "serverRequest/resolved") {
+          await this.#requestCoordinator.handleServerRequestResolved(notification.params);
+        }
+      },
       "item/agentMessage/delta": async () => {
         if (notification.method === "item/agentMessage/delta") {
           await this.#lifecycle.handleAssistantDelta(

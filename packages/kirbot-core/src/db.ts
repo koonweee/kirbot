@@ -599,6 +599,20 @@ export class BridgeDatabase {
     return this.getPendingRequest(requestIdJson);
   }
 
+  async resolveRequestExternally(requestIdJson: string): Promise<PendingServerRequest> {
+    await this.kysely
+      .updateTable("server_requests")
+      .set({
+        response_json: "{}",
+        status: "resolved",
+        updated_at: now()
+      })
+      .where("request_id_json", "=", requestIdJson)
+      .execute();
+
+    return this.getPendingRequest(requestIdJson);
+  }
+
   async expireRequest(requestIdJson: string, responseJson: string | null = null): Promise<PendingServerRequest> {
     await this.kysely
       .updateTable("server_requests")

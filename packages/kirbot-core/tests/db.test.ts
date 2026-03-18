@@ -77,6 +77,24 @@ describe("BridgeDatabase", () => {
     expect(resolved.responseJson).toBe(JSON.stringify({ decision: "accept" }));
   });
 
+  it("marks pending server requests resolved when the app server resolves them elsewhere", async () => {
+    await database.createPendingRequest({
+      requestIdJson: JSON.stringify(79),
+      method: "item/tool/requestUserInput",
+      telegramChatId: "-1001",
+      telegramTopicId: 22,
+      telegramMessageId: 100,
+      codexThreadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      payloadJson: JSON.stringify({ hello: "world" })
+    });
+
+    const resolved = await database.resolveRequestExternally(JSON.stringify(79));
+    expect(resolved.status).toBe("resolved");
+    expect(resolved.responseJson).toBe("{}");
+  });
+
   it("expires pending server requests on restart", async () => {
     await database.createPendingRequest({
       requestIdJson: JSON.stringify(78),
