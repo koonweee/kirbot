@@ -13,6 +13,36 @@ type PlanItemState = {
   text: string;
 };
 
+export type ActivityLogEntry =
+  | {
+      kind: "commentary";
+      text: string;
+    }
+  | {
+      kind: "activity";
+      label: ActivityLogLabel;
+      detail: string | null;
+      detailStyle: "inlineCode" | "text";
+    };
+
+export type ActivityLogLabel =
+  | "Web Search Started"
+  | "Web Search Completed"
+  | "Command Started"
+  | "Command Completed"
+  | "Command Failed"
+  | "Command Declined"
+  | "Tool Started"
+  | "Tool Completed"
+  | "Tool Failed"
+  | "Agent Task Started"
+  | "Agent Task Completed"
+  | "Agent Task Failed"
+  | "File Edit Started"
+  | "File Edit Completed"
+  | "File Edit Failed"
+  | "File Edit Declined";
+
 export type RuntimeTurn = {
   chatId: number;
   topicId: number;
@@ -22,6 +52,8 @@ export type RuntimeTurn = {
   assistantItems: Map<string, AssistantItemState>;
   planItemOrder: string[];
   planItems: Map<string, PlanItemState>;
+  activityLogEntries: ActivityLogEntry[];
+  commentaryActivityEntryIndexes: Map<string, number>;
   hasAssistantText: boolean;
 };
 
@@ -87,6 +119,8 @@ export class BridgeTurnRuntime {
       assistantItems: new Map<string, AssistantItemState>(),
       planItemOrder: [],
       planItems: new Map<string, PlanItemState>(),
+      activityLogEntries: [],
+      commentaryActivityEntryIndexes: new Map<string, number>(),
       hasAssistantText: false
     };
 
@@ -204,6 +238,9 @@ export class BridgeTurnRuntime {
     }
 
     ensureAssistantItem(turn, itemId).phase = phase;
+    if (phase === "commentary") {
+      ensureCommentaryActivityEntry(turn, itemId);
+    }
   }
 
   registerPlanItem(turnId: string, itemId: string): void {
@@ -225,6 +262,7 @@ export class BridgeTurnRuntime {
     turn.hasAssistantText = true;
     const item = ensureAssistantItem(turn, itemId);
     item.text = `${item.text}${delta}`;
+    syncCommentaryActivityEntry(turn, itemId, item.phase, item.text);
 
     return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
@@ -245,6 +283,7 @@ export class BridgeTurnRuntime {
     const item = ensureAssistantItem(turn, itemId);
     item.phase = phase;
     item.text = text;
+    syncCommentaryActivityEntry(turn, itemId, phase, text);
 
     return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
@@ -279,6 +318,20 @@ export class BridgeTurnRuntime {
   renderCommentaryItems(turnId: string): string[] {
     const turn = this.#turns.get(turnId);
     return turn ? renderCommentaryTexts(turn) : [];
+  }
+
+  appendActivityLogEntry(turnId: string, entry: ActivityLogEntry): void {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return;
+    }
+
+    turn.activityLogEntries.push(entry);
+  }
+
+  renderActivityLogEntries(turnId: string): ActivityLogEntry[] {
+    const turn = this.#turns.get(turnId);
+    return turn ? renderActivityLogEntries(turn) : [];
   }
 
   renderPlanItems(turnId: string): string {
@@ -398,6 +451,37 @@ function ensurePlanItem(turn: RuntimeTurn, itemId: string): PlanItemState {
   return created;
 }
 
+function ensureCommentaryActivityEntry(turn: RuntimeTurn, itemId: string): ActivityLogEntry {
+  const existingIndex = turn.commentaryActivityEntryIndexes.get(itemId);
+  if (existingIndex !== undefined) {
+    return turn.activityLogEntries[existingIndex] ?? { kind: "commentary", text: "" };
+  }
+
+  const entry: ActivityLogEntry = {
+    kind: "commentary",
+    text: ""
+  };
+  turn.activityLogEntries.push(entry);
+  turn.commentaryActivityEntryIndexes.set(itemId, turn.activityLogEntries.length - 1);
+  return entry;
+}
+
+function syncCommentaryActivityEntry(
+  turn: RuntimeTurn,
+  itemId: string,
+  phase: MessagePhase | null,
+  text: string
+): void {
+  if (phase !== "commentary") {
+    return;
+  }
+
+  const entry = ensureCommentaryActivityEntry(turn, itemId);
+  if (entry.kind === "commentary") {
+    entry.text = text;
+  }
+}
+
 function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAssistantText: boolean): AssistantRenderUpdate {
   const item = turn.assistantItems.get(itemId);
   const draft = renderAssistantDraft(turn);
@@ -463,6 +547,16 @@ function renderCommentaryTexts(turn: RuntimeTurn): string[] {
   return getAssistantItemsWithText(turn)
     .filter((item) => item.phase === "commentary")
     .map((item) => item.text);
+}
+
+function renderActivityLogEntries(turn: RuntimeTurn): ActivityLogEntry[] {
+  return turn.activityLogEntries.filter((entry) => {
+    if (entry.kind === "commentary") {
+      return entry.text.trim().length > 0;
+    }
+
+    return true;
+  });
 }
 
 function getAssistantItemsWithText(turn: RuntimeTurn): AssistantItemState[] {

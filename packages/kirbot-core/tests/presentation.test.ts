@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildCommentaryArtifactButton,
   buildPlanArtifactMessage,
   buildStatusDraft,
   renderTelegramStatusDraft,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
+import type { ActivityLogEntry } from "../src/turn-runtime";
 
 describe("status presentation", () => {
   it("renders command status details as a quoted second line", () => {
@@ -99,6 +101,29 @@ describe("plan artifact presentation", () => {
       type: MiniAppArtifactType.Plan,
       title: "Plan",
       markdownText: "1. Draft the rollout"
+    });
+  });
+});
+
+describe("commentary artifact presentation", () => {
+  it("renders commentary as mixed prose and activity bullets", () => {
+    const entries: ActivityLogEntry[] = [
+      { kind: "commentary", text: "Inspecting the renderer." },
+      { kind: "activity", label: "Command Started", detail: "npm test", detailStyle: "inlineCode" },
+      { kind: "activity", label: "Web Search Completed", detail: "markdown-it details support", detailStyle: "text" }
+    ];
+
+    const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
+    const url = "web_app" in button ? button.web_app.url : null;
+    expect(url).toBeTruthy();
+
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        "## Activity Log\n\n**Commentary**\n\nInspecting the renderer.\n\n- **Command Started:** `npm test`\n\n- **Web Search Completed:** markdown\\-it details support"
     });
   });
 });

@@ -15,7 +15,7 @@ import type {
   TelegramInlineKeyboardButton,
   TelegramRenderedMessage
 } from "../telegram-messenger";
-import type { QueueStateSnapshot } from "../turn-runtime";
+import type { ActivityLogEntry, ActivityLogLabel, QueueStateSnapshot } from "../turn-runtime";
 import {
   buildMiniAppArtifactUrl,
   MiniAppArtifactType,
@@ -290,14 +290,14 @@ export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
   return renderMarkdownToFormattedText(buildPlanPreviewText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT)));
 }
 
-export function buildCommentaryArtifactButton(publicUrl: string, items: string[]): TelegramInlineKeyboardButton {
+export function buildCommentaryArtifactButton(publicUrl: string, entries: ActivityLogEntry[]): TelegramInlineKeyboardButton {
   return buildMarkdownArtifactButton({
     publicUrl,
     artifact: {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: buildCommentaryMarkdown(items)
+      markdownText: buildCommentaryMarkdown(entries)
     },
     buttonText: "Commentary"
   });
@@ -433,8 +433,115 @@ function buildPlanPreviewText(text: string): string {
   return `Plan\n\n${text}`;
 }
 
-function buildCommentaryMarkdown(items: string[]): string {
-  return items.map((item) => buildFencedCodeBlock(item)).join("\n\n");
+export function buildActivityLogEntryForItemStarted(item: ThreadItem): ActivityLogEntry | null {
+  switch (item.type) {
+    case "commandExecution":
+      return buildActivityEventEntry("Command Started", item.command, "inlineCode");
+    case "fileChange":
+      return buildActivityEventEntry("File Edit Started", summarizeFileChanges(item.changes), "inlineCode");
+    case "mcpToolCall":
+      return buildActivityEventEntry("Tool Started", `${item.server}.${item.tool}`, "inlineCode");
+    case "dynamicToolCall":
+      return buildActivityEventEntry("Tool Started", item.tool, "inlineCode");
+    case "collabAgentToolCall":
+      return buildActivityEventEntry("Agent Task Started", item.tool, "inlineCode");
+    case "webSearch":
+      return buildActivityEventEntry("Web Search Started", item.query, "text");
+    default:
+      return null;
+  }
+}
+
+export function buildActivityLogEntryForItemCompleted(item: ThreadItem): ActivityLogEntry | null {
+  switch (item.type) {
+    case "commandExecution":
+      return buildActivityEventEntry(getCommandCompletionLabel(item), item.command, "inlineCode");
+    case "fileChange":
+      return buildActivityEventEntry(getFileChangeCompletionLabel(item.status), summarizeFileChanges(item.changes), "inlineCode");
+    case "mcpToolCall":
+      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool Completed", `${item.server}.${item.tool}`, "inlineCode");
+    case "dynamicToolCall":
+      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool Completed", item.tool, "inlineCode");
+    case "collabAgentToolCall":
+      return buildActivityEventEntry(
+        item.status === "failed" ? "Agent Task Failed" : "Agent Task Completed",
+        item.tool,
+        "inlineCode"
+      );
+    case "webSearch":
+      return buildActivityEventEntry("Web Search Completed", item.query, "text");
+    default:
+      return null;
+  }
+}
+
+function buildCommentaryMarkdown(entries: ActivityLogEntry[]): string {
+  const renderedEntries = entries.flatMap((entry) => renderActivityLogEntry(entry));
+  return renderedEntries.length > 0 ? `## Activity Log\n\n${renderedEntries.join("\n\n")}` : "";
+}
+
+function renderActivityLogEntry(entry: ActivityLogEntry): string[] {
+  if (entry.kind === "commentary") {
+    const text = entry.text.trim();
+    return text.length > 0 ? [`**Commentary**\n\n${text}`] : [];
+  }
+
+  const detail = formatActivityDetail(entry.detail, entry.detailStyle);
+  return [detail ? `- **${entry.label}:** ${detail}` : `- **${entry.label}**`];
+}
+
+function buildActivityEventEntry(
+  label: ActivityLogLabel,
+  detail: string | null,
+  detailStyle: "inlineCode" | "text"
+): ActivityLogEntry {
+  const normalizedDetail = detail?.trim() ?? "";
+  return {
+    kind: "activity",
+    label,
+    detail: normalizedDetail.length > 0 ? normalizedDetail : null,
+    detailStyle
+  };
+}
+
+function getCommandCompletionLabel(item: Extract<ThreadItem, { type: "commandExecution" }>): "Command Completed" | "Command Failed" | "Command Declined" {
+  if (item.status === "declined") {
+    return "Command Declined";
+  }
+
+  return isCommandExecutionFailed(item) ? "Command Failed" : "Command Completed";
+}
+
+function getFileChangeCompletionLabel(
+  status: Extract<ThreadItem, { type: "fileChange" }>["status"]
+): "File Edit Completed" | "File Edit Failed" | "File Edit Declined" {
+  switch (status) {
+    case "declined":
+      return "File Edit Declined";
+    case "failed":
+      return "File Edit Failed";
+    default:
+      return "File Edit Completed";
+  }
+}
+
+function formatActivityDetail(detail: string | null, style: "inlineCode" | "text"): string | null {
+  if (!detail) {
+    return null;
+  }
+
+  return style === "inlineCode" ? renderInlineCodeMarkdown(detail) : escapeMarkdownText(detail);
+}
+
+function renderInlineCodeMarkdown(value: string): string {
+  const maxFenceLength = Math.max(...Array.from(value.matchAll(/`+/g), (match) => match[0].length), 0) + 1;
+  const fence = "`".repeat(Math.max(1, maxFenceLength));
+  const padded = /^[` ]|[` ]$/.test(value) ? ` ${value} ` : value;
+  return `${fence}${padded}${fence}`;
+}
+
+function escapeMarkdownText(value: string): string {
+  return value.replace(/([\\`*_{}\[\]()#+\-!>|])/g, "\\$1");
 }
 
 function buildTruncatedPreview(text: string, limit: number, prefix: string, suffix: string): string {

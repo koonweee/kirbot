@@ -383,7 +383,7 @@ describe("TurnLifecycleCoordinator", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "```\nInspecting the rollout plan\n```"
+      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan"
     });
   });
 
@@ -442,7 +442,7 @@ describe("TurnLifecycleCoordinator", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "```\nInspecting the rollout plan\n```"
+      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan"
     });
     expect(
       telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available.")
@@ -493,6 +493,79 @@ describe("TurnLifecycleCoordinator", () => {
     expect(
       telegram.sentMessages.findIndex((entry) => entry.text === "Commentary artifact was too large to encode.")
     ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Final answer"));
+  });
+
+  it("interleaves commentary with chronological activity events in the artifact", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "Final answer",
+        assistantText: "Final answer",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "commentary-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "commentary-1", "Inspecting the rollout plan.");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "npm test",
+      cwd: "/workspace",
+      processId: null,
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null
+    });
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "npm test",
+      cwd: "/workspace",
+      processId: null,
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "ok",
+      exitCode: 0,
+      durationMs: 120
+    });
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "commentary-1",
+      text: "Inspecting the rollout plan.",
+      phase: "commentary"
+    });
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan.\n\n- **Command Started:** `npm test`\n\n- **Command Completed:** `npm test`"
+    });
   });
 
   it("publishes a non-blocking notice when the response artifact is too large to encode", async () => {

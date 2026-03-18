@@ -94,11 +94,11 @@ export class TurnFinalizer {
     }
 
     await this.beginFinalization(context);
-    const commentaryItems = this.deps.runtime.renderCommentaryItems(context.turnId);
+    const activityLogEntries = this.deps.runtime.renderActivityLogEntries(context.turnId);
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
     const hasAssistantText = snapshot.assistantText.trim().length > 0;
     const publishesPlanOnly = policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0;
-    const commentaryPublication = this.buildCommentaryPublication(commentaryItems, !publishesPlanOnly);
+    const commentaryPublication = this.buildCommentaryPublication(activityLogEntries, !publishesPlanOnly);
     await this.publishStandaloneCommentary(context, commentaryPublication);
     const publishedPlanMessageId =
       snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
@@ -217,13 +217,16 @@ export class TurnFinalizer {
     return messageId;
   }
 
-  private buildCommentaryPublication(items: string[], attachToAssistant: boolean): CommentaryPublication {
-    if (items.length === 0) {
+  private buildCommentaryPublication(
+    activityLogEntries: ReturnType<TurnLifecycleDependencies["runtime"]["renderActivityLogEntries"]>,
+    attachToAssistant: boolean
+  ): CommentaryPublication {
+    if (activityLogEntries.length === 0) {
       return { kind: "hidden" };
     }
 
     try {
-      const button = buildCommentaryArtifactButton(this.deps.planArtifactPublicUrl, items);
+      const button = buildCommentaryArtifactButton(this.deps.planArtifactPublicUrl, activityLogEntries);
       if (attachToAssistant) {
         return {
           kind: "assistant_button",

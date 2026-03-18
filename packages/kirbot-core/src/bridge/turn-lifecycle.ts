@@ -4,6 +4,8 @@ import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadI
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
 import {
+  buildActivityLogEntryForItemCompleted,
+  buildActivityLogEntryForItemStarted,
   buildCompletedStatusDraftForItem,
   buildPlanArtifactMessage,
   buildRenderedCompletedItemMessage,
@@ -269,6 +271,11 @@ export class TurnLifecycleCoordinator {
     } else if (item.type === "plan") {
       this.deps.runtime.registerPlanItem(turnId, item.id);
     }
+
+    const activityLogEntry = buildActivityLogEntryForItemStarted(item);
+    if (activityLogEntry) {
+      this.deps.runtime.appendActivityLogEntry(turnId, activityLogEntry);
+    }
     await this.updateStatus(turnId, buildStatusDraftForItem(item));
   }
 
@@ -399,6 +406,11 @@ export class TurnLifecycleCoordinator {
     const context = this.#turns.get(turnId);
     if (!context) {
       return;
+    }
+
+    const activityLogEntry = buildActivityLogEntryForItemCompleted(item);
+    if (activityLogEntry) {
+      this.deps.runtime.appendActivityLogEntry(turnId, activityLogEntry);
     }
 
     if (item.type === "reasoning") {

@@ -177,6 +177,69 @@ describe("BridgeTurnRuntime", () => {
       kind: "assistant"
     });
     expect(runtime.renderAssistantItems("turn-1")).toBe("Here is the fix.");
+    expect(runtime.renderActivityLogEntries("turn-1")).toEqual([
+      {
+        kind: "commentary",
+        text: "Inspecting the repo"
+      }
+    ]);
+  });
+
+  it("keeps commentary anchored in chronological activity order while later events append after it", () => {
+    const runtime = new BridgeTurnRuntime();
+    runtime.registerTurn({
+      chatId: -1001,
+      topicId: 777,
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+
+    runtime.registerAssistantItem("turn-1", "item-1", "commentary");
+    runtime.appendAssistantDelta("turn-1", "item-1", "Inspecting the repo");
+    runtime.appendActivityLogEntry("turn-1", {
+      kind: "activity",
+      label: "Web Search Started",
+      detail: "kirbot issues",
+      detailStyle: "text"
+    });
+    runtime.appendActivityLogEntry("turn-1", {
+      kind: "activity",
+      label: "Web Search Completed",
+      detail: "kirbot issues",
+      detailStyle: "text"
+    });
+    runtime.commitAssistantItem("turn-1", "item-1", "Inspecting the repo in more detail", "commentary");
+    runtime.appendActivityLogEntry("turn-1", {
+      kind: "activity",
+      label: "Command Started",
+      detail: "npm test",
+      detailStyle: "inlineCode"
+    });
+
+    expect(runtime.renderActivityLogEntries("turn-1")).toEqual([
+      {
+        kind: "commentary",
+        text: "Inspecting the repo in more detail"
+      },
+      {
+        kind: "activity",
+        label: "Web Search Started",
+        detail: "kirbot issues",
+        detailStyle: "text"
+      },
+      {
+        kind: "activity",
+        label: "Web Search Completed",
+        detail: "kirbot issues",
+        detailStyle: "text"
+      },
+      {
+        kind: "activity",
+        label: "Command Started",
+        detail: "npm test",
+        detailStyle: "inlineCode"
+      }
+    ]);
   });
 
   it("falls back to legacy merged output when phase metadata is missing", () => {

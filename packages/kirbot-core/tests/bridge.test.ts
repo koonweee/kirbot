@@ -1541,7 +1541,7 @@ describe("TelegramCodexBridge", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "```\nInspecting the files\n```"
+      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting the files"
     });
   });
 
@@ -1901,7 +1901,8 @@ describe("TelegramCodexBridge", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "```\nInspecting files\n```\n\n```\nPlanning edits\n```"
+      markdownText:
+        "## Activity Log\n\n**Commentary**\n\nInspecting files\n\n**Commentary**\n\nPlanning edits"
     });
   });
 
@@ -2180,7 +2181,7 @@ describe("TelegramCodexBridge", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "```\nInspecting files\n```"
+      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting files"
     });
     const planIndex = miniAppTelegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
     expect(planIndex).toBeGreaterThanOrEqual(0);
