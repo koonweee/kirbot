@@ -433,10 +433,6 @@ function buildStatusDetails(statusDraft: TurnStatusDraft): string | null {
     return null;
   }
 
-  if (statusDraft.state === "running") {
-    return truncateStatus(normalized);
-  }
-
   return normalized;
 }
 

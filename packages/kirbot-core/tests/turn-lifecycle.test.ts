@@ -472,43 +472,6 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("truncates very long running commands before rendering them as inline code", async () => {
-    vi.useFakeTimers();
-
-    try {
-      const harness = createHarness();
-      const longCommand = `/bin/bash -lc '${"git push -u origin commentary-consolidation ".repeat(6).trim()}'`;
-
-      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-      await vi.advanceTimersByTimeAsync(600);
-      await harness.coordinator.handleItemStarted("turn-1", {
-        type: "commandExecution",
-        id: "item-1",
-        command: longCommand,
-        cwd: "/workspace",
-        processId: null,
-        status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null
-      });
-
-      const draft = harness.telegram.drafts.at(-1);
-      expect(draft?.text).toMatch(/^running: .+\.\.\. · 0s$/);
-      expect(draft?.text.length).toBeLessThan(longCommand.length);
-      expect(draft?.options?.entities).toEqual([
-        {
-          type: "code",
-          offset: 9,
-          length: draft ? draft.text.indexOf(" · 0s") - 9 : 0
-        }
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
     const harness = createHarness({
       text: "Final answer",
