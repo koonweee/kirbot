@@ -1,10 +1,13 @@
+import type { MarkdownAst } from "../markdown/ast";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import { chunkFormattedText, prependText } from "../telegram-format/chunk";
+import { renderMdastToFormattedText } from "../telegram-format/mdast";
 import { renderMarkdownToFormattedText } from "../telegram-format/markdown";
 import { renderPreformattedText, renderQuotedText } from "../telegram-format/preformatted";
 import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
+import { buildPlanArtifactMiniAppUrl } from "../mini-app/url";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
@@ -184,13 +187,32 @@ export function buildRenderedPlanMessages(text: string): TelegramRenderedMessage
   return buildHeaderedMarkdownMessages(text, "Plan");
 }
 
+export function buildRenderedPlanMessagesFromAst(ast: MarkdownAst): TelegramRenderedMessage[] {
+  return buildHeaderedFormattedMessages(renderMdastToFormattedText(ast), "Plan");
+}
+
+export function buildPlanArtifactMessage(publicUrl: string, artifactId: string): {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+} {
+  return {
+    text: "Plan ready. Open in Mini App.",
+    replyMarkup: {
+      inline_keyboard: [[{ text: "Open plan", web_app: { url: buildPlanArtifactMiniAppUrl(publicUrl, artifactId) } }]]
+    }
+  };
+}
+
 export function buildRenderedAssistantMessages(text: string): TelegramRenderedMessage[] {
   return buildHeaderedMarkdownMessages(text);
 }
 
 function buildHeaderedMarkdownMessages(text: string, header?: string): TelegramRenderedMessage[] {
+  return buildHeaderedFormattedMessages(renderMarkdownToFormattedText(text), header);
+}
+
+function buildHeaderedFormattedMessages(formatted: TelegramRenderedMessage, header?: string): TelegramRenderedMessage[] {
   const reservedHeaderChars = 32;
-  const formatted = renderMarkdownToFormattedText(text);
   const chunks = chunkFormattedText(formatted, TELEGRAM_MESSAGE_CHAR_LIMIT - reservedHeaderChars);
 
   if (chunks.length === 1) {

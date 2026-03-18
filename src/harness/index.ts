@@ -271,7 +271,7 @@ function resolveCallbackData(transcript: HarnessTranscript, input: PressButtonIn
   if (input.buttonText) {
     for (const row of message.buttons) {
       const button = row.find((candidate) => candidate.text === input.buttonText);
-      if (button) {
+      if (button && "callback_data" in button) {
         return button.callback_data;
       }
     }
@@ -282,7 +282,7 @@ function resolveCallbackData(transcript: HarnessTranscript, input: PressButtonIn
   const buttons = message.buttons.flat();
   if (buttons.length === 1) {
     const [button] = buttons;
-    if (button) {
+    if (button && "callback_data" in button) {
       return button.callback_data;
     }
   }

@@ -3,7 +3,10 @@ import type { ReasoningEffort } from "../generated/codex/ReasoningEffort";
 import type { ThreadItem } from "../generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "../generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
+import { parseSerializedMarkdownAst } from "../markdown/ast";
 import {
+  buildPlanArtifactMessage,
+  buildRenderedPlanMessagesFromAst,
   buildRenderedPlanMessages,
   buildRenderedCommentaryMessage,
   buildStableDraftId,
@@ -11,7 +14,6 @@ import {
   buildStatusDraftForItem,
   isSameStatusDraft,
   renderTelegramAssistantDraft,
-  renderTelegramPlanDraft,
   renderTelegramCommentaryDraft,
   renderTelegramStatusDraft,
   type TurnStatusDraft
@@ -33,7 +35,9 @@ export class TurnLifecycleCoordinator {
     private readonly deps: TurnLifecycleDependencies,
     private readonly logger: LoggerLike = console
   ) {
-    this.#finalizer = new TurnFinalizer(deps);
+    this.#finalizer = new TurnFinalizer(deps, {
+      publishCompletedPlan: this.publishCompletedPlan.bind(this)
+    });
   }
 
   activateTurn(
@@ -253,13 +257,9 @@ export class TurnLifecycleCoordinator {
   }
 
   async handlePlanDelta(turnId: string, itemId: string, delta: string): Promise<void> {
-    const context = this.#turns.get(turnId);
-    const update = this.deps.runtime.appendPlanDelta(turnId, itemId, delta);
-    if (!context || !update) {
-      return;
-    }
-
-    await this.handlePlanRenderUpdate(context, update, "delta", true);
+    void turnId;
+    void itemId;
+    void delta;
   }
 
   async handleReasoningDelta(turnId: string): Promise<void> {
@@ -311,7 +311,7 @@ export class TurnLifecycleCoordinator {
         return;
       }
 
-      await this.handlePlanRenderUpdate(context, update, "completed", true);
+      await this.handlePlanRenderUpdate(context, update, "completed");
       return;
     }
 
@@ -414,20 +414,16 @@ export class TurnLifecycleCoordinator {
   private async handlePlanRenderUpdate(
     context: TurnContext,
     update: PlanRenderUpdate,
-    stage: "delta" | "completed",
-    forceDraft = false
+    stage: "delta" | "completed"
   ): Promise<void> {
-    const plan = this.getOrCreatePlanStream(context, update.itemId);
-    plan.text = update.itemText;
-
-    if (stage === "completed") {
-      await plan.handle.finalize(buildRenderedPlanMessages(update.itemText));
-      context.planStreams.delete(update.itemId);
-      context.publishedPlanMessages += 1;
+    if (stage !== "completed") {
       return;
     }
 
-    await plan.handle.update(renderTelegramPlanDraft(update.itemText || "…"), forceDraft);
+    await this.publishCompletedPlan(context, {
+      itemId: update.itemId,
+      text: update.itemText
+    });
   }
 
   private getOrCreateCommentaryStream(context: TurnContext, itemId: string) {
@@ -448,21 +444,56 @@ export class TurnLifecycleCoordinator {
     return created;
   }
 
-  private getOrCreatePlanStream(context: TurnContext, itemId: string) {
-    const existing = context.planStreams.get(itemId);
-    if (existing) {
-      return existing;
-    }
+  private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {
+    const artifact = await this.deps.upsertPlanArtifact({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      threadId: context.threadId,
+      turnId: context.turnId,
+      itemId: plan.itemId,
+      markdownText: plan.text
+    });
 
-    const created = {
-      handle: this.deps.messenger.streamMessage({
+    const messageId = this.deps.planArtifactPublicUrl
+      ? await this.deps.messenger.sendMessage({
+          chatId: context.chatId,
+          topicId: context.topicId,
+          ...buildPlanArtifactMessage(this.deps.planArtifactPublicUrl, artifact.artifactId)
+        }).then((message) => message.messageId)
+      : await this.sendRenderedPlanMessages(
+          context,
+          (() => {
+            try {
+              return buildRenderedPlanMessagesFromAst(parseSerializedMarkdownAst(artifact.mdastJson));
+            } catch {
+              return buildRenderedPlanMessages(artifact.markdownText);
+            }
+          })()
+        );
+
+    context.publishedPlanMessages += 1;
+    return messageId;
+  }
+
+  private async sendRenderedPlanMessages(context: TurnContext, renderedMessages: ReturnType<typeof buildRenderedPlanMessages>): Promise<number> {
+    let firstMessageId: number | null = null;
+
+    for (const rendered of renderedMessages) {
+      const message = await this.deps.messenger.sendMessage({
         chatId: context.chatId,
         topicId: context.topicId,
-        draftId: buildStableDraftId(`${context.turnId}:plan:${itemId}`)
-      }),
-      text: ""
-    };
-    context.planStreams.set(itemId, created);
-    return created;
+        text: rendered.text,
+        ...(rendered.entities ? { entities: rendered.entities } : {})
+      });
+      if (firstMessageId === null) {
+        firstMessageId = message.messageId;
+      }
+    }
+
+    if (firstMessageId === null) {
+      throw new Error("Failed to publish rendered plan messages");
+    }
+
+    return firstMessageId;
   }
 }

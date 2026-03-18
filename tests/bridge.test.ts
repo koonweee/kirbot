@@ -17,7 +17,7 @@ import type { FileChangeApprovalDecision } from "../src/generated/codex/v2/FileC
 import type { ToolRequestUserInputResponse } from "../src/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ReasoningEffort } from "../src/generated/codex/ReasoningEffort";
 import { JsonRpcMethodError, type AppServerEvent } from "../src/rpc";
-import type { TelegramApi } from "../src/telegram-messenger";
+import type { TelegramApi, TelegramSendOptions } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 
 const EMPTY_DRAFT_TEXT = "";
@@ -286,12 +286,7 @@ class FakeTelegram implements TelegramApi {
     messageId: number;
     chatId: number;
     text: string;
-    options?: {
-      message_thread_id?: number;
-      reply_to_message_id?: number;
-      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      entities?: MessageEntity[];
-    };
+    options?: TelegramSendOptions;
   }> = [];
   drafts: Array<{
     chatId: number;
@@ -309,11 +304,7 @@ class FakeTelegram implements TelegramApi {
   editOptions: Array<{
     chatId: number;
     messageId: number;
-    options?: {
-      message_thread_id?: number;
-      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      entities?: MessageEntity[];
-    };
+    options?: TelegramSendOptions;
   }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
   downloads: Array<{ fileId: string }> = [];
@@ -327,12 +318,7 @@ class FakeTelegram implements TelegramApi {
   async sendMessage(
     chatId: number,
     text: string,
-    options?: {
-      message_thread_id?: number;
-      reply_to_message_id?: number;
-      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      entities?: MessageEntity[];
-    }
+    options?: TelegramSendOptions
   ): Promise<{ message_id: number }> {
     if (this.nextSendMessageError) {
       const error = this.nextSendMessageError;
@@ -391,11 +377,7 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     messageId: number,
     text: string,
-    options?: {
-      message_thread_id?: number;
-      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-      entities?: MessageEntity[];
-    }
+    options?: TelegramSendOptions
   ): Promise<unknown> {
     this.edits.push({ chatId, messageId, text });
     this.editOptions.push(options ? { chatId, messageId, options } : { chatId, messageId });
@@ -440,7 +422,13 @@ describe("TelegramCodexBridge", () => {
       telegram: {
         botToken: "token",
         userId: 42,
-        mediaTempDir: join(tempDir, "telegram-media")
+        mediaTempDir: join(tempDir, "telegram-media"),
+        miniApp: {
+          publicUrl: undefined,
+          apiPublicUrl: undefined,
+          bindHost: "127.0.0.1",
+          port: 8788
+        }
       },
       database: {
         path: join(tempDir, "bridge.sqlite")
@@ -1516,7 +1504,7 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.drafts.at(-1)?.text).toBe("Plan\n\nDraft the rollout");
+    expect(telegram.drafts.some((draft) => draft.text === "Plan\n\nDraft the rollout")).toBe(false);
 
     codex.emitNotification({
       method: "item/completed",
@@ -1545,6 +1533,226 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")).toHaveLength(1);
+  });
+
+  it("publishes plan items as Mini App stubs instead of raw plan bubbles when Mini App support is configured", async () => {
+    const miniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app",
+          apiPublicUrl: "https://api.example.com/mini-app",
+          bindHost: "127.0.0.1",
+          port: 0
+        }
+      }
+    };
+    const miniAppCodex = new FakeCodex();
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 788,
+      messageId: 300,
+      updateId: 400,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    miniAppCodex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: ""
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/plan/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "plan-1",
+        delta: "Draft the rollout"
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(miniAppTelegram.drafts.some((draft) => draft.text === "Plan\n\nDraft the rollout")).toBe(false);
+
+    miniAppCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: "1. Draft the rollout"
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready. Open in Mini App.")).toHaveLength(1);
+    expect(miniAppTelegram.sentMessages.some((message) => message.text === "Plan\n\n1. Draft the rollout")).toBe(false);
+    const artifact = await database.getArtifactByTurnItem("plan", "turn-1", "plan-1");
+    expect(artifact?.artifactId).toBeTruthy();
+    expect(
+      miniAppTelegram.sentMessages.find((message) => message.text === "Plan ready. Open in Mini App.")?.options?.reply_markup
+    ).toEqual({
+      inline_keyboard: [[{ text: "Open plan", web_app: { url: `https://example.com/mini-app/plan?artifactId=${artifact?.artifactId}` } }]]
+    });
+  });
+
+  it("falls back to raw plan bubbles when the Mini App public URL is not https", async () => {
+    const invalidMiniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "http://example.com/mini-app",
+          apiPublicUrl: "https://api.example.com/mini-app",
+          bindHost: "127.0.0.1",
+          port: 0
+        }
+      }
+    };
+    const invalidMiniAppCodex = new FakeCodex();
+    const invalidMiniAppTelegram = new FakeTelegram();
+    const invalidMiniAppBridge = new TelegramCodexBridge(
+      invalidMiniAppConfig,
+      database,
+      invalidMiniAppTelegram,
+      invalidMiniAppCodex,
+      mediaStore
+    );
+
+    await invalidMiniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 788,
+      messageId: 301,
+      updateId: 401,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    invalidMiniAppCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: "1. Draft the rollout"
+        }
+      }
+    });
+    invalidMiniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(
+      invalidMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")
+    ).toHaveLength(1);
+    expect(
+      invalidMiniAppTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+    ).toBe(false);
+  });
+
+  it("falls back to raw plan bubbles when the Mini App API public URL is missing", async () => {
+    const missingApiUrlConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app",
+          apiPublicUrl: undefined,
+          bindHost: "127.0.0.1",
+          port: 0
+        }
+      }
+    };
+    const missingApiUrlCodex = new FakeCodex();
+    const missingApiUrlTelegram = new FakeTelegram();
+    const missingApiUrlBridge = new TelegramCodexBridge(
+      missingApiUrlConfig,
+      database,
+      missingApiUrlTelegram,
+      missingApiUrlCodex,
+      mediaStore
+    );
+
+    await missingApiUrlBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 788,
+      messageId: 302,
+      updateId: 402,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    missingApiUrlCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: "1. Draft the rollout"
+        }
+      }
+    });
+    missingApiUrlCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(
+      missingApiUrlTelegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")
+    ).toHaveLength(1);
+    expect(
+      missingApiUrlTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+    ).toBe(false);
   });
 
   it("does not resend commentary as a normal message after publishing completed plan artifacts", async () => {

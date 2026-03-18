@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { parseMarkdownToMdast } from "../src/markdown/ast";
 import { chunkFormattedText, prependText } from "../src/telegram-format/chunk";
 import { buildFormattedText, TelegramEntityBuilder } from "../src/telegram-format/entity-builder";
 import { boldFormattedText, renderLinkedText, renderSpoilerText } from "../src/telegram-format/formatters";
+import { renderMdastToFormattedText } from "../src/telegram-format/mdast";
 import { renderMarkdownToFormattedText } from "../src/telegram-format/markdown";
 import { renderPreformattedText, renderQuotedText } from "../src/telegram-format/preformatted";
 
@@ -57,6 +59,11 @@ describe("telegram-format", () => {
         }
       ]
     });
+  });
+
+  it("renders parsed mdast to the same Telegram output as the markdown convenience entrypoint", () => {
+    const markdown = "# Title\n\nUse **bold** with [docs](https://example.com).";
+    expect(renderMdastToFormattedText(parseMarkdownToMdast(markdown))).toEqual(renderMarkdownToFormattedText(markdown));
   });
 
   it("drops markdown links whose targets are not valid Telegram URLs", () => {

@@ -3,6 +3,7 @@ import type { MessageEntity } from "grammy/types";
 
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
+import { MARKDOWN_AST_VERSION, parseMarkdownToMdast, serializeMarkdownAst } from "../src/markdown/ast";
 import { TelegramMessenger, type TelegramApi } from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
 
@@ -140,6 +141,23 @@ function createHarness(
     runtime,
     messenger: new TelegramMessenger(telegram),
     telegram,
+    planArtifactPublicUrl: null,
+    upsertPlanArtifact: async ({ chatId, topicId, threadId, turnId, itemId, markdownText }) => ({
+      id: 1,
+      artifactId: `artifact:${turnId}:${itemId}`,
+      kind: "plan",
+      title: "Plan",
+      telegramChatId: String(chatId),
+      telegramTopicId: topicId,
+      codexThreadId: threadId,
+      codexTurnId: turnId,
+      itemId,
+      markdownText,
+      mdastJson: serializeMarkdownAst(parseMarkdownToMdast(markdownText)),
+      astVersion: MARKDOWN_AST_VERSION,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }),
     releaseTurnFiles: async (turnId) => {
       releasedTurnIds.push(turnId);
     },
@@ -245,7 +263,6 @@ describe("TurnLifecycleCoordinator", () => {
       id: "plan-1",
       text: ""
     });
-    await harness.coordinator.handlePlanDelta("turn-1", "plan-1", "Draft the rollout");
     await harness.coordinator.handleItemCompleted("turn-1", {
       type: "plan",
       id: "plan-1",

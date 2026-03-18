@@ -2,6 +2,7 @@ import type { UserInput } from "./generated/codex/v2/UserInput";
 
 export type SessionStatus = "provisioning" | "active" | "archived" | "errored";
 export type SessionMode = "default" | "plan";
+export type ArtifactKind = "plan";
 
 export type UserTurnInput =
   | Extract<UserInput, { type: "text" }>
@@ -57,6 +58,23 @@ export type PendingServerRequest = {
   stateJson: string | null;
   responseJson: string | null;
   status: "pending" | "resolved" | "expired";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ArtifactRecord = {
+  id: number;
+  artifactId: string;
+  kind: ArtifactKind;
+  title: string;
+  telegramChatId: string;
+  telegramTopicId: number;
+  codexThreadId: string;
+  codexTurnId: string;
+  itemId: string;
+  markdownText: string;
+  mdastJson: string;
+  astVersion: string;
   createdAt: string;
   updatedAt: string;
 };

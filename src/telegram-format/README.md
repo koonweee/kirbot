@@ -1,7 +1,7 @@
 # Telegram Format
 
-Kirbot's Telegram formatting layer converts Markdown or manual formatting inputs into plain text plus `MessageEntity[]`.
-It centralizes Markdown rendering, manual entity producers, UTF-16 offset handling, and entity-aware chunking for Telegram output.
+Kirbot's Telegram formatting layer converts parsed markdown AST or manual formatting inputs into plain text plus `MessageEntity[]`.
+It centralizes mdast-to-Telegram rendering, manual entity producers, UTF-16 offset handling, and entity-aware chunking for Telegram output.
 
 This README documents the formatting contract for this subsystem. For repo-wide
 architecture, onboarding, and flow behavior, use the docs in the repository

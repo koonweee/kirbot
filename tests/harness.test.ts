@@ -33,7 +33,7 @@ class ScriptedCodex implements BridgeCodexApi {
   #pendingThreadId: string | null = null;
 
   constructor(
-    private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" = "complete"
+    private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
   async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: null }> {
@@ -108,6 +108,43 @@ class ScriptedCodex implements BridgeCodexApi {
           }
         } as ServerRequest);
       }, 10);
+    } else if (this.behavior === "planArtifact") {
+      setTimeout(() => {
+        this.emitNotification({
+          method: "item/started",
+          params: {
+            threadId,
+            turnId,
+            item: {
+              type: "plan",
+              id: "plan-1",
+              text: ""
+            }
+          }
+        } as ServerNotification);
+        this.emitNotification({
+          method: "item/completed",
+          params: {
+            threadId,
+            turnId,
+            item: {
+              type: "plan",
+              id: "plan-1",
+              text: "1. Draft the rollout"
+            }
+          }
+        } as ServerNotification);
+        this.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: {
+              id: turnId,
+              status: "completed"
+            }
+          }
+        } as ServerNotification);
+      }, 0);
     } else {
       this.#pendingThreadId = threadId;
       this.#pendingTurnId = turnId;
@@ -408,6 +445,35 @@ describe("Telegram harness", () => {
     const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
     expect(footer).toBe("gpt-5-codex • <1s • 0 files • 30% left • /workspace • main");
   });
+
+  it("records Mini App buttons on plan artifact stubs", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
+    const config = createConfig(tempDir);
+    config.telegram.miniApp = {
+      publicUrl: "https://example.com/mini-app",
+      apiPublicUrl: "https://api.example.com/mini-app",
+      bindHost: "127.0.0.1",
+      port: 0
+    };
+    const harness = await createTelegramHarness({
+      config,
+      stateDir: tempDir,
+      codexApi: new ScriptedCodex("planArtifact")
+    });
+    harnesses.push(harness);
+
+    await harness.start();
+    await harness.sendRootText("Plan the rollout");
+    await harness.waitForIdle();
+
+    const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
+    const stub = topicMessages.find((message) => message.text === "Plan ready. Open in Mini App.");
+    const button = stub?.buttons?.[0]?.[0];
+    expect(button?.text).toBe("Open plan");
+    expect(button && "web_app" in button ? button.web_app.url : null).toMatch(
+      /^https:\/\/example\.com\/mini-app\/plan\?artifactId=/
+    );
+  });
 });
 
 async function buildHarness(codex: BridgeCodexApi): Promise<TelegramHarness> {
@@ -426,7 +492,13 @@ function createConfig(tempDir: string): AppConfig {
     telegram: {
       botToken: "token",
       userId: 42,
-      mediaTempDir: join(tempDir, "media")
+      mediaTempDir: join(tempDir, "media"),
+      miniApp: {
+        publicUrl: undefined,
+        apiPublicUrl: undefined,
+        bindHost: "127.0.0.1",
+        port: 8788
+      }
     },
     database: {
       path: join(tempDir, "bridge.sqlite")
