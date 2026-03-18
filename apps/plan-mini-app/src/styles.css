@@ -64,112 +64,32 @@ body::after {
 .shell {
   box-sizing: border-box;
   min-height: 100vh;
-  padding: 28px 18px;
+  padding: 24px 16px;
   display: grid;
-  place-items: center;
+  justify-items: center;
+  align-items: start;
 }
 
 .workspace {
-  position: relative;
   width: min(1080px, 100%);
-  border: 1px solid var(--line);
-  border-radius: 28px;
-  overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
-    var(--bg-elevated);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(24px);
   animation: workspace-in 520ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
-}
-
-.workspace::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at top right, rgba(255, 143, 196, 0.12), transparent 26%),
-    radial-gradient(circle at bottom left, rgba(110, 122, 255, 0.12), transparent 32%);
-  pointer-events: none;
-}
-
-.workspace-topbar {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 16px;
-  align-items: center;
-  padding: 14px 18px;
-  border-bottom: 1px solid rgba(142, 163, 201, 0.12);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent),
-    rgba(4, 8, 18, 0.72);
-}
-
-.window-controls {
-  display: inline-flex;
-  gap: 8px;
-}
-
-.window-controls span {
-  width: 11px;
-  height: 11px;
-  border-radius: 999px;
-  background: rgba(237, 242, 255, 0.18);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
-}
-
-.window-controls span:first-child {
-  background: rgba(255, 143, 196, 0.95);
-  box-shadow: 0 0 18px rgba(255, 143, 196, 0.35);
-}
-
-.window-controls span:nth-child(2) {
-  background: rgba(255, 195, 111, 0.85);
-}
-
-.window-controls span:nth-child(3) {
-  background: rgba(118, 213, 160, 0.85);
-}
-
-.workspace-path,
-.workspace-surface {
-  margin: 0;
-  font: 500 0.8rem/1.3 "Azeret Mono", "SFMono-Regular", monospace;
-  letter-spacing: 0.04em;
-}
-
-.workspace-path {
-  color: rgba(237, 242, 255, 0.78);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-surface {
-  justify-self: end;
-  color: var(--pink);
-  text-transform: uppercase;
+  padding: clamp(14px, 2vw, 22px) 0;
 }
 
 .workspace-body {
   position: relative;
-  z-index: 1;
-  padding: 30px;
 }
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
-  gap: 22px;
-  align-items: end;
-  margin-bottom: 22px;
+  gap: 14px;
+  margin-bottom: 20px;
 }
 
 .hero-copy {
   display: grid;
   gap: 10px;
+  max-width: 44rem;
 }
 
 .eyebrow {
@@ -194,57 +114,10 @@ h1 {
   font-size: 1rem;
 }
 
-.hero-meta {
-  display: grid;
-  gap: 12px;
-}
-
-.meta-panel {
-  position: relative;
-  overflow: hidden;
-  padding: 14px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  background:
-    linear-gradient(135deg, rgba(255, 143, 196, 0.08), transparent 58%),
-    var(--bg-panel-soft);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.meta-panel::before {
-  content: "";
-  position: absolute;
-  inset: auto 16px 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--pink-glow), transparent);
-}
-
-.meta-panel:nth-child(2) {
-  animation-delay: 90ms;
-}
-
-.meta-panel:nth-child(3) {
-  animation-delay: 180ms;
-}
-
-.meta-label {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--muted);
-  font: 500 0.72rem/1.2 "Azeret Mono", "SFMono-Regular", monospace;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.meta-panel strong {
-  font: 600 0.96rem/1.35 "Azeret Mono", "SFMono-Regular", monospace;
-  color: var(--text);
-}
-
 .plan-text {
   position: relative;
   margin: 0;
-  min-height: 340px;
+  min-height: min(58vh, 560px);
   padding: 28px;
   border: 1px solid var(--line);
   border-radius: 24px;
@@ -447,21 +320,12 @@ h1 {
 }
 
 @media (max-width: 860px) {
-  .workspace-topbar {
-    grid-template-columns: 1fr;
-    justify-items: start;
+  .shell {
+    padding: 18px 12px;
   }
 
-  .workspace-surface {
-    justify-self: start;
-  }
-
-  .workspace-body {
-    padding: 22px;
-  }
-
-  .hero {
-    grid-template-columns: 1fr;
+  .workspace {
+    padding: 10px 0;
   }
 }
 
@@ -471,21 +335,16 @@ h1 {
   }
 
   .workspace {
-    border-radius: 22px;
+    padding: 8px 0;
   }
 
-  .workspace-topbar {
-    gap: 10px;
-    padding: 12px 14px;
-  }
-
-  .workspace-body {
-    padding: 16px;
+  .hero {
+    margin-bottom: 16px;
   }
 
   .plan-text {
     min-height: 240px;
-    padding: 20px 16px;
+    padding: 18px 14px;
     border-radius: 20px;
   }
 
@@ -499,11 +358,36 @@ h1 {
   }
 
   .skeleton::after {
-    inset: 20px 16px 20px 42px;
+    inset: 18px 14px 18px 42px;
   }
 
   .plan-document h1::before,
   .plan-document h2::before {
     left: -0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: clamp(1.7rem, 10vw, 2.35rem);
+  }
+
+  .status {
+    font-size: 0.94rem;
+  }
+
+  .plan-document,
+  .error-copy {
+    padding-left: 34px;
+    font-size: 0.96rem;
+    line-height: 1.68;
+  }
+
+  .plan-text::before {
+    width: 24px;
+  }
+
+  .skeleton::after {
+    inset: 18px 14px 18px 36px;
   }
 }
