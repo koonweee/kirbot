@@ -7,13 +7,11 @@ import {
   buildPlanArtifactMessage,
   buildRenderedPlanMessages,
   buildOversizePlanArtifactMessage,
-  buildRenderedCommentaryMessage,
   buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
   isSameStatusDraft,
   renderTelegramAssistantDraft,
-  renderTelegramCommentaryDraft,
   renderTelegramStatusDraft,
   type TurnStatusDraft
 } from "./presentation";
@@ -73,7 +71,6 @@ export class TurnLifecycleCoordinator {
         topicId: message.topicId,
         draftId: buildStableDraftId(`${turnId}:final`)
       }),
-      commentaryStreams: new Map(),
       planStreams: new Map(),
       publishedPlanMessages: 0,
       model,
@@ -196,7 +193,7 @@ export class TurnLifecycleCoordinator {
   async updateStatus(
     turnId: string,
     statusDraft: TurnStatusDraft,
-    options?: { force?: boolean; preserveDetails?: boolean }
+    options?: { force?: boolean; preserveDetails?: boolean; preserveSnippet?: boolean }
   ): Promise<void> {
     const context = this.#turns.get(turnId);
     if (!context || context.phase !== "active") {
@@ -210,20 +207,10 @@ export class TurnLifecycleCoordinator {
       context.statusDraft.details
         ? { ...statusDraft, details: context.statusDraft.details }
         : statusDraft;
-    if (isSameStatusDraft(context.statusDraft, nextStatus)) {
-      return;
-    }
-
-    if (!options?.force && now - context.lastStatusUpdateAt < 500) {
-      return;
-    }
-
-    context.statusDraft = nextStatus;
-    context.lastStatusUpdateAt = now;
-    await context.statusHandle.set(
-      renderTelegramStatusDraft(nextStatus, Date.now() - context.startedAtMs),
-      options?.force ?? false
-    );
+    await this.setStatusDraft(context, {
+      ...nextStatus,
+      snippet: options?.preserveSnippet === false ? statusDraft.snippet : statusDraft.snippet ?? context.statusDraft?.snippet ?? null
+    }, now, options?.force ?? false);
   }
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
@@ -248,7 +235,9 @@ export class TurnLifecycleCoordinator {
     } else if (item.type === "plan") {
       this.deps.runtime.registerPlanItem(turnId, item.id);
     }
-    await this.updateStatus(turnId, buildStatusDraftForItem(item));
+    await this.updateStatus(turnId, buildStatusDraftForItem(item), {
+      preserveSnippet: !(item.type === "agentMessage" && item.phase !== "commentary")
+    });
   }
 
   async handlePlanUpdated(turnId: string, details: string | null): Promise<void> {
@@ -393,20 +382,13 @@ export class TurnLifecycleCoordinator {
     forceDraft = false
   ): Promise<void> {
     if (update.itemPhase === "commentary") {
-      const commentary = this.getOrCreateCommentaryStream(context, update.itemId);
-      commentary.text = update.itemText;
-      if (stage === "completed") {
-        await commentary.handle.finalize(buildRenderedCommentaryMessage(update.itemText));
-        context.commentaryStreams.delete(update.itemId);
-        return;
-      }
-
-      await commentary.handle.update(renderTelegramCommentaryDraft(update.itemText), forceDraft);
+      await this.updateCommentarySnippet(context.turnId, stage === "completed" ? null : update.commentarySnippet, forceDraft);
       return;
     }
 
     if (update.draftKind === "assistant") {
       await context.finalStream.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
+      await this.clearStatusDraft(context);
     }
   }
 
@@ -415,32 +397,57 @@ export class TurnLifecycleCoordinator {
     update: PlanRenderUpdate,
     stage: "delta" | "completed"
   ): Promise<void> {
-    if (stage !== "completed") {
+    void context;
+    void update;
+    void stage;
+  }
+
+  private async updateCommentarySnippet(turnId: string, snippet: string | null, force = false): Promise<void> {
+    const context = this.#turns.get(turnId);
+    if (!context || context.phase !== "active" || !context.statusDraft) {
       return;
     }
 
-    await this.publishCompletedPlan(context, {
-      itemId: update.itemId,
-      text: update.itemText
-    });
+    await this.setStatusDraft(
+      context,
+      {
+        ...context.statusDraft,
+        snippet
+      },
+      Date.now(),
+      force
+    );
   }
 
-  private getOrCreateCommentaryStream(context: TurnContext, itemId: string) {
-    const existing = context.commentaryStreams.get(itemId);
-    if (existing) {
-      return existing;
+  private async clearStatusDraft(context: TurnContext): Promise<void> {
+    if (!context.statusDraft) {
+      return;
     }
 
-    const created = {
-      handle: this.deps.messenger.streamMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        draftId: buildStableDraftId(`${context.turnId}:commentary:${itemId}`)
-      }),
-      text: ""
-    };
-    context.commentaryStreams.set(itemId, created);
-    return created;
+    context.statusDraft = null;
+    await context.statusHandle.clear();
+  }
+
+  private async setStatusDraft(
+    context: TurnContext,
+    nextStatus: TurnStatusDraft,
+    now: number,
+    force: boolean
+  ): Promise<void> {
+    if (isSameStatusDraft(context.statusDraft, nextStatus)) {
+      return;
+    }
+
+    if (!force && now - context.lastStatusUpdateAt < 500) {
+      return;
+    }
+
+    context.statusDraft = nextStatus;
+    context.lastStatusUpdateAt = now;
+    await context.statusHandle.set(
+      renderTelegramStatusDraft(nextStatus, Date.now() - context.startedAtMs),
+      force
+    );
   }
 
   private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {

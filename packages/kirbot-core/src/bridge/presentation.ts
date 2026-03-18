@@ -4,15 +4,14 @@ import {
   chunkFormattedText,
   prependText,
   renderMarkdownToFormattedText,
-  renderPreformattedText,
-  renderQuotedText
+  renderPreformattedText
 } from "@kirbot/telegram-format";
 import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
 import {
   buildMiniAppArtifactUrl,
   MiniAppArtifactType,
-  type MiniAppPlanArtifact
+  type MiniAppArtifact
 } from "../mini-app/url";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
@@ -35,6 +34,7 @@ export type TurnStatusDraft = {
   state: TurnStatusState;
   emoji: string;
   details: string | null;
+  snippet: string | null;
 };
 
 export type CompletionFooterDetails = {
@@ -61,30 +61,34 @@ export function buildStableDraftId(seed: string): number {
   return (hash >>> 1) || 1;
 }
 
-export function buildStatusDraft(state: TurnStatusState, details: string | null = null): TurnStatusDraft {
+export function buildStatusDraft(
+  state: TurnStatusState,
+  details: string | null = null,
+  snippet: string | null = null
+): TurnStatusDraft {
   switch (state) {
     case "thinking":
-      return { state, emoji: "🤔", details };
+      return { state, emoji: "🤔", details, snippet };
     case "planning":
-      return { state, emoji: "🗺️", details };
+      return { state, emoji: "🗺️", details, snippet };
     case "using tool":
-      return { state, emoji: "🛠️", details };
+      return { state, emoji: "🛠️", details, snippet };
     case "running":
-      return { state, emoji: "💻", details };
+      return { state, emoji: "💻", details, snippet };
     case "editing":
-      return { state, emoji: "✏️", details };
+      return { state, emoji: "✏️", details, snippet };
     case "searching":
-      return { state, emoji: "🔎", details };
+      return { state, emoji: "🔎", details, snippet };
     case "streaming":
-      return { state, emoji: "✍️", details };
+      return { state, emoji: "✍️", details, snippet };
     case "waiting":
-      return { state, emoji: "⏸️", details };
+      return { state, emoji: "⏸️", details, snippet };
     case "done":
-      return { state, emoji: "✅", details };
+      return { state, emoji: "✅", details, snippet };
     case "failed":
-      return { state, emoji: "❌", details };
+      return { state, emoji: "❌", details, snippet };
     case "interrupted":
-      return { state, emoji: "⏹️", details };
+      return { state, emoji: "⏹️", details, snippet };
   }
 }
 
@@ -112,7 +116,12 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
 }
 
 export function isSameStatusDraft(left: TurnStatusDraft | null, right: TurnStatusDraft | null): boolean {
-  return left?.state === right?.state && left?.emoji === right?.emoji && left?.details === right?.details;
+  return (
+    left?.state === right?.state &&
+    left?.emoji === right?.emoji &&
+    left?.details === right?.details &&
+    left?.snippet === right?.snippet
+  );
 }
 
 export function renderQueuePreview(queueState: QueueStateSnapshot): string | null {
@@ -173,12 +182,35 @@ export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
   return renderMarkdownToFormattedText(buildPlanPreviewText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT)));
 }
 
-export function renderTelegramCommentaryDraft(text: string): TelegramRenderedMessage {
-  return renderQuotedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT));
+export function buildRenderedCommentaryMessages(items: string[]): TelegramRenderedMessage[] {
+  if (items.length === 0) {
+    return [];
+  }
+
+  return buildHeaderedMarkdownMessages(buildCommentaryMarkdown(items), "Commentary");
 }
 
-export function buildRenderedCommentaryMessage(text: string): TelegramRenderedMessage {
-  return renderQuotedText(buildCommentaryDraftPreviewWithLimit(text, TELEGRAM_MESSAGE_CHAR_LIMIT));
+export function buildCommentaryArtifactMessage(publicUrl: string, items: string[]): {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+} {
+  return buildMarkdownArtifactMessage({
+    publicUrl,
+    artifact: {
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: buildCommentaryMarkdown(items)
+    },
+    text: "Commentary ready. Open in Mini App.",
+    buttonText: "Open commentary"
+  });
+}
+
+export function buildOversizeCommentaryArtifactMessage(): { text: string } {
+  return {
+    text: "Commentary ready, but too large for Mini App link."
+  };
 }
 
 export function buildRenderedCompletionFooter(details: CompletionFooterDetails): TelegramRenderedMessage {
@@ -197,18 +229,17 @@ export function buildPlanArtifactMessage(publicUrl: string, markdownText: string
   text: string;
   replyMarkup: InlineKeyboardMarkup;
 } {
-  const artifact: MiniAppPlanArtifact = {
-    v: 1,
-    type: MiniAppArtifactType.Plan,
-    title: "Plan",
-    markdownText
-  };
-  return {
+  return buildMarkdownArtifactMessage({
+    publicUrl,
+    artifact: {
+      v: 1,
+      type: MiniAppArtifactType.Plan,
+      title: "Plan",
+      markdownText
+    },
     text: "Plan is ready",
-    replyMarkup: {
-      inline_keyboard: [[{ text: "Open plan", web_app: { url: buildMiniAppArtifactUrl(publicUrl, artifact) } }]]
-    }
-  };
+    buttonText: "Open plan"
+  });
 }
 
 export function buildOversizePlanArtifactMessage(): { text: string } {
@@ -223,6 +254,23 @@ export function buildRenderedAssistantMessages(text: string): TelegramRenderedMe
 
 function buildHeaderedMarkdownMessages(text: string, header?: string): TelegramRenderedMessage[] {
   return buildHeaderedFormattedMessages(renderMarkdownToFormattedText(text), header);
+}
+
+function buildMarkdownArtifactMessage(input: {
+  publicUrl: string;
+  artifact: MiniAppArtifact;
+  text: string;
+  buttonText: string;
+}): {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+} {
+  return {
+    text: input.text,
+    replyMarkup: {
+      inline_keyboard: [[{ text: input.buttonText, web_app: { url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) } }]]
+    }
+  };
 }
 
 function buildHeaderedFormattedMessages(formatted: TelegramRenderedMessage, header?: string): TelegramRenderedMessage[] {
@@ -265,12 +313,12 @@ function buildDraftPreviewWithLimit(text: string, limit: number): string {
   return buildTruncatedPreview(text, limit, "…\n", "\n\n[preview truncated]");
 }
 
-function buildCommentaryDraftPreviewWithLimit(text: string, limit: number): string {
-  return buildTruncatedPreview(text, limit, "...\n", "\n\n[commentary truncated]");
-}
-
 function buildPlanPreviewText(text: string): string {
   return `Plan\n\n${text}`;
+}
+
+function buildCommentaryMarkdown(items: string[]): string {
+  return items.map((item) => buildFencedCodeBlock(item)).join("\n\n");
 }
 
 function buildTruncatedPreview(text: string, limit: number, prefix: string, suffix: string): string {
@@ -295,7 +343,9 @@ function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null)
     parts.push(formatElapsedDuration(elapsedMs));
   }
 
-  return parts.join(" · ");
+  const firstLine = parts.join(" · ");
+  const snippet = buildStatusSnippet(statusDraft.snippet);
+  return snippet ? `${firstLine}\nNow: ${snippet}` : firstLine;
 }
 
 function buildCompletionFooterText(details: CompletionFooterDetails): string {
@@ -331,6 +381,42 @@ function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = fals
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function buildStatusSnippet(text: string | null): string | null {
+  if (!text) {
+    return null;
+  }
+
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function buildFencedCodeBlock(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const fenceLength = Math.max(3, getLongestBacktickRun(normalized) + 1);
+  const fence = "`".repeat(fenceLength);
+  return `${fence}\n${normalized}\n${fence}`;
+}
+
+function getLongestBacktickRun(text: string): number {
+  let longest = 0;
+  let current = 0;
+
+  for (const char of text) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+    } else {
+      current = 0;
+    }
+  }
+
+  return longest;
 }
 
 function shortenHomePath(value: string | null): string {

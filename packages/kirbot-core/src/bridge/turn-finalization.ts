@@ -1,8 +1,9 @@
 import type { UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
+  buildRenderedCommentaryMessages,
+  buildCommentaryArtifactMessage,
   buildRenderedPlanMessages,
-  buildRenderedCommentaryMessage,
   buildRenderedCompletionFooter,
   type CompletionFooterDetails
 } from "./presentation";
@@ -82,17 +83,21 @@ export class TurnFinalizer {
     }
 
     await this.beginFinalization(context);
+    const commentaryItems = this.deps.runtime.renderCommentaryItems(context.turnId);
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
+    await this.publishCommentary(context, commentaryItems);
+    const publishedPlanMessageId =
+      snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
+        ? await this.callbacks.publishCompletedPlan(context, {
+            itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
+            text: snapshot.planText
+          })
+        : null;
     const finalText = policy.buildFinalText(snapshot.text);
     const hasAssistantText = snapshot.assistantText.trim().length > 0;
     const messageId =
       policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0
-        ? context.publishedPlanMessages > 0
-          ? null
-          : await this.callbacks.publishCompletedPlan(context, {
-              itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
-              text: snapshot.planText
-            })
+        ? publishedPlanMessageId
         : finalText.trim().length > 0 || policy.publishWhenEmpty
           ? await this.publishFinalTurnText(context, finalText, hasAssistantText ? "assistant" : "plan")
           : null;
@@ -153,15 +158,6 @@ export class TurnFinalizer {
     context.statusDraft = null;
     await context.statusHandle.clear();
 
-    for (const [itemId, commentary] of context.commentaryStreams) {
-      if (commentary.text.trim().length > 0) {
-        await commentary.handle.finalize(buildRenderedCommentaryMessage(commentary.text));
-      } else {
-        await commentary.handle.clear();
-      }
-      context.commentaryStreams.delete(itemId);
-    }
-
     for (const [itemId, plan] of context.planStreams) {
       if (plan.text.trim().length > 0) {
         await plan.handle.clear();
@@ -190,6 +186,33 @@ export class TurnFinalizer {
     }
 
     return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
+  }
+
+  private async publishCommentary(context: TurnContext, items: string[]): Promise<void> {
+    if (items.length === 0) {
+      return;
+    }
+
+    const renderedMessages = buildRenderedCommentaryMessages(items);
+    if (renderedMessages.length <= 1 || !this.deps.planArtifactPublicUrl) {
+      await this.sendRenderedMessages(context.chatId, context.topicId, renderedMessages);
+      return;
+    }
+
+    try {
+      await this.deps.messenger.sendMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        ...buildCommentaryArtifactMessage(this.deps.planArtifactPublicUrl, items)
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
+        await this.sendRenderedMessages(context.chatId, context.topicId, renderedMessages);
+        return;
+      }
+
+      throw error;
+    }
   }
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {
