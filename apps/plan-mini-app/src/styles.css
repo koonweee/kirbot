@@ -14,6 +14,8 @@
   --pink-soft: rgba(255, 143, 196, 0.14);
   --pink-glow: rgba(255, 143, 196, 0.32);
   --shadow: 0 36px 120px rgba(1, 4, 12, 0.64);
+  --artifact-card-pad-x: 28px;
+  --artifact-card-pad-y: 28px;
 }
 
 html,
@@ -84,6 +86,7 @@ body::after {
   display: grid;
   gap: 8px;
   margin-bottom: 16px;
+  padding-inline: var(--artifact-card-pad-x);
 }
 
 .hero-copy {
@@ -115,7 +118,7 @@ body::after {
   position: relative;
   margin: 0;
   min-height: min(58vh, 560px);
-  padding: 28px;
+  padding: var(--artifact-card-pad-y) var(--artifact-card-pad-x);
   border: 1px solid var(--line);
   border-radius: 24px;
   background:
@@ -313,6 +316,11 @@ body::after {
 }
 
 @media (max-width: 640px) {
+  :root {
+    --artifact-card-pad-x: 14px;
+    --artifact-card-pad-y: 18px;
+  }
+
   .shell {
     padding: 14px 10px;
   }
@@ -327,7 +335,6 @@ body::after {
 
   .plan-text {
     min-height: 240px;
-    padding: 18px 14px;
     border-radius: 20px;
   }
 
