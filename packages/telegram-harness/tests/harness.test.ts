@@ -466,7 +466,7 @@ describe("Telegram harness", () => {
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
     const stub = topicMessages.find((message) => message.text === "Plan is ready");
     const button = stub?.buttons?.[0]?.[0];
-    expect(button?.text).toBe("View plan");
+    expect(button?.text).toBe("Plan");
     expect(button && "web_app" in button ? button.web_app.url : null).toMatch(/^https:\/\/example\.com\/mini-app\/plan#d=/);
   });
 });

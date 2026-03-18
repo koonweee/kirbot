@@ -27,6 +27,7 @@ const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
 const TELEGRAM_STATUS_QUOTE_PREVIEW_CHAR_LIMIT = 280;
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
 const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
+export const TOPIC_IMPLEMENT_CALLBACK_DATA = "topic:implement";
 
 export type TurnStatusState =
   | "thinking"
@@ -108,21 +109,71 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
     case "reasoning":
       return buildStatusDraft("thinking");
     case "commandExecution":
-      return buildStatusDraft("running", item.command);
+      return buildStatusDraft("running", null, item.command);
     case "fileChange":
-      return buildStatusDraft("editing", summarizeFileChanges(item.changes));
+      return buildStatusDraft("editing", null, summarizeFileChanges(item.changes));
     case "plan":
       return buildStatusDraft("planning");
     case "mcpToolCall":
-      return buildStatusDraft("using tool", `${item.server}.${item.tool}`);
+      return buildStatusDraft("using tool", null, `${item.server}.${item.tool}`);
     case "dynamicToolCall":
-      return buildStatusDraft("using tool", item.tool);
+      return buildStatusDraft("using tool", null, item.tool);
     case "collabAgentToolCall":
-      return buildStatusDraft("using tool", item.tool);
+      return buildStatusDraft("using tool", null, item.tool);
     case "webSearch":
       return buildStatusDraft("searching", item.query);
     default:
       return buildStatusDraft("thinking");
+  }
+}
+
+export function buildCompletedStatusDraftForItem(item: ThreadItem): TurnStatusDraft | null {
+  switch (item.type) {
+    case "commandExecution":
+      return buildStatusDraft("done", null, item.command);
+    case "fileChange":
+      return buildStatusDraft("done", null, summarizeFileChanges(item.changes));
+    case "mcpToolCall":
+      return buildStatusDraft("done", null, `${item.server}.${item.tool}`);
+    case "dynamicToolCall":
+      return buildStatusDraft("done", null, item.tool);
+    case "collabAgentToolCall":
+      return buildStatusDraft("done", null, item.tool);
+    case "webSearch":
+      return buildStatusDraft("done", null, item.query);
+    case "imageView":
+      return buildStatusDraft("done", null, basename(item.path) || item.path);
+    case "imageGeneration":
+      return isImageGenerationSuccess(item) ? buildStatusDraft("done", null, "image generated") : null;
+    case "enteredReviewMode": {
+      const review = item.review.trim();
+      return buildStatusDraft("done", null, review ? `review mode: ${review}` : "review mode");
+    }
+    case "exitedReviewMode": {
+      const review = item.review.trim();
+      return buildStatusDraft("done", null, review ? `exited review mode: ${review}` : "exited review mode");
+    }
+    case "contextCompaction":
+      return buildStatusDraft("done", null, "context compacted");
+    default:
+      return null;
+  }
+}
+
+export function isDurableCompletedItem(item: ThreadItem): boolean {
+  switch (item.type) {
+    case "commandExecution":
+      return isCommandExecutionFailed(item);
+    case "fileChange":
+      return item.status !== "completed";
+    case "mcpToolCall":
+    case "dynamicToolCall":
+    case "collabAgentToolCall":
+      return item.status === "failed";
+    case "imageGeneration":
+      return !isImageGenerationSuccess(item);
+    default:
+      return false;
   }
 }
 
@@ -248,7 +299,7 @@ export function buildCommentaryArtifactButton(publicUrl: string, items: string[]
       title: "Commentary",
       markdownText: buildCommentaryMarkdown(items)
     },
-    buttonText: "View commentary"
+    buttonText: "Commentary"
   });
 }
 
@@ -261,7 +312,7 @@ export function buildResponseArtifactButton(publicUrl: string, markdownText: str
       title: "Response",
       markdownText
     },
-    buttonText: "View response"
+    buttonText: "Response"
   });
 }
 
@@ -327,8 +378,12 @@ export function buildPlanArtifactMessage(publicUrl: string, markdownText: string
           title: "Plan",
           markdownText
         },
-        buttonText: "View plan"
-      })
+        buttonText: "Plan"
+      }),
+      {
+        text: "Implement",
+        callback_data: TOPIC_IMPLEMENT_CALLBACK_DATA
+      }
     ])
   };
 }
@@ -412,47 +467,18 @@ function buildRenderedStatusText(
   statusDraft: TurnStatusDraft,
   elapsedMs: number | null
 ): TelegramRenderedMessage {
-  const inlineDetails = buildInlineStatusDetails(statusDraft);
   const quotedDetails = buildQuotedStatusDetails(statusDraft);
+  const text = buildStatusText(statusDraft, elapsedMs);
 
-  if (!inlineDetails || !shouldRenderStatusDetailsAsCode(statusDraft.state)) {
-    const text = buildStatusText(statusDraft, elapsedMs);
-    if (!quotedDetails) {
-      return { text };
-    }
-
-    const builder = new TelegramEntityBuilder();
-    builder.appendText(text);
-    builder.appendText("\n\n");
-    builder.appendFormatted(renderQuotedText(quotedDetails, { kind: "blockquote" }));
-    return builder.build();
+  if (!quotedDetails) {
+    return { text };
   }
 
   const builder = new TelegramEntityBuilder();
-  builder.appendText(`${statusDraft.state}: `);
-  builder.appendFormatted(renderCodeText(inlineDetails));
-
-  if (elapsedMs !== null) {
-    builder.appendText(` · ${formatElapsedDuration(elapsedMs)}`);
-  }
-
-  if (quotedDetails) {
-    builder.appendText("\n\n");
-    builder.appendFormatted(renderQuotedText(quotedDetails, { kind: "blockquote" }));
-  }
-
+  builder.appendText(text);
+  builder.appendText("\n\n");
+  builder.appendFormatted(renderQuotedText(quotedDetails, { kind: "blockquote" }));
   return builder.build();
-}
-
-function shouldRenderStatusDetailsAsCode(state: TurnStatusState): boolean {
-  switch (state) {
-    case "running":
-    case "editing":
-    case "using tool":
-      return true;
-    default:
-      return false;
-  }
 }
 
 function buildCompletionFooterText(details: CompletionFooterDetails): string {

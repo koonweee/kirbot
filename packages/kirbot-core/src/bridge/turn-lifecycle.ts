@@ -4,12 +4,14 @@ import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadI
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
 import {
+  buildCompletedStatusDraftForItem,
   buildPlanArtifactMessage,
   buildRenderedCompletedItemMessage,
   buildOversizePlanArtifactMessage,
   buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
+  isDurableCompletedItem,
   isSameStatusDraft,
   renderTelegramAssistantDraft,
   renderTelegramStatusDraft,
@@ -224,8 +226,12 @@ export class TurnLifecycleCoordinator {
     const nextStatus =
       options?.preserveDetails &&
       context.statusDraft?.state === statusDraft.state &&
-      context.statusDraft.inlineDetails
-        ? { ...statusDraft, inlineDetails: context.statusDraft.inlineDetails }
+      (context.statusDraft.inlineDetails || context.statusDraft.quotedDetails)
+        ? {
+            ...statusDraft,
+            inlineDetails: context.statusDraft.inlineDetails,
+            quotedDetails: context.statusDraft.quotedDetails
+          }
         : statusDraft;
     await this.setStatusDraft(context, nextStatus, now, options?.force ?? false);
   }
@@ -412,6 +418,14 @@ export class TurnLifecycleCoordinator {
       context.compactionNoticeSent = true;
     }
 
+    if (!isDurableCompletedItem(item)) {
+      const statusDraft = buildCompletedStatusDraftForItem(item);
+      if (statusDraft) {
+        await this.setStatusDraft(context, statusDraft, Date.now(), true);
+      }
+      return;
+    }
+
     const rendered = buildRenderedCompletedItemMessage(item);
     if (!rendered) {
       return;
@@ -529,10 +543,6 @@ export class TurnLifecycleCoordinator {
     if (nextStatus.state !== "thinking") {
       context.reasoningSummary = null;
       context.reasoningFallback = null;
-      nextStatus = {
-        ...nextStatus,
-        quotedDetails: null
-      };
     } else if (!nextStatus.quotedDetails && context.reasoningSummary?.text) {
       nextStatus = {
         ...nextStatus,

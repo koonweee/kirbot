@@ -22,7 +22,8 @@ import {
   buildRenderedInitialPromptMessage,
   buildQueuePreviewKeyboard,
   deriveTopicTitle,
-  renderQueuePreview
+  renderQueuePreview,
+  TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "./bridge/presentation";
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
@@ -196,9 +197,26 @@ export class TelegramCodexBridge {
       return;
     }
 
+    if (event.data === TOPIC_IMPLEMENT_CALLBACK_DATA) {
+      await this.handleTopicImplementCallbackQuery(event);
+      return;
+    }
+
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
       text: "Unsupported callback."
     });
+  }
+
+  private async handleTopicImplementCallbackQuery(event: CallbackQueryEvent): Promise<void> {
+    if (event.topicId === null) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "This action requires a topic."
+      });
+      return;
+    }
+
+    await this.telegram.answerCallbackQuery(event.callbackQueryId);
+    await this.implementLatestPlan(buildSyntheticCallbackMessage(event, "/implement"), "");
   }
 
   private async handleTurnCallbackQuery(event: CallbackQueryEvent): Promise<void> {
@@ -1275,6 +1293,24 @@ function buildPlanStatusDetails(
 
   const activeStep = plan.find((step) => step.status === "inProgress");
   return activeStep?.step ?? null;
+}
+
+function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string): UserTurnMessage {
+  return {
+    chatId: event.chatId,
+    topicId: event.topicId,
+    messageId: 0,
+    updateId: 0,
+    userId: event.userId,
+    text,
+    input: [
+      {
+        type: "text",
+        text,
+        text_elements: []
+      }
+    ]
+  };
 }
 
 function topicKey(chatId: number, topicId: number): string {

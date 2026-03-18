@@ -53,7 +53,7 @@ stays readable.
 `commentary block` / `commentary message`
 
 The Telegram affordance that exposes commentary. When Mini App support is
-configured, this is usually a `View commentary` Mini App button on the
+configured, this is usually a `Commentary` Mini App button on the
 following assistant message. If no assistant message follows, kirbot can send a
 compact commentary stub instead.
 

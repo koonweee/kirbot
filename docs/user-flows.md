@@ -56,10 +56,10 @@ User experience:
 - When Codex emits reasoning summaries, kirbot can surface the latest summary in
   the live thinking status as a quoted preview under the status line.
 - Commentary, plan text, and final assistant output are treated differently so Telegram stays readable.
-- Final assistant output is published as a single Telegram message with a `View response` Mini App button, and oversized messages are truncated with a note to continue in View.
-- When commentary also exists, the same assistant message gets a second `View commentary` button. If no assistant message follows, commentary is exposed through a compact stub instead.
+- Final assistant output is published as a single Telegram message with a `Response` Mini App button, and oversized messages are truncated with a note to continue in View.
+- When commentary also exists, the same assistant message gets a second `Commentary` button. If no assistant message follows, commentary is exposed through a compact stub instead.
 - In-progress planning stays in the status path; kirbot no longer streams partial plan text into Telegram bubbles.
-- When the final plan item completes, kirbot posts a compact Telegram stub with a `View plan` button whose URL contains the typed plan payload.
+- When the final plan item completes, kirbot posts a compact Telegram stub with `Plan` and `Implement` actions so the user can inspect the plan or immediately start implementation in the same topic.
 - When the turn finishes, kirbot clears drafts, sends durable final messages, and posts a completion footer with execution context.
 
 Owned by:

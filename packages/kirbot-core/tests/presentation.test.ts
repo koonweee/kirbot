@@ -1,43 +1,49 @@
 import { describe, expect, it } from "vitest";
 
-import { buildStatusDraft, renderTelegramStatusDraft } from "../src/bridge/presentation";
+import {
+  buildPlanArtifactMessage,
+  buildStatusDraft,
+  renderTelegramStatusDraft,
+  TOPIC_IMPLEMENT_CALLBACK_DATA
+} from "../src/bridge/presentation";
+import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 
 describe("status presentation", () => {
-  it("renders command status details as inline code", () => {
-    expect(renderTelegramStatusDraft(buildStatusDraft("running", "npm test"), 2000)).toEqual({
-      text: "running: npm test · 2s",
+  it("renders command status details as a quoted second line", () => {
+    expect(renderTelegramStatusDraft(buildStatusDraft("running", null, "npm test"), 2000)).toEqual({
+      text: "running · 2s\n\nnpm test",
       entities: [
         {
-          type: "code",
-          offset: "running: ".length,
+          type: "blockquote",
+          offset: "running · 2s\n\n".length,
           length: "npm test".length
         }
       ]
     });
   });
 
-  it("renders editing status details as inline code", () => {
+  it("renders editing status details as a quoted second line", () => {
     const path = "packages/kirbot-core/src/bridge/presentation.ts";
 
-    expect(renderTelegramStatusDraft(buildStatusDraft("editing", path), 3000)).toEqual({
-      text: `editing: ${path} · 3s`,
+    expect(renderTelegramStatusDraft(buildStatusDraft("editing", null, path), 3000)).toEqual({
+      text: `editing · 3s\n\n${path}`,
       entities: [
         {
-          type: "code",
-          offset: "editing: ".length,
+          type: "blockquote",
+          offset: "editing · 3s\n\n".length,
           length: path.length
         }
       ]
     });
   });
 
-  it("renders tool status details as inline code", () => {
-    expect(renderTelegramStatusDraft(buildStatusDraft("using tool", "web.search"), 1000)).toEqual({
-      text: "using tool: web.search · 1s",
+  it("renders tool status details as a quoted second line", () => {
+    expect(renderTelegramStatusDraft(buildStatusDraft("using tool", null, "web.search"), 1000)).toEqual({
+      text: "using tool · 1s\n\nweb.search",
       entities: [
         {
-          type: "code",
-          offset: "using tool: ".length,
+          type: "blockquote",
+          offset: "using tool · 1s\n\n".length,
           length: "web.search".length
         }
       ]
@@ -68,6 +74,31 @@ describe("status presentation", () => {
           length: summary.length
         }
       ]
+    });
+  });
+});
+
+describe("plan artifact presentation", () => {
+  it("renders view and implement buttons on completed plan stubs", () => {
+    const message = buildPlanArtifactMessage("https://example.com/mini-app", "1. Draft the rollout");
+    const [viewButton, implementButton] = message.replyMarkup.inline_keyboard[0] ?? [];
+
+    expect(message.text).toBe("Plan is ready");
+    expect(viewButton && "web_app" in viewButton ? viewButton.text : null).toBe("Plan");
+    expect(implementButton && "callback_data" in implementButton ? implementButton : null).toEqual({
+      text: "Implement",
+      callback_data: TOPIC_IMPLEMENT_CALLBACK_DATA
+    });
+
+    const url = viewButton && "web_app" in viewButton ? viewButton.web_app.url : null;
+    expect(url).toBeTruthy();
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(encoded).toBeTruthy();
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Plan,
+      title: "Plan",
+      markdownText: "1. Draft the rollout"
     });
   });
 });

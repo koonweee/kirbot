@@ -4,6 +4,7 @@ import type { MessageEntity } from "grammy/types";
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
+import { TOPIC_IMPLEMENT_CALLBACK_DATA } from "../src/bridge/presentation";
 import { TelegramMessenger, type TelegramApi } from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
 
@@ -52,14 +53,18 @@ function getWebAppUrlByButtonText(
   );
 }
 
-function codeEntity(text: string, offset = 0): MessageEntity[] {
-  return [
-    {
-      type: "code",
-      offset,
-      length: text.length
-    }
-  ];
+function getCallbackDataByButtonText(
+  entry: { options?: Record<string, unknown> } | undefined,
+  buttonText: string
+): string | null {
+  return (
+    ((entry?.options?.reply_markup as {
+      inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+    } | undefined)
+      ?.inline_keyboard?.flat()
+      .find((button) => button.text === buttonText)
+      ?.callback_data ?? null)
+  );
 }
 
 class FakeTelegram implements TelegramApi {
@@ -310,8 +315,10 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const stub = telegram.sentMessages.find((entry) => entry.text.startsWith("Plan"));
-    const url = getWebAppUrlByButtonText(stub, "View plan");
+    expect(getInlineButtonTexts(stub)).toEqual(["Plan", "Implement"]);
+    const url = getWebAppUrlByButtonText(stub, "Plan");
     expect(url).toBeTruthy();
+    expect(getCallbackDataByButtonText(stub, "Implement")).toBe(TOPIC_IMPLEMENT_CALLBACK_DATA);
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(encoded).toBeTruthy();
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
@@ -361,8 +368,8 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(telegram.sentMessages.some((entry) => entry.text.startsWith("Commentary"))).toBe(false);
     const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
-    expect(getInlineButtonTexts(finalAnswer)).toEqual(["View response", "View commentary"]);
-    const responseUrl = getWebAppUrlByButtonText(finalAnswer, "View response");
+    expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response", "Commentary"]);
+    const responseUrl = getWebAppUrlByButtonText(finalAnswer, "Response");
     const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
     expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
       v: 1,
@@ -370,7 +377,7 @@ describe("TurnLifecycleCoordinator", () => {
       title: "Response",
       markdownText: "Final answer"
     });
-    const url = getWebAppUrlByButtonText(finalAnswer, "View commentary");
+    const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -428,8 +435,8 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available.");
-    expect(getInlineButtonTexts(stub)).toEqual(["View commentary"]);
-    const url = getWebAppUrlByButtonText(stub, "View commentary");
+    expect(getInlineButtonTexts(stub)).toEqual(["Commentary"]);
+    const url = getWebAppUrlByButtonText(stub, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -582,17 +589,17 @@ describe("TurnLifecycleCoordinator", () => {
         exitCode: null,
         durationMs: null
       });
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 2s");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s\n\nnpm test");
       expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
         {
-          type: "code",
-          offset: 9,
+          type: "blockquote",
+          offset: "running · 2s\n\n".length,
           length: "npm test".length
         }
       ]);
 
       await vi.advanceTimersByTimeAsync(1000);
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 3s");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 3s\n\nnpm test");
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
     } finally {
@@ -664,7 +671,7 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nUse the summary instead.");
   });
 
-  it("publishes compact completion notices for command and file items", async () => {
+  it("keeps successful command and file completions transient", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
@@ -690,22 +697,34 @@ describe("TurnLifecycleCoordinator", () => {
       ]
     });
 
-    expect(harness.telegram.sentMessages[0]).toMatchObject({
-      text: "Command completed: npm test",
-      options: { entities: codeEntity("npm test", "Command completed: ".length) }
-    });
-    expect(harness.telegram.sentMessages[1]).toMatchObject({
-      text: "Applied file changes: src/app.ts, src/server.ts",
+    expect(harness.telegram.sentMessages).toEqual([]);
+    expect(harness.telegram.drafts.at(-2)).toMatchObject({
+      text: "done · 0s\n\nnpm test",
       options: {
         entities: [
-          ...codeEntity("src/app.ts", "Applied file changes: ".length),
-          ...codeEntity("src/server.ts", "Applied file changes: src/app.ts, ".length)
+          {
+            type: "blockquote",
+            offset: "done · 0s\n\n".length,
+            length: "npm test".length
+          }
+        ]
+      }
+    });
+    expect(harness.telegram.drafts.at(-1)).toMatchObject({
+      text: "done · 0s\n\nsrc/app.ts, src/server.ts",
+      options: {
+        entities: [
+          {
+            type: "blockquote",
+            offset: "done · 0s\n\n".length,
+            length: "src/app.ts, src/server.ts".length
+          }
         ]
       }
     });
   });
 
-  it("publishes completion notices for remaining thread item kinds", async () => {
+  it("keeps successful item completions transient but still publishes failures durably", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
@@ -779,20 +798,31 @@ describe("TurnLifecycleCoordinator", () => {
       id: "compact-2"
     });
 
-    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual([
-      "Tool completed: github.search",
-      "Tool failed: lookup_docs",
-      "Agent task updated: spawnAgent",
-      "Web search completed: kirbot issues",
-      "Viewed image: error.png",
-      "Image generated.",
-      "Entered review mode: Security review",
-      "Exited review mode.",
-      "Context compacted."
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed: lookup_docs"]);
+    expect(harness.telegram.drafts.map((entry) => entry.text)).toEqual([
+      "done · 0s\n\ngithub.search",
+      "done · 0s\n\nspawnAgent",
+      "done · 0s\n\nkirbot issues",
+      "done · 0s\n\nerror.png",
+      "done · 0s\n\nimage generated",
+      "done · 0s\n\nreview mode: Security review",
+      "done · 0s\n\nexited review mode",
+      "done · 0s\n\ncontext compacted"
     ]);
-    expect(harness.telegram.sentMessages[4]?.options?.entities).toEqual(
-      codeEntity("error.png", "Viewed image: ".length)
-    );
+    expect(harness.telegram.drafts[0]?.options?.entities).toEqual([
+      {
+        type: "blockquote",
+        offset: "done · 0s\n\n".length,
+        length: "github.search".length
+      }
+    ]);
+    expect(harness.telegram.drafts[3]?.options?.entities).toEqual([
+      {
+        type: "blockquote",
+        offset: "done · 0s\n\n".length,
+        length: "error.png".length
+      }
+    ]);
   });
 
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
