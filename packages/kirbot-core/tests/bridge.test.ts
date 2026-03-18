@@ -3704,6 +3704,33 @@ describe("TelegramCodexBridge", () => {
     expect(resolved.responseJson).toBe("{}");
   });
 
+  it("surfaces thread compaction as a durable Telegram message", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "Inspect the long thread"
+    });
+
+    codex.emitNotification({
+      method: "thread/compacted",
+      params: {
+        threadId: "thread-1"
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.at(-1)).toMatchObject({
+      chatId: -1001,
+      text: "Context compacted.",
+      options: {
+        message_thread_id: 777
+      }
+    });
+  });
+
   it("ignores callback queries from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

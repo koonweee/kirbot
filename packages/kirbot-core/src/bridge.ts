@@ -888,6 +888,11 @@ export class TelegramCodexBridge {
           await this.#requestCoordinator.handleServerRequestResolved(notification.params);
         }
       },
+      "thread/compacted": async () => {
+        if (notification.method === "thread/compacted") {
+          await this.handleThreadCompacted(notification.params.threadId);
+        }
+      },
       "item/agentMessage/delta": async () => {
         if (notification.method === "item/agentMessage/delta") {
           await this.#lifecycle.handleAssistantDelta(
@@ -950,6 +955,19 @@ export class TelegramCodexBridge {
 
   private async handleServerRequest(request: ServerRequest): Promise<void> {
     await this.#requestCoordinator.handleServerRequest(request);
+  }
+
+  private async handleThreadCompacted(threadId: string): Promise<void> {
+    const session = await this.database.getSessionByCodexThreadId(threadId);
+    if (!session) {
+      return;
+    }
+
+    await this.#messenger.sendMessage({
+      chatId: Number.parseInt(session.telegramChatId, 10),
+      topicId: session.telegramTopicId,
+      text: "Context compacted."
+    });
   }
 
   private async tryResolveUserInput(message: UserTurnMessage): Promise<boolean> {
