@@ -82,13 +82,13 @@ body::after {
 
 .hero {
   display: grid;
-  gap: 14px;
-  margin-bottom: 20px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .hero-copy {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  align-items: center;
   max-width: 44rem;
 }
 
@@ -100,11 +100,8 @@ body::after {
   text-transform: uppercase;
 }
 
-h1 {
-  margin: 0;
-  font: 700 clamp(2rem, 4vw, 3.55rem) / 0.98 "Azeret Mono", "SFMono-Regular", monospace;
-  letter-spacing: -0.04em;
-  text-wrap: balance;
+.hero-label {
+  white-space: nowrap;
 }
 
 .status {
@@ -133,20 +130,7 @@ h1 {
   overflow: hidden;
 }
 
-.plan-text::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 44px;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: inherit;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 18%),
-    rgba(2, 6, 16, 0.38);
-}
-
 .plan-document {
-  padding-left: 68px;
   color: rgba(237, 242, 255, 0.95);
   font: 400 1rem/1.78 "IBM Plex Sans", "Segoe UI", sans-serif;
 }
@@ -171,6 +155,18 @@ h1 {
   font-weight: 700;
   line-height: 1.12;
   letter-spacing: -0.03em;
+}
+
+.plan-document h1 {
+  font-size: clamp(1.45rem, 3vw, 2.1rem);
+}
+
+.plan-document h2 {
+  font-size: clamp(1.2rem, 2.2vw, 1.55rem);
+}
+
+.plan-document h3 {
+  font-size: 1.08rem;
 }
 
 .plan-document p,
@@ -245,7 +241,6 @@ h1 {
 }
 
 .error-copy {
-  padding-left: 68px;
   color: #ffb8c2;
   font: 500 0.96rem/1.7 "Azeret Mono", "SFMono-Regular", monospace;
 }
@@ -260,7 +255,7 @@ h1 {
 .skeleton::after {
   content: "";
   position: absolute;
-  inset: 28px 24px 28px 68px;
+  inset: 28px 24px;
   border-radius: 14px;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.1) 46%, rgba(255, 255, 255, 0.02) 100%),
@@ -327,7 +322,7 @@ h1 {
   }
 
   .hero {
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
 
   .plan-text {
@@ -336,17 +331,8 @@ h1 {
     border-radius: 20px;
   }
 
-  .plan-text::before {
-    width: 28px;
-  }
-
-  .plan-document,
-  .error-copy {
-    padding-left: 38px;
-  }
-
   .skeleton::after {
-    inset: 18px 14px 18px 42px;
+    inset: 18px 14px;
   }
 
 }
@@ -362,16 +348,11 @@ h1 {
 
   .plan-document,
   .error-copy {
-    padding-left: 34px;
     font-size: 0.96rem;
     line-height: 1.68;
   }
 
-  .plan-text::before {
-    width: 24px;
-  }
-
   .skeleton::after {
-    inset: 18px 14px 18px 36px;
+    inset: 18px 14px;
   }
 }

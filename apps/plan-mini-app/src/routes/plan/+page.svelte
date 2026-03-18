@@ -66,10 +66,11 @@
     <div class="workspace-body">
       <header class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Kirbot</p>
-          <h1>{state.title}</h1>
-          <p class="status">{state.status}</p>
+          <p class="eyebrow hero-label">KIRBOT • PLAN</p>
         </div>
+        {#if state.kind !== "ready" && state.status}
+          <p class="status">{state.status}</p>
+        {/if}
       </header>
 
       {#if state.kind === "ready"}

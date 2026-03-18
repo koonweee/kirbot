@@ -204,7 +204,7 @@ export function buildPlanArtifactMessage(publicUrl: string, markdownText: string
     markdownText
   };
   return {
-    text: "Plan ready. Open in Mini App.",
+    text: "Plan is ready",
     replyMarkup: {
       inline_keyboard: [[{ text: "Open plan", web_app: { url: buildMiniAppArtifactUrl(publicUrl, artifact) } }]]
     }
