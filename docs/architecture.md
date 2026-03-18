@@ -16,7 +16,6 @@ kirbot is a single-process bridge with four main responsibilities:
 At runtime, the process owns both sides of the bridge:
 
 - a Telegram bot client
-- an optional same-process Mini App HTTP API for persisted completed plan artifacts
 - a spawned Codex app server from the pinned `@openai/codex` dependency
 - an RPC client connected to that app server
 - a SQLite database for bridge state
@@ -72,8 +71,8 @@ Tracks in-memory turn state that does not belong in the database, especially str
 [`packages/kirbot-core/src/telegram-messenger.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-messenger.ts)
 Owns Telegram delivery behavior: drafts, persistent messages, draft clearing, and chat-action throttling.
 
-[`packages/kirbot-core/src/mini-app/server.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/mini-app/server.ts)
-Owns the same-process Telegram Mini App backend surface: persisted artifact lookup by opaque artifact id, CORS handling for the separate frontend, and `initData` validation.
+[`packages/kirbot-core/src/mini-app/url.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/mini-app/url.ts)
+Owns the typed Mini App artifact URL codec used by both the Telegram bridge and the shared static Mini App frontend.
 
 [`packages/telegram-format/src/*`](/home/jtkw/kirbot/packages/telegram-format/src)
 Owns Telegram text/entity formatting. This subsystem has its own local documentation and should be treated as the source of truth for formatting behavior.
@@ -112,11 +111,6 @@ kirbot stores bridge state in SQLite, not Telegram metadata.
 
 - stores pending Codex requests that require Telegram interaction
 - lets approvals and user-input prompts survive async handling and process restarts
-
-`artifacts`
-
-- stores durable cross-surface artifacts keyed by opaque artifact id
-- currently persists completed plan markdown plus parsed mdast for Telegram and Mini App rendering
 
 `processed_updates`
 

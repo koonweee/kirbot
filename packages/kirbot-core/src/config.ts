@@ -25,9 +25,6 @@ const envSchema = z.object({
   TELEGRAM_USER_ID: z.coerce.number().int(),
   TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
   TELEGRAM_MINI_APP_PUBLIC_URL: optionalEnvString(z.string().url()),
-  TELEGRAM_MINI_APP_API_PUBLIC_URL: optionalEnvString(z.string().url()),
-  TELEGRAM_MINI_APP_BIND_HOST: z.string().default("127.0.0.1"),
-  TELEGRAM_MINI_APP_PORT: z.coerce.number().int().min(0).max(65535).default(8788),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
   CODEX_MODEL: optionalEnvString(z.string()),
@@ -49,9 +46,6 @@ export type AppConfig = {
     mediaTempDir: string;
     miniApp: {
       publicUrl: string | undefined;
-      apiPublicUrl: string | undefined;
-      bindHost: string;
-      port: number;
     };
   };
   database: {
@@ -71,10 +65,7 @@ export function loadConfig(): AppConfig {
         ? expandHomePath(parsed.TELEGRAM_MEDIA_TMP_DIR)
         : defaultTelegramMediaTempDir(),
       miniApp: {
-        publicUrl: parsed.TELEGRAM_MINI_APP_PUBLIC_URL,
-        apiPublicUrl: parsed.TELEGRAM_MINI_APP_API_PUBLIC_URL,
-        bindHost: parsed.TELEGRAM_MINI_APP_BIND_HOST,
-        port: parsed.TELEGRAM_MINI_APP_PORT
+        publicUrl: parsed.TELEGRAM_MINI_APP_PUBLIC_URL
       }
     },
     database: {

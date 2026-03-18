@@ -9,10 +9,10 @@
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
-    "./mini-app/server": {
-      "development": "./src/mini-app/server.ts",
-      "types": "./src/mini-app/server.ts",
-      "default": "./dist/mini-app/server.js"
+    "./mini-app/url": {
+      "development": "./src/mini-app/url.ts",
+      "types": "./src/mini-app/url.ts",
+      "default": "./dist/mini-app/url.js"
     }
   },
   "scripts": {
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@kirbot/codex-client": "*",
-    "@kirbot/telegram-format": "*"
+    "@kirbot/telegram-format": "*",
+    "lz-string": "^1.5.0"
   }
 }

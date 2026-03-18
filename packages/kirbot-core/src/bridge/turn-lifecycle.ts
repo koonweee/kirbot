@@ -3,11 +3,10 @@ import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/Reaso
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
-import { parseSerializedMarkdownAst } from "@kirbot/telegram-format";
 import {
   buildPlanArtifactMessage,
-  buildRenderedPlanMessagesFromAst,
   buildRenderedPlanMessages,
+  buildOversizePlanArtifactMessage,
   buildRenderedCommentaryMessage,
   buildStableDraftId,
   buildStatusDraft,
@@ -445,34 +444,32 @@ export class TurnLifecycleCoordinator {
   }
 
   private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {
-    const artifact = await this.deps.upsertPlanArtifact({
-      chatId: context.chatId,
-      topicId: context.topicId,
-      threadId: context.threadId,
-      turnId: context.turnId,
-      itemId: plan.itemId,
-      markdownText: plan.text
-    });
-
     const messageId = this.deps.planArtifactPublicUrl
-      ? await this.deps.messenger.sendMessage({
-          chatId: context.chatId,
-          topicId: context.topicId,
-          ...buildPlanArtifactMessage(this.deps.planArtifactPublicUrl, artifact.artifactId)
-        }).then((message) => message.messageId)
-      : await this.sendRenderedPlanMessages(
-          context,
-          (() => {
-            try {
-              return buildRenderedPlanMessagesFromAst(parseSerializedMarkdownAst(artifact.mdastJson));
-            } catch {
-              return buildRenderedPlanMessages(artifact.markdownText);
-            }
-          })()
-        );
+      ? await this.sendMiniAppPlanMessage(context, plan.text)
+      : await this.sendRenderedPlanMessages(context, buildRenderedPlanMessages(plan.text));
 
     context.publishedPlanMessages += 1;
     return messageId;
+  }
+
+  private async sendMiniAppPlanMessage(context: TurnContext, markdownText: string): Promise<number> {
+    try {
+      return await this.deps.messenger.sendMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        ...buildPlanArtifactMessage(this.deps.planArtifactPublicUrl!, markdownText)
+      }).then((message) => message.messageId);
+    } catch (error) {
+      if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
+        return this.deps.messenger.sendMessage({
+          chatId: context.chatId,
+          topicId: context.topicId,
+          ...buildOversizePlanArtifactMessage()
+        }).then((message) => message.messageId);
+      }
+
+      throw error;
+    }
   }
 
   private async sendRenderedPlanMessages(context: TurnContext, renderedMessages: ReturnType<typeof buildRenderedPlanMessages>): Promise<number> {

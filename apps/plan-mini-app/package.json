@@ -2,6 +2,10 @@
   "name": "@kirbot/plan-mini-app",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@kirbot/core": "*",
+    "markdown-it": "^14.1.0"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",

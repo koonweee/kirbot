@@ -1,17 +1,19 @@
-import type { MarkdownAst } from "@kirbot/telegram-format";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import {
   chunkFormattedText,
   prependText,
-  renderMdastToFormattedText,
   renderMarkdownToFormattedText,
   renderPreformattedText,
   renderQuotedText
 } from "@kirbot/telegram-format";
 import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
-import { buildPlanArtifactMiniAppUrl } from "../mini-app/url";
+import {
+  buildMiniAppArtifactUrl,
+  MiniAppArtifactType,
+  type MiniAppPlanArtifact
+} from "../mini-app/url";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
@@ -191,19 +193,27 @@ export function buildRenderedPlanMessages(text: string): TelegramRenderedMessage
   return buildHeaderedMarkdownMessages(text, "Plan");
 }
 
-export function buildRenderedPlanMessagesFromAst(ast: MarkdownAst): TelegramRenderedMessage[] {
-  return buildHeaderedFormattedMessages(renderMdastToFormattedText(ast), "Plan");
-}
-
-export function buildPlanArtifactMessage(publicUrl: string, artifactId: string): {
+export function buildPlanArtifactMessage(publicUrl: string, markdownText: string): {
   text: string;
   replyMarkup: InlineKeyboardMarkup;
 } {
+  const artifact: MiniAppPlanArtifact = {
+    v: 1,
+    type: MiniAppArtifactType.Plan,
+    title: "Plan",
+    markdownText
+  };
   return {
     text: "Plan ready. Open in Mini App.",
     replyMarkup: {
-      inline_keyboard: [[{ text: "Open plan", web_app: { url: buildPlanArtifactMiniAppUrl(publicUrl, artifactId) } }]]
+      inline_keyboard: [[{ text: "Open plan", web_app: { url: buildMiniAppArtifactUrl(publicUrl, artifact) } }]]
     }
+  };
+}
+
+export function buildOversizePlanArtifactMessage(): { text: string } {
+  return {
+    text: "Plan ready, but too large for Mini App link."
   };
 }
 
