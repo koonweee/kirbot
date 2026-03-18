@@ -83,7 +83,7 @@ body::after {
 .hero {
   display: grid;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .hero-copy {
