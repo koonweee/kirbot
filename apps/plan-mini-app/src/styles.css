@@ -130,6 +130,7 @@ h1 {
     inset 0 0 0 1px rgba(255, 255, 255, 0.015);
   overflow-wrap: anywhere;
   word-break: break-word;
+  overflow: hidden;
 }
 
 .plan-text::before {
@@ -138,6 +139,7 @@ h1 {
   inset: 0 auto 0 0;
   width: 44px;
   border-right: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: inherit;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 18%),
     rgba(2, 6, 16, 0.38);
@@ -169,20 +171,6 @@ h1 {
   font-weight: 700;
   line-height: 1.12;
   letter-spacing: -0.03em;
-}
-
-.plan-document h1,
-.plan-document h2 {
-  position: relative;
-}
-
-.plan-document h1::before,
-.plan-document h2::before {
-  content: "#";
-  position: absolute;
-  left: -1.2rem;
-  color: var(--pink);
-  opacity: 0.75;
 }
 
 .plan-document p,
@@ -361,10 +349,6 @@ h1 {
     inset: 18px 14px 18px 42px;
   }
 
-  .plan-document h1::before,
-  .plan-document h2::before {
-    left: -0.9rem;
-  }
 }
 
 @media (max-width: 480px) {
