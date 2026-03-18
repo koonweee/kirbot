@@ -974,6 +974,7 @@ describe("TelegramCodexBridge", () => {
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
+        willRetry: false,
         error: {
           message: "vision failed"
         }
@@ -982,6 +983,133 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(localImage && "path" in localImage ? existsSync(localImage.path) : true).toBe(false);
+  });
+
+  it("does not fail a turn on retryable error notifications", async () => {
+    codex.readTurnMessagesResult = "Recovered answer";
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Keep going"
+    });
+
+    codex.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "temporary upstream issue"
+        }
+      }
+    } as ServerNotification);
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.some((message) => message.text.includes("Codex error: temporary upstream issue"))).toBe(false);
+    expect((await database.getTurnById("turn-1")).status).toBe("streaming");
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Recovered answer");
+    expect((await database.getTurnById("turn-1")).status).toBe("completed");
+  });
+
+  it("finalizes turn/completed failed notifications as failed turns", async () => {
+    codex.readTurnMessagesResult = "Partial answer";
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Show the failure"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "failed",
+          error: {
+            message: "model crashed",
+            codexErrorInfo: null,
+            additionalDetails: null
+          }
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(getFinalAnswerMessage(telegram)?.text).toContain("Codex error: model crashed");
+    expect((await database.getTurnById("turn-1")).status).toBe("failed");
+  });
+
+  it("dedupes failure terminalization when error is followed by failed completion", async () => {
+    codex.readTurnMessagesResult = "Partial answer";
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 22,
+      userId: 42,
+      text: "Fail once"
+    });
+
+    codex.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: false,
+        error: {
+          message: "vision failed"
+        }
+      }
+    } as ServerNotification);
+    await waitForAsyncNotifications();
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "failed",
+          error: {
+            message: "vision failed",
+            codexErrorInfo: null,
+            additionalDetails: null
+          }
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.filter((message) => message.text.includes("Codex error: vision failed"))).toHaveLength(1);
+    expect((await database.getTurnById("turn-1")).status).toBe("failed");
   });
 
   it("streams turn deltas and publishes the final completion message", async () => {

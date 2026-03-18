@@ -901,15 +901,30 @@ export class TelegramCodexBridge {
           return;
         }
 
-        if (notification.params.turn.status === "interrupted") {
-          await this.#lifecycle.finalizeInterruptedTurnById(notification.params.threadId, notification.params.turn.id);
-          return;
+        switch (notification.params.turn.status) {
+          case "completed":
+            await this.#lifecycle.completeTurn(notification.params.threadId, notification.params.turn.id);
+            return;
+          case "interrupted":
+            await this.#lifecycle.finalizeInterruptedTurnById(notification.params.threadId, notification.params.turn.id);
+            return;
+          case "failed":
+            await this.#lifecycle.failTurn(
+              notification.params.threadId,
+              notification.params.turn.id,
+              notification.params.turn.error?.message ?? "Turn failed"
+            );
+            return;
+          default:
+            return;
         }
-
-        await this.#lifecycle.completeTurn(notification.params.threadId, notification.params.turn.id);
       },
       error: async () => {
         if (notification.method === "error") {
+          if (notification.params.willRetry) {
+            return;
+          }
+
           await this.#lifecycle.failTurn(
             notification.params.threadId,
             notification.params.turnId,
