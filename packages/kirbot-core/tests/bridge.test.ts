@@ -2621,6 +2621,63 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
+  it("formats editing status details as inline code before assistant text arrives", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 10,
+      updateId: 22,
+      userId: 42,
+      text: "Inspect the edited files"
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    const path = "packages/kirbot-core/src/bridge/presentation.ts";
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "fileChange",
+          id: "item-1",
+          changes: [
+            {
+              path,
+              kind: {
+                type: "update",
+                move_path: null
+              },
+              diff: ""
+            }
+          ],
+          status: "inProgress"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      telegram.drafts.some((draft) => draft.text === `editing: ${path} · 0s`)
+    ).toBe(true);
+    expect(
+      telegram.drafts.some(
+        (draft) =>
+          draft.text === `editing: ${path} · 0s` &&
+          JSON.stringify(draft.options?.entities) ===
+            JSON.stringify([
+              {
+                type: "code",
+                offset: "editing: ".length,
+                length: path.length
+              }
+            ])
+      )
+    ).toBe(true);
+  });
+
   it("keeps a stable status draft and sends the final text separately when no assistant delta arrives", async () => {
     codex.readTurnMessagesResult = "Completed without streamed deltas";
 
