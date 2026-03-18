@@ -5,6 +5,7 @@ import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/T
 import type { LoggerLike } from "../logging";
 import {
   buildPlanArtifactMessage,
+  buildRenderedCompletedItemMessage,
   buildOversizePlanArtifactMessage,
   buildStableDraftId,
   buildStatusDraft,
@@ -76,6 +77,7 @@ export class TurnLifecycleCoordinator {
       planStreams: new Map(),
       reasoningSummary: null,
       reasoningFallback: null,
+      compactionNoticeSent: false,
       publishedPlanMessages: 0,
       model,
       reasoningEffort,
@@ -106,6 +108,20 @@ export class TurnLifecycleCoordinator {
   getActiveTurnByTopic(chatId: number, topicId: number): TurnContext | undefined {
     const runtimeTurn = this.deps.runtime.getActiveTurnByTopic(chatId, topicId);
     return runtimeTurn ? this.#turns.get(runtimeTurn.turnId) : undefined;
+  }
+
+  markCompactionNoticeSentForThread(threadId: string): boolean {
+    const context = Array.from(this.#turns.values()).find((turn) => turn.threadId === threadId && turn.phase === "active");
+    if (!context) {
+      return true;
+    }
+
+    if (context.compactionNoticeSent) {
+      return false;
+    }
+
+    context.compactionNoticeSent = true;
+    return true;
   }
 
   getQueueState(chatId: number, topicId: number): QueueStateSnapshot {
@@ -363,18 +379,51 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    if (item.type !== "agentMessage") {
+    if (item.type === "agentMessage") {
+      const context = this.#turns.get(turnId);
+      const update = this.deps.runtime.commitAssistantItem(turnId, item.id, item.text, item.phase);
+      if (!context || !update) {
+        return;
+      }
+
+      await this.deps.appendTurnStream(context.turnId, update.finalText);
+      await this.handleAssistantRenderUpdate(context, update, true);
       return;
     }
 
     const context = this.#turns.get(turnId);
-    const update = this.deps.runtime.commitAssistantItem(turnId, item.id, item.text, item.phase);
-    if (!context || !update) {
+    if (!context) {
       return;
     }
 
-    await this.deps.appendTurnStream(context.turnId, update.finalText);
-    await this.handleAssistantRenderUpdate(context, update, true);
+    if (item.type === "reasoning") {
+      if (context.reasoningSummary?.itemId === item.id) {
+        context.reasoningSummary = null;
+      }
+      if (context.reasoningFallback?.itemId === item.id) {
+        context.reasoningFallback = null;
+      }
+      return;
+    }
+
+    if (item.type === "contextCompaction") {
+      if (context.compactionNoticeSent) {
+        return;
+      }
+      context.compactionNoticeSent = true;
+    }
+
+    const rendered = buildRenderedCompletedItemMessage(item);
+    if (!rendered) {
+      return;
+    }
+
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text: rendered.text,
+      ...(rendered.entities ? { entities: rendered.entities } : {})
+    });
   }
 
   async completeTurn(threadId: string, turnId: string): Promise<void> {

@@ -3731,6 +3731,38 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("deduplicates item-level compaction notices after a thread compaction notice", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "Inspect the long thread"
+    });
+
+    codex.emitNotification({
+      method: "thread/compacted",
+      params: {
+        threadId: "thread-1"
+      }
+    });
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "contextCompaction",
+          id: "compact-1"
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.filter((message) => message.text === "Context compacted.")).toHaveLength(1);
+  });
+
   it("ignores callback queries from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

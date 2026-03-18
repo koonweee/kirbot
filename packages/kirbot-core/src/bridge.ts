@@ -958,6 +958,10 @@ export class TelegramCodexBridge {
   }
 
   private async handleThreadCompacted(threadId: string): Promise<void> {
+    if (!this.#lifecycle.markCompactionNoticeSentForThread(threadId)) {
+      return;
+    }
+
     const session = await this.database.getSessionByCodexThreadId(threadId);
     if (!session) {
       return;

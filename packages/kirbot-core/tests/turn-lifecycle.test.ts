@@ -52,6 +52,16 @@ function getWebAppUrlByButtonText(
   );
 }
 
+function codeEntity(text: string, offset = 0): MessageEntity[] {
+  return [
+    {
+      type: "code",
+      offset,
+      length: text.length
+    }
+  ];
+}
+
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
@@ -696,6 +706,137 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", " Additional raw detail.");
 
     expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nUse the summary instead.");
+  });
+
+  it("publishes compact completion notices for command and file items", async () => {
+    const harness = createHarness();
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "npm test",
+      cwd: "/workspace",
+      processId: null,
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "ok",
+      exitCode: 0,
+      durationMs: 123
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "fileChange",
+      id: "patch-1",
+      status: "completed",
+      changes: [
+        { path: "src/app.ts", kind: "update", diff: "" },
+        { path: "src/server.ts", kind: "update", diff: "" }
+      ]
+    });
+
+    expect(harness.telegram.sentMessages[0]).toMatchObject({
+      text: "Command completed: npm test",
+      options: { entities: codeEntity("npm test", "Command completed: ".length) }
+    });
+    expect(harness.telegram.sentMessages[1]).toMatchObject({
+      text: "Applied file changes: src/app.ts, src/server.ts",
+      options: {
+        entities: [
+          ...codeEntity("src/app.ts", "Applied file changes: ".length),
+          ...codeEntity("src/server.ts", "Applied file changes: src/app.ts, ".length)
+        ]
+      }
+    });
+  });
+
+  it("publishes completion notices for remaining thread item kinds", async () => {
+    const harness = createHarness();
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "mcpToolCall",
+      id: "mcp-1",
+      server: "github",
+      tool: "search",
+      status: "completed",
+      arguments: {},
+      result: null,
+      error: null,
+      durationMs: 10
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "dynamicToolCall",
+      id: "tool-1",
+      tool: "lookup_docs",
+      arguments: {},
+      status: "failed",
+      contentItems: null,
+      success: false,
+      durationMs: 10
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "collabAgentToolCall",
+      id: "agent-1",
+      tool: "spawn_agent",
+      status: "completed",
+      senderThreadId: "thread-1",
+      receiverThreadIds: ["thread-2"],
+      prompt: null,
+      model: null,
+      reasoningEffort: null,
+      agentsStates: {}
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "webSearch",
+      id: "search-1",
+      query: "kirbot issues",
+      action: null
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "imageView",
+      id: "image-1",
+      path: "/tmp/screenshots/error.png"
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "imageGeneration",
+      id: "image-gen-1",
+      status: "completed",
+      revisedPrompt: null,
+      result: "https://example.com/image.png"
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "enteredReviewMode",
+      id: "review-1",
+      review: "Security review"
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "exitedReviewMode",
+      id: "review-2",
+      review: ""
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "contextCompaction",
+      id: "compact-1"
+    });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "contextCompaction",
+      id: "compact-2"
+    });
+
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual([
+      "Tool completed: github.search",
+      "Tool failed: lookup_docs",
+      "Agent task updated: spawn_agent",
+      "Web search completed: kirbot issues",
+      "Viewed image: error.png",
+      "Image generated.",
+      "Entered review mode: Security review",
+      "Exited review mode.",
+      "Context compacted."
+    ]);
+    expect(harness.telegram.sentMessages[4]?.options?.entities).toEqual(
+      codeEntity("error.png", "Viewed image: ".length)
+    );
   });
 
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {

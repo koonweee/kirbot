@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import {
@@ -121,6 +123,52 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
       return buildStatusDraft("searching", item.query);
     default:
       return buildStatusDraft("thinking");
+  }
+}
+
+export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRenderedMessage | null {
+  switch (item.type) {
+    case "reasoning":
+      return null;
+    case "commandExecution":
+      return buildLabeledCodeMessage(
+        isCommandExecutionFailed(item) ? "Command failed: " : "Command completed: ",
+        item.command
+      );
+    case "fileChange":
+      return buildRenderedFileChangeCompletionMessage(item.status, item.changes);
+    case "mcpToolCall":
+      return {
+        text: `${item.status === "failed" ? "Tool failed" : "Tool completed"}: ${item.server}.${item.tool}`
+      };
+    case "dynamicToolCall":
+      return {
+        text: `${item.status === "failed" ? "Tool failed" : "Tool completed"}: ${item.tool}`
+      };
+    case "collabAgentToolCall":
+      return {
+        text: `${item.status === "failed" ? "Agent task failed" : "Agent task updated"}: ${item.tool}`
+      };
+    case "webSearch": {
+      const query = item.query.trim();
+      return { text: query ? `Web search completed: ${query}` : "Web search completed." };
+    }
+    case "imageView":
+      return buildLabeledCodeMessage("Viewed image: ", basename(item.path) || item.path);
+    case "imageGeneration":
+      return { text: isImageGenerationSuccess(item) ? "Image generated." : "Image generation failed." };
+    case "enteredReviewMode": {
+      const review = item.review.trim();
+      return { text: review ? `Entered review mode: ${review}` : "Entered review mode." };
+    }
+    case "exitedReviewMode": {
+      const review = item.review.trim();
+      return { text: review ? `Exited review mode: ${review}` : "Exited review mode." };
+    }
+    case "contextCompaction":
+      return { text: "Context compacted." };
+    default:
+      return null;
   }
 }
 
@@ -305,20 +353,21 @@ function truncateStatus(text: string): string {
 }
 
 function summarizeFileChanges(changes: Array<{ path: string }>): string | null {
-  if (changes.length === 0) {
+  const summary = summarizeFileChangePaths(changes);
+  if (!summary) {
     return null;
   }
 
-  if (changes.length === 1) {
-    return changes[0]?.path ?? null;
+  if (summary.paths.length === 1) {
+    return summary.paths[0] ?? null;
   }
 
-  const [first, second] = changes;
-  if (changes.length === 2 && first && second) {
-    return `${first.path}, ${second.path}`;
+  const [first, second] = summary.paths;
+  if (summary.additionalCount === 0 && first && second) {
+    return `${first}, ${second}`;
   }
 
-  return `${first?.path ?? changes.length} (+${changes.length - 1} more)`;
+  return `${first ?? changes.length} (+${summary.additionalCount} more)`;
 }
 
 function buildDraftPreviewWithLimit(text: string, limit: number): string {
@@ -506,4 +555,71 @@ function shortenHomePath(value: string | null): string {
   }
 
   return value;
+}
+
+function summarizeFileChangePaths(changes: Array<{ path: string }>): { paths: string[]; additionalCount: number } | null {
+  if (changes.length === 0) {
+    return null;
+  }
+
+  if (changes.length === 1) {
+    return { paths: [changes[0]?.path ?? ""], additionalCount: 0 };
+  }
+
+  const [first, second] = changes;
+  if (changes.length === 2) {
+    return {
+      paths: [first?.path ?? "", second?.path ?? ""].filter((path) => path.length > 0),
+      additionalCount: 0
+    };
+  }
+
+  return {
+    paths: first?.path ? [first.path] : [],
+    additionalCount: changes.length - 1
+  };
+}
+
+function buildRenderedFileChangeCompletionMessage(
+  status: "inProgress" | "completed" | "failed" | "declined",
+  changes: Array<{ path: string }>
+): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText(status === "completed" ? "Applied file changes: " : "File changes failed: ");
+  appendInlineCodeFileSummary(builder, changes);
+  return builder.build();
+}
+
+function appendInlineCodeFileSummary(builder: TelegramEntityBuilder, changes: Array<{ path: string }>): void {
+  const summary = summarizeFileChangePaths(changes);
+  if (!summary || summary.paths.length === 0) {
+    builder.appendText("(unknown files)");
+    return;
+  }
+
+  summary.paths.forEach((path, index) => {
+    if (index > 0) {
+      builder.appendText(", ");
+    }
+    builder.appendFormatted(renderCodeText(path));
+  });
+
+  if (summary.additionalCount > 0) {
+    builder.appendText(` (+${summary.additionalCount} more)`);
+  }
+}
+
+function buildLabeledCodeMessage(prefix: string, value: string): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText(prefix);
+  builder.appendFormatted(renderCodeText(value.trim().length > 0 ? value : "(unknown)"));
+  return builder.build();
+}
+
+function isCommandExecutionFailed(item: Extract<ThreadItem, { type: "commandExecution" }>): boolean {
+  return item.status === "failed" || item.status === "declined" || (item.exitCode !== null && item.exitCode !== 0);
+}
+
+function isImageGenerationSuccess(item: Extract<ThreadItem, { type: "imageGeneration" }>): boolean {
+  return !/fail/i.test(item.status) && item.result.trim().length > 0;
 }

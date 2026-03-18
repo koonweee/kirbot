@@ -40,6 +40,7 @@ export type TurnContext = {
   planStreams: Map<string, PlanStreamState>;
   reasoningSummary: ReasoningSummaryState | null;
   reasoningFallback: ReasoningFallbackState | null;
+  compactionNoticeSent: boolean;
   publishedPlanMessages: number;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
