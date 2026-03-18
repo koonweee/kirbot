@@ -144,8 +144,6 @@ function createHarness(
 ): {
   coordinator: TurnLifecycleCoordinator;
   telegram: FakeTelegram;
-  appendCalls: string[];
-  completionCalls: Array<{ turnId: string; messageId: number | null; status: "completed" | "failed" | "interrupted" }>;
   releasedTurnIds: string[];
   queueSyncs: QueueStateSnapshot[];
   nextQueuedCalls: Array<{ chatId: number; topicId: number }>;
@@ -153,9 +151,6 @@ function createHarness(
 } {
   const telegram = new FakeTelegram();
   const runtime = new BridgeTurnRuntime();
-  const appendCalls: string[] = [];
-  const completionCalls: Array<{ turnId: string; messageId: number | null; status: "completed" | "failed" | "interrupted" }> =
-    [];
   const releasedTurnIds: string[] = [];
   const queueSyncs: QueueStateSnapshot[] = [];
   const nextQueuedCalls: Array<{ chatId: number; topicId: number }> = [];
@@ -187,12 +182,6 @@ function createHarness(
     releaseTurnFiles: async (turnId) => {
       releasedTurnIds.push(turnId);
     },
-    appendTurnStream: async (_turnId, text) => {
-      appendCalls.push(text);
-    },
-    completePersistedTurn: async (turnId, messageId, status) => {
-      completionCalls.push({ turnId, messageId, status });
-    },
     resolveTurnSnapshot: async () => ({
       text: snapshot.text,
       assistantText: snapshot.assistantText,
@@ -215,8 +204,6 @@ function createHarness(
   return {
     coordinator,
     telegram,
-    appendCalls,
-    completionCalls,
     releasedTurnIds,
     queueSyncs,
     nextQueuedCalls,
@@ -232,14 +219,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(context.phase).toBe("completed");
-    expect(harness.appendCalls.at(-1)).toBe("Final answer");
-    expect(harness.completionCalls).toEqual([
-      {
-        turnId: "turn-1",
-        messageId: 1,
-        status: "completed"
-      }
-    ]);
+    expect(harness.telegram.sentMessages.some((entry) => entry.text === "Final answer")).toBe(true);
     expect(harness.releasedTurnIds).toEqual(["turn-1"]);
     expect(harness.nextQueuedCalls).toEqual([{ chatId: -1001, topicId: 777 }]);
     expect(harness.coordinator.getTurn("turn-1")).toBeUndefined();
@@ -252,13 +232,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
     await harness.coordinator.failTurn("thread-1", "turn-1", "late error");
 
-    expect(harness.completionCalls).toEqual([
-      {
-        turnId: "turn-1",
-        messageId: 1,
-        status: "completed"
-      }
-    ]);
+    expect(harness.telegram.sentMessages.filter((entry) => entry.text === "Final answer")).toHaveLength(1);
   });
 
   it("clears leftover pending steers on completion instead of requeueing them", async () => {
@@ -299,7 +273,6 @@ describe("TurnLifecycleCoordinator", () => {
     const planMessages = harness.telegram.sentMessages.filter((message) => message.text.startsWith("Plan"));
     expect(planMessages).toHaveLength(1);
     expect(planMessages[0]?.text).toBe("Plan is ready");
-    expect(harness.appendCalls.at(-1)).toBe("1. Draft the rollout");
   });
 
   it("publishes Mini App plan links with encoded typed payloads", async () => {
@@ -310,8 +283,6 @@ describe("TurnLifecycleCoordinator", () => {
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
-      appendTurnStream: async () => undefined,
-      completePersistedTurn: async () => undefined,
       resolveTurnSnapshot: async () => ({
         text: "1. Draft the rollout",
         assistantText: "",
@@ -359,8 +330,6 @@ describe("TurnLifecycleCoordinator", () => {
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
-      appendTurnStream: async () => undefined,
-      completePersistedTurn: async () => undefined,
       resolveTurnSnapshot: async () => ({
         text: "Final answer",
         assistantText: "Final answer",
@@ -419,8 +388,6 @@ describe("TurnLifecycleCoordinator", () => {
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
-      appendTurnStream: async () => undefined,
-      completePersistedTurn: async () => undefined,
       resolveTurnSnapshot: async () => ({
         text: "1. Draft the rollout",
         assistantText: "",
@@ -484,8 +451,6 @@ describe("TurnLifecycleCoordinator", () => {
       telegram,
       planArtifactPublicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`,
       releaseTurnFiles: async () => undefined,
-      appendTurnStream: async () => undefined,
-      completePersistedTurn: async () => undefined,
       resolveTurnSnapshot: async () => ({
         text: "Final answer",
         assistantText: "Final answer",
@@ -532,8 +497,6 @@ describe("TurnLifecycleCoordinator", () => {
       telegram,
       planArtifactPublicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`,
       releaseTurnFiles: async () => undefined,
-      appendTurnStream: async () => undefined,
-      completePersistedTurn: async () => undefined,
       resolveTurnSnapshot: async () => ({
         text: finalAnswer,
         assistantText: finalAnswer,
@@ -567,13 +530,6 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.finalizeInterruptedTurnById("thread-1", "turn-1");
 
     expect(context.phase).toBe("interrupted");
-    expect(harness.completionCalls).toEqual([
-      {
-        turnId: "turn-1",
-        messageId: null,
-        status: "interrupted"
-      }
-    ]);
     expect(harness.queuedFollowUps).toHaveLength(1);
     expect(harness.queuedFollowUps[0]?.message.text).toBe("First steer\nSecond steer");
     expect(harness.nextQueuedCalls).toEqual([]);
@@ -729,8 +685,8 @@ describe("TurnLifecycleCoordinator", () => {
       id: "patch-1",
       status: "completed",
       changes: [
-        { path: "src/app.ts", kind: "update", diff: "" },
-        { path: "src/server.ts", kind: "update", diff: "" }
+        { path: "src/app.ts", kind: { type: "update", move_path: null }, diff: "" },
+        { path: "src/server.ts", kind: { type: "update", move_path: null }, diff: "" }
       ]
     });
 
@@ -777,7 +733,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.handleItemCompleted("turn-1", {
       type: "collabAgentToolCall",
       id: "agent-1",
-      tool: "spawn_agent",
+      tool: "spawnAgent",
       status: "completed",
       senderThreadId: "thread-1",
       receiverThreadIds: ["thread-2"],
@@ -826,7 +782,7 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual([
       "Tool completed: github.search",
       "Tool failed: lookup_docs",
-      "Agent task updated: spawn_agent",
+      "Agent task updated: spawnAgent",
       "Web search completed: kirbot issues",
       "Viewed image: error.png",
       "Image generated.",

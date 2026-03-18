@@ -24,10 +24,7 @@ describe("BridgeDatabase", () => {
   it("creates, activates, and archives topic sessions", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      telegramTopicId: 22,
-      rootMessageId: 33,
-      createdByUserId: 44,
-      title: "Test topic"
+      telegramTopicId: 22
     });
 
     expect(pending.status).toBe("provisioning");
@@ -56,9 +53,6 @@ describe("BridgeDatabase", () => {
       telegramChatId: "-1001",
       telegramTopicId: 22,
       telegramMessageId: null,
-      codexThreadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "item-1",
       payloadJson: JSON.stringify({ hello: "world" })
     });
 
@@ -72,9 +66,9 @@ describe("BridgeDatabase", () => {
     const withState = await database.updateRequestState(JSON.stringify(77), JSON.stringify({ currentQuestionId: "q1" }));
     expect(withState.stateJson).toBe(JSON.stringify({ currentQuestionId: "q1" }));
 
-    const resolved = await database.resolveRequest(JSON.stringify(77), JSON.stringify({ decision: "accept" }));
+    const resolved = await database.resolveRequest(JSON.stringify(77));
     expect(resolved.status).toBe("resolved");
-    expect(resolved.responseJson).toBe(JSON.stringify({ decision: "accept" }));
+    expect(resolved.stateJson).toBe(JSON.stringify({ currentQuestionId: "q1" }));
   });
 
   it("marks pending server requests resolved when the app server resolves them elsewhere", async () => {
@@ -84,15 +78,12 @@ describe("BridgeDatabase", () => {
       telegramChatId: "-1001",
       telegramTopicId: 22,
       telegramMessageId: 100,
-      codexThreadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "item-1",
       payloadJson: JSON.stringify({ hello: "world" })
     });
 
     const resolved = await database.resolveRequestExternally(JSON.stringify(79));
     expect(resolved.status).toBe("resolved");
-    expect(resolved.responseJson).toBe("{}");
+    expect(resolved.telegramMessageId).toBe(100);
   });
 
   it("expires pending server requests on restart", async () => {
@@ -102,44 +93,18 @@ describe("BridgeDatabase", () => {
       telegramChatId: "-1001",
       telegramTopicId: 23,
       telegramMessageId: 100,
-      codexThreadId: "thread-2",
-      turnId: "turn-2",
-      itemId: "item-2",
       payloadJson: JSON.stringify({ question: "answer?" })
     });
 
-    const expiredCount = await database.expirePendingRequests(JSON.stringify({ reason: "startup" }));
+    const expiredCount = await database.expirePendingRequests();
     expect(expiredCount).toBe(1);
 
     const expired = await database.getPendingRequest(JSON.stringify(78));
     expect(expired.status).toBe("expired");
-    expect(expired.responseJson).toBe(JSON.stringify({ reason: "startup" }));
   });
 
-  it("stores resolved assistant text for completed turns", async () => {
-    await database.recordTurnStart({
-      telegramUpdateId: 1,
-      telegramChatId: "-1001",
-      telegramTopicId: 22,
-      codexThreadId: "thread-1",
-      codexTurnId: "turn-1",
-      draftId: 10
-    });
-    await database.completeTurn("turn-1", 100, "completed", "");
-
-    await database.recordTurnStart({
-      telegramUpdateId: 2,
-      telegramChatId: "-1001",
-      telegramTopicId: 22,
-      codexThreadId: "thread-1",
-      codexTurnId: "turn-2",
-      draftId: 11
-    });
-    await database.completeTurn("turn-2", 101, "completed", "Implemented");
-
-    const first = await database.getTurnById("turn-1");
-    const second = await database.getTurnById("turn-2");
-    expect(first.resolvedAssistantText).toBe("");
-    expect(second.resolvedAssistantText).toBe("Implemented");
+  it("dedupes processed Telegram updates", async () => {
+    expect(await database.markUpdateProcessed(123)).toBe(true);
+    expect(await database.markUpdateProcessed(123)).toBe(false);
   });
 });

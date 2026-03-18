@@ -107,9 +107,6 @@ export class TelegramCodexBridge {
       telegram,
       planArtifactPublicUrl: config.telegram.miniApp.publicUrl,
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
-      appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
-      completePersistedTurn: (turnId, messageId, status, resolvedText) =>
-        this.database.completeTurn(turnId, messageId, status, resolvedText).then(() => undefined),
       resolveTurnSnapshot: this.resolveTurnSnapshot.bind(this),
       syncQueuePreview: this.syncQueuePreview.bind(this),
       maybeSendNextQueuedFollowUp: this.maybeSendNextQueuedFollowUp.bind(this),
@@ -600,10 +597,7 @@ export class TelegramCodexBridge {
 
     const pending = await this.database.createProvisioningSession({
       telegramChatId: String(message.chatId),
-      telegramTopicId: message.topicId,
-      rootMessageId: message.messageId,
-      createdByUserId: message.userId,
-      title
+      telegramTopicId: message.topicId
     });
 
     try {
@@ -695,15 +689,6 @@ export class TelegramCodexBridge {
     this.#turnsAwaitingActivation.add(turn.id);
 
     try {
-      await this.database.recordTurnStart({
-        telegramUpdateId: message.updateId,
-        telegramChatId: String(message.chatId),
-        telegramTopicId: message.topicId,
-        codexThreadId: session.codexThreadId,
-        codexTurnId: turn.id,
-        draftId: message.updateId
-      });
-
       const activeTurn = this.#lifecycle.activateTurn(
         message,
         session.codexThreadId,
@@ -740,8 +725,13 @@ export class TelegramCodexBridge {
 
     const previous = this.#notificationChains.get(turnId) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {
-      if (await this.shouldStageTurnEvent(turnId)) {
+      const mode = this.getTurnEventHandlingMode(turnId);
+      if (mode === "stage") {
         this.stageTurnEvent(turnId, event);
+        return;
+      }
+      if (mode === "drop") {
+        this.logger.warn(`Dropped Codex event for unknown turn ${turnId}`);
         return;
       }
 
@@ -758,17 +748,16 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async shouldStageTurnEvent(turnId: string): Promise<boolean> {
+  private getTurnEventHandlingMode(turnId: string): "handle" | "stage" | "drop" {
     if (this.#lifecycle.getTurn(turnId)) {
-      return false;
+      return "handle";
     }
 
     if (this.#turnsAwaitingActivation.has(turnId)) {
-      return true;
+      return "stage";
     }
 
-    const persistedTurn = await this.database.getTurnByIdOptional(turnId);
-    return !persistedTurn;
+    return "drop";
   }
 
   private stageTurnEvent(turnId: string, event: AppServerEvent): void {

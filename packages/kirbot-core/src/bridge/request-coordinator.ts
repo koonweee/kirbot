@@ -184,8 +184,7 @@ export class BridgeRequestCoordinator {
   }
 
   private async handleApprovalRequest(session: TopicSession, request: ApprovalServerRequest): Promise<void> {
-    const codexThreadId = session.codexThreadId;
-    if (!codexThreadId) {
+    if (!session.codexThreadId) {
       throw new Error("Expected session.codexThreadId for approval request handling");
     }
 
@@ -206,9 +205,6 @@ export class BridgeRequestCoordinator {
       telegramChatId: session.telegramChatId,
       telegramTopicId: session.telegramTopicId,
       telegramMessageId: null,
-      codexThreadId,
-      turnId: request.params.turnId,
-      itemId: request.params.itemId,
       payloadJson: JSON.stringify(request.params)
     });
 
@@ -226,8 +222,7 @@ export class BridgeRequestCoordinator {
   }
 
   private async handleUserInputRequest(session: TopicSession, request: UserInputServerRequest): Promise<void> {
-    const codexThreadId = session.codexThreadId;
-    if (!codexThreadId) {
+    if (!session.codexThreadId) {
       throw new Error("Expected session.codexThreadId for user-input request handling");
     }
 
@@ -239,9 +234,6 @@ export class BridgeRequestCoordinator {
       telegramChatId: session.telegramChatId,
       telegramTopicId: session.telegramTopicId,
       telegramMessageId: null,
-      codexThreadId,
-      turnId: request.params.turnId,
-      itemId: request.params.itemId,
       payloadJson: JSON.stringify(request.params)
     });
 
@@ -266,13 +258,13 @@ export class BridgeRequestCoordinator {
         decision: normalizeCommandApprovalDecision(action)
       };
       await this.codex.respondToCommandApproval(requestId, response);
-      await this.database.resolveRequest(request.requestIdJson, JSON.stringify(response));
+      await this.database.resolveRequest(request.requestIdJson);
     } else if (request.method === "item/fileChange/requestApproval") {
       const response = {
         decision: normalizeFileApprovalDecision(action)
       };
       await this.codex.respondToFileChangeApproval(requestId, response);
-      await this.database.resolveRequest(request.requestIdJson, JSON.stringify(response));
+      await this.database.resolveRequest(request.requestIdJson);
     } else {
       await this.codex.respondUnsupportedRequest(requestId, `Unsupported approval action for ${request.method}`);
       return;
@@ -337,7 +329,7 @@ export class BridgeRequestCoordinator {
     if (!currentQuestion && allowCompletion) {
       const response = buildUserInputResponse(payload.questions, nextState);
       await this.codex.respondToUserInputRequest(parseRequestId(request.requestIdJson), response);
-      await this.database.resolveRequest(request.requestIdJson, JSON.stringify(response));
+      await this.database.resolveRequest(request.requestIdJson);
       await this.finishUserInputRequest(updated);
       return;
     }

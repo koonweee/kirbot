@@ -356,7 +356,6 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    await this.deps.appendTurnStream(context.turnId, update.finalText);
     await this.handleAssistantRenderUpdate(context, update, update.startedAssistantText);
   }
 
@@ -387,7 +386,6 @@ export class TurnLifecycleCoordinator {
         return;
       }
 
-      await this.deps.appendTurnStream(context.turnId, update.finalText);
       await this.handleAssistantRenderUpdate(context, update, true);
       return;
     }

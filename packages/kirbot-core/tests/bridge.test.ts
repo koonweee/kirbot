@@ -792,7 +792,8 @@ describe("TelegramCodexBridge", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "reasoning-1",
-        delta: "**Inspect current renderer**"
+        delta: "**Inspect current renderer**",
+        contentIndex: 0
       }
     });
     await waitForAsyncNotifications();
@@ -835,9 +836,6 @@ describe("TelegramCodexBridge", () => {
     await waitForCondition(() => getFinalAnswerMessage(telegram)?.text === "Final from snapshot");
 
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Final from snapshot");
-    const persistedTurn = await database.getTurnById("turn-1");
-    expect(persistedTurn.status).toBe("completed");
-    expect(persistedTurn.resolvedAssistantText).toBe("Final from snapshot");
   });
 
   it("replays approval requests that arrive before the turn is locally activated", async () => {
@@ -1142,7 +1140,6 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.sentMessages.some((message) => message.text.includes("Codex error: temporary upstream issue"))).toBe(false);
-    expect((await database.getTurnById("turn-1")).status).toBe("streaming");
 
     codex.emitNotification({
       method: "turn/completed",
@@ -1159,7 +1156,6 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Recovered answer");
-    expect((await database.getTurnById("turn-1")).status).toBe("completed");
   });
 
   it("finalizes turn/completed failed notifications as failed turns", async () => {
@@ -1193,7 +1189,6 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(getFinalAnswerMessage(telegram)?.text).toContain("Codex error: model crashed");
-    expect((await database.getTurnById("turn-1")).status).toBe("failed");
   });
 
   it("dedupes failure terminalization when error is followed by failed completion", async () => {
@@ -1240,7 +1235,6 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.sentMessages.filter((message) => message.text.includes("Codex error: vision failed"))).toHaveLength(1);
-    expect((await database.getTurnById("turn-1")).status).toBe("failed");
   });
 
   it("streams turn deltas and publishes the final completion message", async () => {
@@ -1290,9 +1284,6 @@ describe("TelegramCodexBridge", () => {
       preformattedEntities("gpt-5-codex high • <1s • 0 files • 100% left • /workspace • main", "status")
     );
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
-
-    const turn = await database.getTurnById("turn-1");
-    expect(turn.status).toBe("completed");
   });
 
   it("formats assistant markdown as Telegram entities for drafts and final messages", async () => {
@@ -2550,9 +2541,6 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello from the inside.");
-
-    const turn = await database.getTurnById("turn-1");
-    expect(turn.streamText).toBe("Hello from the inside.");
   });
 
   it("updates the temporary status before assistant text arrives", async () => {
@@ -3257,9 +3245,6 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-2"
       }
     ]);
-
-    const interruptedTurn = await database.getTurnById("turn-1");
-    expect(interruptedTurn.status).toBe("interrupted");
   });
 
   it("keeps queued follow-ups queued after an interrupted turn", async () => {
@@ -3701,7 +3686,6 @@ describe("TelegramCodexBridge", () => {
 
     const resolved = await database.getPendingRequest(JSON.stringify(89));
     expect(resolved.status).toBe("resolved");
-    expect(resolved.responseJson).toBe("{}");
   });
 
   it("surfaces thread compaction as a durable Telegram message", async () => {
@@ -3717,7 +3701,8 @@ describe("TelegramCodexBridge", () => {
     codex.emitNotification({
       method: "thread/compacted",
       params: {
-        threadId: "thread-1"
+        threadId: "thread-1",
+        turnId: "turn-1"
       }
     });
     await waitForAsyncNotifications();
@@ -3744,7 +3729,8 @@ describe("TelegramCodexBridge", () => {
     codex.emitNotification({
       method: "thread/compacted",
       params: {
-        threadId: "thread-1"
+        threadId: "thread-1",
+        turnId: "turn-1"
       }
     });
     codex.emitNotification({

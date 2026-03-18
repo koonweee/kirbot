@@ -16,31 +16,9 @@ export type TopicSession = {
   id: number;
   telegramChatId: string;
   telegramTopicId: number;
-  rootMessageId: number | null;
   codexThreadId: string | null;
-  createdByUserId: number;
-  title: string;
   status: SessionStatus;
   preferredMode: SessionMode;
-  createdAt: string;
-  updatedAt: string;
-  archivedAt: string | null;
-};
-
-export type TurnMessageRecord = {
-  id: number;
-  telegramUpdateId: number;
-  telegramChatId: string;
-  telegramTopicId: number;
-  codexThreadId: string;
-  codexTurnId: string;
-  draftId: number;
-  finalMessageId: number | null;
-  streamText: string;
-  status: "streaming" | "completed" | "failed" | "interrupted";
-  resolvedAssistantText: string;
-  createdAt: string;
-  updatedAt: string;
 };
 
 export type PendingServerRequest = {
@@ -50,15 +28,10 @@ export type PendingServerRequest = {
   telegramChatId: string;
   telegramTopicId: number;
   telegramMessageId: number | null;
-  codexThreadId: string;
-  turnId: string | null;
-  itemId: string | null;
   payloadJson: string;
   stateJson: string | null;
-  responseJson: string | null;
   status: "pending" | "resolved" | "expired";
   createdAt: string;
-  updatedAt: string;
 };
 
 export type UserTurnMessage = {

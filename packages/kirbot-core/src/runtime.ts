@@ -50,12 +50,7 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   await database.migrate();
   await mediaStore.cleanupStaleFiles();
 
-  const expiredPendingRequests = await database.expirePendingRequests(
-    JSON.stringify({
-      reason: "expired_on_startup",
-      message: "Pending request expired because the Telegram bridge restarted."
-    })
-  );
+  const expiredPendingRequests = await database.expirePendingRequests();
   if (expiredPendingRequests > 0) {
     appLogger.warn(`Expired ${expiredPendingRequests} pending Codex request(s) from a previous run.`);
   }

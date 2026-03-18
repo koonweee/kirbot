@@ -39,13 +39,6 @@ export type TurnLifecycleDependencies = {
   telegram: TelegramApi;
   planArtifactPublicUrl: string;
   releaseTurnFiles(turnId: string): Promise<void>;
-  appendTurnStream(turnId: string, streamText: string): Promise<void>;
-  completePersistedTurn(
-    turnId: string,
-    messageId: number | null,
-    status: TerminalTurnStatus,
-    resolvedAssistantText?: string
-  ): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
   maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void>;
@@ -131,8 +124,6 @@ export class TurnFinalizer {
       await this.publishCompletionFooter(context, snapshot);
     }
 
-    await this.deps.appendTurnStream(context.turnId, finalText);
-    await this.deps.completePersistedTurn(context.turnId, messageId, policy.terminalStatus, snapshot.assistantText);
     await this.deps.releaseTurnFiles(context.turnId);
 
     const queueState = this.deps.runtime.finalizeTurn(context.turnId);
