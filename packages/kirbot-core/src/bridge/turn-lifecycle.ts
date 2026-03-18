@@ -305,8 +305,9 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    const resetPreview = !context.reasoningFallback || context.reasoningFallback.itemId !== itemId;
-    const previousBuffer = resetPreview ? "" : context.reasoningFallback.buffer;
+    const previousFallback = context.reasoningFallback;
+    const resetPreview = !previousFallback || previousFallback.itemId !== itemId;
+    const previousBuffer = resetPreview ? "" : previousFallback.buffer;
     const nextBuffer = `${previousBuffer}${delta}`.slice(-RAW_REASONING_BUFFER_LIMIT);
     const nextPreview = deriveRawReasoningPreview(nextBuffer);
 
