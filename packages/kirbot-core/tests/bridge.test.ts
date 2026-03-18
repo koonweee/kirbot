@@ -2390,6 +2390,20 @@ describe("TelegramCodexBridge", () => {
         (draft) => draft.text === "running: npm test · 0s"
       )
     ).toBe(true);
+    expect(
+      telegram.drafts.some(
+        (draft) =>
+          draft.text === "running: npm test · 0s" &&
+          JSON.stringify(draft.options?.entities) ===
+            JSON.stringify([
+              {
+                type: "code",
+                offset: 9,
+                length: "npm test".length
+              }
+            ])
+      )
+    ).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 

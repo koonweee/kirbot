@@ -3,8 +3,10 @@ import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/Reaso
 import {
   chunkFormattedText,
   prependText,
+  renderCodeText,
   renderMarkdownToFormattedText,
-  renderPreformattedText
+  renderPreformattedText,
+  TelegramEntityBuilder
 } from "@kirbot/telegram-format";
 import type { InlineKeyboardMarkup, TelegramRenderedMessage } from "../telegram-messenger";
 import type { QueueStateSnapshot } from "../turn-runtime";
@@ -171,7 +173,7 @@ export function renderTelegramStatusDraft(
   statusDraft: TurnStatusDraft | null,
   elapsedMs: number | null = null
 ): TelegramRenderedMessage | null {
-  return statusDraft ? { text: buildStatusText(statusDraft, elapsedMs) } : null;
+  return statusDraft ? buildRenderedStatusText(statusDraft, elapsedMs) : null;
 }
 
 export function renderTelegramAssistantDraft(text: string): TelegramRenderedMessage {
@@ -332,11 +334,12 @@ function buildTruncatedPreview(text: string, limit: number, prefix: string, suff
 
 function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null): string {
   const parts: string[] = [];
+  const details = buildStatusDetails(statusDraft);
 
-  if (!statusDraft.details) {
+  if (!details) {
     parts.push(statusDraft.state);
   } else {
-    parts.push(`${statusDraft.state}: ${statusDraft.details.replace(/\s+/g, " ").trim()}`);
+    parts.push(`${statusDraft.state}: ${details}`);
   }
 
   if (elapsedMs !== null) {
@@ -346,6 +349,30 @@ function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null)
   const firstLine = parts.join(" · ");
   const snippet = buildStatusSnippet(statusDraft.snippet);
   return snippet ? `${firstLine}\nNow: ${snippet}` : firstLine;
+}
+
+function buildRenderedStatusText(
+  statusDraft: TurnStatusDraft,
+  elapsedMs: number | null
+): TelegramRenderedMessage {
+  if (statusDraft.state !== "running" || !statusDraft.details?.trim()) {
+    return { text: buildStatusText(statusDraft, elapsedMs) };
+  }
+
+  const builder = new TelegramEntityBuilder();
+  builder.appendText(`${statusDraft.state}: `);
+  builder.appendFormatted(renderCodeText(buildStatusDetails(statusDraft) ?? ""));
+
+  if (elapsedMs !== null) {
+    builder.appendText(` · ${formatElapsedDuration(elapsedMs)}`);
+  }
+
+  const snippet = buildStatusSnippet(statusDraft.snippet);
+  if (snippet) {
+    builder.appendText(`\nNow: ${snippet}`);
+  }
+
+  return builder.build();
 }
 
 function buildCompletionFooterText(details: CompletionFooterDetails): string {
@@ -394,6 +421,19 @@ function buildStatusSnippet(text: string | null): string | null {
   }
 
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function buildStatusDetails(statusDraft: TurnStatusDraft): string | null {
+  if (!statusDraft.details) {
+    return null;
+  }
+
+  const normalized = statusDraft.details.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized;
 }
 
 function buildFencedCodeBlock(text: string): string {

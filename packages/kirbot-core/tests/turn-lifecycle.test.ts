@@ -32,7 +32,12 @@ function message(text: string, updateId = 1): UserTurnMessage {
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
-  drafts: Array<{ chatId: number; draftId: number; text: string }> = [];
+  drafts: Array<{
+    chatId: number;
+    draftId: number;
+    text: string;
+    options?: { message_thread_id?: number; entities?: MessageEntity[] };
+  }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
 
@@ -54,9 +59,9 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     draftId: number,
     text: string,
-    _options?: { message_thread_id?: number; entities?: MessageEntity[] }
+    options?: { message_thread_id?: number; entities?: MessageEntity[] }
   ): Promise<true> {
-    this.drafts.push({ chatId, draftId, text });
+    this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     return true;
   }
 
@@ -450,6 +455,13 @@ describe("TurnLifecycleCoordinator", () => {
         durationMs: null
       });
       expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 2s");
+      expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
+        {
+          type: "code",
+          offset: 9,
+          length: "npm test".length
+        }
+      ]);
 
       await vi.advanceTimersByTimeAsync(1000);
       expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 3s");
