@@ -32,7 +32,12 @@ function message(text: string, updateId = 1): UserTurnMessage {
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
-  drafts: Array<{ chatId: number; draftId: number; text: string }> = [];
+  drafts: Array<{
+    chatId: number;
+    draftId: number;
+    text: string;
+    options?: { message_thread_id?: number; entities?: MessageEntity[] };
+  }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
 
@@ -54,9 +59,9 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     draftId: number,
     text: string,
-    _options?: { message_thread_id?: number; entities?: MessageEntity[] }
+    options?: { message_thread_id?: number; entities?: MessageEntity[] }
   ): Promise<true> {
-    this.drafts.push({ chatId, draftId, text });
+    this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
     return true;
   }
 
@@ -450,11 +455,55 @@ describe("TurnLifecycleCoordinator", () => {
         durationMs: null
       });
       expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 2s");
+      expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
+        {
+          type: "code",
+          offset: 9,
+          length: "npm test".length
+        }
+      ]);
 
       await vi.advanceTimersByTimeAsync(1000);
       expect(harness.telegram.drafts.at(-1)?.text).toBe("running: npm test · 3s");
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("truncates very long running commands before rendering them as inline code", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const harness = createHarness();
+      const longCommand = `/bin/bash -lc '${"git push -u origin commentary-consolidation ".repeat(6).trim()}'`;
+
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+      await vi.advanceTimersByTimeAsync(600);
+      await harness.coordinator.handleItemStarted("turn-1", {
+        type: "commandExecution",
+        id: "item-1",
+        command: longCommand,
+        cwd: "/workspace",
+        processId: null,
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null
+      });
+
+      const draft = harness.telegram.drafts.at(-1);
+      expect(draft?.text).toMatch(/^running: .+\.\.\. · 0s$/);
+      expect(draft?.text.length).toBeLessThan(longCommand.length);
+      expect(draft?.options?.entities).toEqual([
+        {
+          type: "code",
+          offset: 9,
+          length: draft ? draft.text.indexOf(" · 0s") - 9 : 0
+        }
+      ]);
     } finally {
       vi.useRealTimers();
     }
