@@ -42,8 +42,6 @@ const envSchema = z.object({
   CODEX_CONFIG_JSON: optionalEnvString(z.string())
 });
 
-const parsed = envSchema.parse(process.env);
-
 export type AppConfig = {
   telegram: {
     botToken: string;
@@ -63,6 +61,8 @@ export type AppConfig = {
 };
 
 export function loadConfig(): AppConfig {
+  const parsed = envSchema.parse(process.env);
+
   return {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
