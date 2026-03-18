@@ -1,0 +1,27 @@
+{
+  "name": "@kirbot/codex-client",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./generated": {
+      "development": "./src/generated/index.ts",
+      "types": "./src/generated/index.ts",
+      "default": "./dist/generated/index.js"
+    },
+    "./generated/*": {
+      "development": "./src/generated/*.ts",
+      "types": "./src/generated/*.ts",
+      "default": "./dist/generated/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  }
+}

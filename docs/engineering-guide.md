@@ -7,7 +7,7 @@ This is the practical onboarding guide for engineers changing kirbot. It focuses
 1. [README.md](../README.md)
 2. [architecture.md](architecture.md)
 3. [user-flows.md](user-flows.md)
-4. [`src/telegram-format/README.md`](/home/jtkw/kirbot/src/telegram-format/README.md) if your change touches Telegram formatting
+4. [`packages/telegram-format/README.md`](/home/jtkw/kirbot/packages/telegram-format/README.md) if your change touches Telegram formatting
 5. [telegram-harness.md](telegram-harness.md) if your change affects harness-driven E2E flows
 
 ## Local Setup
@@ -73,34 +73,34 @@ npm run verify:codex-upgrade
 Start from the user-visible behavior you want to change, then narrow to the owning module.
 
 Session creation, topic routing, slash commands, callback routing:
-[`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
+[`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
 
 Turn status, streaming, completion, queue drain:
-[`src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/src/bridge/turn-lifecycle.ts)
+[`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
 
 Approvals and structured user input:
-[`src/bridge/request-coordinator.ts`](/home/jtkw/kirbot/src/bridge/request-coordinator.ts)
+[`packages/kirbot-core/src/bridge/request-coordinator.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/request-coordinator.ts)
 
 Telegram-facing status/footer/queue preview text:
-[`src/bridge/presentation.ts`](/home/jtkw/kirbot/src/bridge/presentation.ts)
+[`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
 
 Draft delivery and final Telegram messages:
-[`src/telegram-messenger.ts`](/home/jtkw/kirbot/src/telegram-messenger.ts)
+[`packages/kirbot-core/src/telegram-messenger.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-messenger.ts)
 
 Telegram formatting entities, chunking, UTF-16 offsets:
-[`src/telegram-format`](/home/jtkw/kirbot/src/telegram-format)
+[`packages/telegram-format/src`](/home/jtkw/kirbot/packages/telegram-format/src)
 
 Codex app-server interaction:
-[`src/codex.ts`](/home/jtkw/kirbot/src/codex.ts) and [`src/rpc.ts`](/home/jtkw/kirbot/src/rpc.ts)
+[`packages/codex-client/src/codex.ts`](/home/jtkw/kirbot/packages/codex-client/src/codex.ts) and [`packages/codex-client/src/rpc.ts`](/home/jtkw/kirbot/packages/codex-client/src/rpc.ts)
 
 Persistence and restart behavior:
-[`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
+[`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
 
 Reusable runtime bootstrap:
-[`src/runtime.ts`](/home/jtkw/kirbot/src/runtime.ts)
+[`packages/kirbot-core/src/runtime.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/runtime.ts)
 
 Telegram harness transport and transcript synthesis:
-[`src/harness`](/home/jtkw/kirbot/src/harness)
+[`packages/telegram-harness/src`](/home/jtkw/kirbot/packages/telegram-harness/src)
 
 ## Testing Expectations
 
@@ -108,17 +108,17 @@ Prefer the existing fake Telegram and fake Codex adapters over new one-off mocks
 
 Common test targets:
 
-- end-to-end bridge behavior: [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
-- harness-driven conversational E2E coverage: [`tests/harness.test.ts`](/home/jtkw/kirbot/tests/harness.test.ts)
-- turn finalization and queue semantics: [`tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/tests/turn-lifecycle.test.ts)
-- Telegram delivery mechanics: [`tests/telegram-messenger.test.ts`](/home/jtkw/kirbot/tests/telegram-messenger.test.ts)
-- formatting behavior: [`tests/telegram-format.test.ts`](/home/jtkw/kirbot/tests/telegram-format.test.ts)
-- persistence behavior: [`tests/db.test.ts`](/home/jtkw/kirbot/tests/db.test.ts)
-- Codex contract assumptions: [`tests/codex.test.ts`](/home/jtkw/kirbot/tests/codex.test.ts)
+- end-to-end bridge behavior: [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- harness-driven conversational E2E coverage: [`packages/telegram-harness/tests/harness.test.ts`](/home/jtkw/kirbot/packages/telegram-harness/tests/harness.test.ts)
+- turn finalization and queue semantics: [`packages/kirbot-core/tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/turn-lifecycle.test.ts)
+- Telegram delivery mechanics: [`packages/kirbot-core/tests/telegram-messenger.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-messenger.test.ts)
+- formatting behavior: [`packages/telegram-format/tests/telegram-format.test.ts`](/home/jtkw/kirbot/packages/telegram-format/tests/telegram-format.test.ts)
+- persistence behavior: [`packages/kirbot-core/tests/db.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/db.test.ts)
+- Codex contract assumptions: [`packages/codex-client/tests/codex.test.ts`](/home/jtkw/kirbot/packages/codex-client/tests/codex.test.ts)
 
 When changing user-visible Telegram text, assert the exact text in tests so regressions are obvious.
 When changing harness-visible Telegram behavior, update the transcript/event expectations in
-[`tests/harness.test.ts`](/home/jtkw/kirbot/tests/harness.test.ts)
+[`packages/telegram-harness/tests/harness.test.ts`](/home/jtkw/kirbot/packages/telegram-harness/tests/harness.test.ts)
 and [telegram-harness.md](telegram-harness.md) if the usage model changed.
 
 ## Documentation Rules
@@ -150,7 +150,7 @@ Use the narrowest document that still matches the change:
 - `docs/user-flows.md` for user-visible behavior and flow-to-code mapping
 - `docs/engineering-guide.md` for change workflow and maintenance guidance
 - `docs/telegram-harness.md` for harness usage and extension guidance
-- `src/telegram-format/README.md` for formatting-specific behavior
+- `packages/telegram-format/README.md` for formatting-specific behavior
 - `AGENTS.md` files for instructions future contributors and coding agents should follow
 
 ## Before You Finish A Change

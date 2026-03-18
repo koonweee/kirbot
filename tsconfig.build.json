@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/codex-client" },
+    { "path": "./packages/telegram-format" },
+    { "path": "./packages/kirbot-core" },
+    { "path": "./packages/telegram-harness" },
+    { "path": "./apps/bot" }
+  ]
+}

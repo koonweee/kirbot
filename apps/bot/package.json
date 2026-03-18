@@ -1,0 +1,18 @@
+{
+  "name": "@kirbot/bot",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "node --conditions=development --watch --watch-path=src --watch-path=KIRBOT.md --watch-path=../../packages --watch-path=../../.env --import tsx src/index.ts",
+    "harness:telegram": "node --conditions=development --import tsx src/harness-cli.ts",
+    "start": "node --enable-source-maps dist/index.js",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@kirbot/codex-client": "*",
+    "@kirbot/core": "*",
+    "@kirbot/telegram-harness": "*"
+  }
+}

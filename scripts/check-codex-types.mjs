@@ -4,7 +4,7 @@ import { join, relative, resolve } from "node:path";
 
 import { generateCodexTypes } from "./codex-cli.mjs";
 
-const expectedDir = resolve("src/generated/codex");
+const expectedDir = resolve("packages/codex-client/src/generated/codex");
 const tempRoot = mkdtempSync(join(tmpdir(), "kirbot-codex-types-"));
 const actualDir = join(tempRoot, "generated", "codex");
 

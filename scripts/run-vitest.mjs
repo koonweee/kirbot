@@ -10,7 +10,7 @@ const env = { ...process.env };
 // the worker emit watch-mode IPC that Vitest does not understand.
 delete env.WATCH_REPORT_DEPENDENCIES;
 
-const child = spawn(process.execPath, [vitestEntrypoint, ...process.argv.slice(2)], {
+const child = spawn(process.execPath, [...process.execArgv, vitestEntrypoint, ...process.argv.slice(2)], {
   stdio: "inherit",
   env
 });
