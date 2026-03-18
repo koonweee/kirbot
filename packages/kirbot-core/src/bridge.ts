@@ -848,7 +848,12 @@ export class TelegramCodexBridge {
       },
       "item/reasoning/summaryTextDelta": async () => {
         if (notification.method === "item/reasoning/summaryTextDelta") {
-          await this.#lifecycle.handleReasoningDelta(notification.params.turnId);
+          await this.#lifecycle.handleReasoningDelta(
+            notification.params.turnId,
+            notification.params.itemId,
+            notification.params.summaryIndex,
+            notification.params.delta
+          );
         }
       },
       "model/rerouted": async () => {

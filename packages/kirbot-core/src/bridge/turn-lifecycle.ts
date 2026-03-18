@@ -72,6 +72,7 @@ export class TurnLifecycleCoordinator {
         draftId: buildStableDraftId(`${turnId}:final`)
       }),
       planStreams: new Map(),
+      reasoningSummary: null,
       publishedPlanMessages: 0,
       model,
       reasoningEffort,
@@ -204,8 +205,8 @@ export class TurnLifecycleCoordinator {
     const nextStatus =
       options?.preserveDetails &&
       context.statusDraft?.state === statusDraft.state &&
-      context.statusDraft.details
-        ? { ...statusDraft, details: context.statusDraft.details }
+      context.statusDraft.inlineDetails
+        ? { ...statusDraft, inlineDetails: context.statusDraft.inlineDetails }
         : statusDraft;
     await this.setStatusDraft(context, nextStatus, now, options?.force ?? false);
   }
@@ -223,10 +224,19 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleTurnStarted(turnId: string): Promise<void> {
+    const context = this.#turns.get(turnId);
+    if (context) {
+      context.reasoningSummary = null;
+    }
     await this.updateStatus(turnId, buildStatusDraft("thinking"));
   }
 
   async handleItemStarted(turnId: string, item: ThreadItem): Promise<void> {
+    const context = this.#turns.get(turnId);
+    if (context && item.type === "reasoning") {
+      context.reasoningSummary = null;
+    }
+
     if (item.type === "agentMessage") {
       this.deps.runtime.registerAssistantItem(turnId, item.id, item.phase);
     } else if (item.type === "plan") {
@@ -245,8 +255,27 @@ export class TurnLifecycleCoordinator {
     void delta;
   }
 
-  async handleReasoningDelta(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("thinking"));
+  async handleReasoningDelta(turnId: string, itemId: string, summaryIndex: number, delta: string): Promise<void> {
+    const context = this.#turns.get(turnId);
+    if (!context || context.phase !== "active") {
+      return;
+    }
+
+    const resetPreview =
+      !context.reasoningSummary ||
+      context.reasoningSummary.itemId !== itemId ||
+      context.reasoningSummary.summaryIndex !== summaryIndex;
+    const previousText = resetPreview ? "" : (context.reasoningSummary?.text ?? "");
+    const nextText = `${previousText}${delta}`;
+
+    context.reasoningSummary = {
+      itemId,
+      summaryIndex,
+      text: nextText
+    };
+    await this.updateStatus(turnId, buildStatusDraft("thinking", null, nextText), {
+      force: true
+    });
   }
 
   async handleToolProgress(turnId: string): Promise<void> {
@@ -397,6 +426,7 @@ export class TurnLifecycleCoordinator {
   }
 
   private async clearStatusDraft(context: TurnContext): Promise<void> {
+    context.reasoningSummary = null;
     if (!context.statusDraft) {
       return;
     }
@@ -411,11 +441,24 @@ export class TurnLifecycleCoordinator {
     now: number,
     force: boolean
   ): Promise<void> {
+    if (nextStatus.state !== "thinking") {
+      context.reasoningSummary = null;
+      nextStatus = {
+        ...nextStatus,
+        quotedDetails: null
+      };
+    } else if (!nextStatus.quotedDetails && context.reasoningSummary?.text) {
+      nextStatus = {
+        ...nextStatus,
+        quotedDetails: context.reasoningSummary.text
+      };
+    }
+
     if (isSameStatusDraft(context.statusDraft, nextStatus)) {
       return;
     }
 
-    if (!force && now - context.lastStatusUpdateAt < 500) {
+    if (!force && context.statusDraft?.state === nextStatus.state && now - context.lastStatusUpdateAt < 500) {
       return;
     }
 
