@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import { defineConfig } from "vitest/config";
 
@@ -7,35 +7,35 @@ export default defineConfig({
     alias: [
       {
         find: /^@kirbot\/core$/,
-        replacement: fileURLToPath(new URL("./packages/kirbot-core/src/index.ts", import.meta.url))
+        replacement: resolve(__dirname, "./packages/kirbot-core/src/index.ts")
       },
       {
         find: /^@kirbot\/core\/(.*)$/,
-        replacement: fileURLToPath(new URL("./packages/kirbot-core/src/$1", import.meta.url))
+        replacement: resolve(__dirname, "./packages/kirbot-core/src/$1")
       },
       {
         find: /^@kirbot\/codex-client$/,
-        replacement: fileURLToPath(new URL("./packages/codex-client/src/index.ts", import.meta.url))
+        replacement: resolve(__dirname, "./packages/codex-client/src/index.ts")
       },
       {
         find: /^@kirbot\/codex-client\/(.*)$/,
-        replacement: fileURLToPath(new URL("./packages/codex-client/src/$1", import.meta.url))
+        replacement: resolve(__dirname, "./packages/codex-client/src/$1")
       },
       {
         find: /^@kirbot\/telegram-format$/,
-        replacement: fileURLToPath(new URL("./packages/telegram-format/src/index.ts", import.meta.url))
+        replacement: resolve(__dirname, "./packages/telegram-format/src/index.ts")
       },
       {
         find: /^@kirbot\/telegram-format\/(.*)$/,
-        replacement: fileURLToPath(new URL("./packages/telegram-format/src/$1", import.meta.url))
+        replacement: resolve(__dirname, "./packages/telegram-format/src/$1")
       },
       {
         find: /^@kirbot\/telegram-harness$/,
-        replacement: fileURLToPath(new URL("./packages/telegram-harness/src/index.ts", import.meta.url))
+        replacement: resolve(__dirname, "./packages/telegram-harness/src/index.ts")
       },
       {
         find: /^@kirbot\/telegram-harness\/(.*)$/,
-        replacement: fileURLToPath(new URL("./packages/telegram-harness/src/$1", import.meta.url))
+        replacement: resolve(__dirname, "./packages/telegram-harness/src/$1")
       }
     ],
     conditions: ["development"]
