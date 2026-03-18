@@ -22,24 +22,19 @@ export type ActivityLogEntry =
       kind: "activity";
       label: ActivityLogLabel;
       detail: string | null;
-      detailStyle: "inlineCode" | "text";
+      detailStyle: "codeBlock" | "inlineCode" | "text";
     };
 
 export type ActivityLogLabel =
-  | "Web Search Started"
-  | "Web Search Completed"
-  | "Command Started"
-  | "Command Completed"
+  | "Web Search"
+  | "Command"
   | "Command Failed"
   | "Command Declined"
-  | "Tool Started"
-  | "Tool Completed"
+  | "Tool"
   | "Tool Failed"
-  | "Agent Task Started"
-  | "Agent Task Completed"
+  | "Agent Task"
   | "Agent Task Failed"
-  | "File Edit Started"
-  | "File Edit Completed"
+  | "File Edit"
   | "File Edit Failed"
   | "File Edit Declined";
 

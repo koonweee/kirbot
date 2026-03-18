@@ -564,7 +564,7 @@ describe("TurnLifecycleCoordinator", () => {
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
       markdownText:
-        "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan.\n\n- **Command Started:** `npm test`\n\n- **Command Completed:** `npm test`"
+        "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan.\n\n- **Command**\n```\nnpm test\n```"
     });
   });
 

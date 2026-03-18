@@ -198,22 +198,16 @@ describe("BridgeTurnRuntime", () => {
     runtime.appendAssistantDelta("turn-1", "item-1", "Inspecting the repo");
     runtime.appendActivityLogEntry("turn-1", {
       kind: "activity",
-      label: "Web Search Started",
-      detail: "kirbot issues",
-      detailStyle: "text"
-    });
-    runtime.appendActivityLogEntry("turn-1", {
-      kind: "activity",
-      label: "Web Search Completed",
+      label: "Web Search",
       detail: "kirbot issues",
       detailStyle: "text"
     });
     runtime.commitAssistantItem("turn-1", "item-1", "Inspecting the repo in more detail", "commentary");
     runtime.appendActivityLogEntry("turn-1", {
       kind: "activity",
-      label: "Command Started",
+      label: "Command",
       detail: "npm test",
-      detailStyle: "inlineCode"
+      detailStyle: "codeBlock"
     });
 
     expect(runtime.renderActivityLogEntries("turn-1")).toEqual([
@@ -223,21 +217,15 @@ describe("BridgeTurnRuntime", () => {
       },
       {
         kind: "activity",
-        label: "Web Search Started",
+        label: "Web Search",
         detail: "kirbot issues",
         detailStyle: "text"
       },
       {
         kind: "activity",
-        label: "Web Search Completed",
-        detail: "kirbot issues",
-        detailStyle: "text"
-      },
-      {
-        kind: "activity",
-        label: "Command Started",
+        label: "Command",
         detail: "npm test",
-        detailStyle: "inlineCode"
+        detailStyle: "codeBlock"
       }
     ]);
   });

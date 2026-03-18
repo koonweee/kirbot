@@ -5,7 +5,6 @@ import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/T
 import type { LoggerLike } from "../logging";
 import {
   buildActivityLogEntryForItemCompleted,
-  buildActivityLogEntryForItemStarted,
   buildCompletedStatusDraftForItem,
   buildPlanArtifactMessage,
   buildRenderedCompletedItemMessage,
@@ -245,10 +244,6 @@ export class TurnLifecycleCoordinator {
       this.deps.runtime.registerPlanItem(turnId, item.id);
     }
 
-    const activityLogEntry = buildActivityLogEntryForItemStarted(item);
-    if (activityLogEntry) {
-      this.deps.runtime.appendActivityLogEntry(turnId, activityLogEntry);
-    }
     await this.updateStatus(turnId, buildStatusDraftForItem(item));
   }
 

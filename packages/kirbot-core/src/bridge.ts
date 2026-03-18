@@ -748,6 +748,10 @@ export class TelegramCodexBridge {
         return;
       }
       if (mode === "drop") {
+        if (event.kind === "serverRequest") {
+          await this.handleCodexEvent(event);
+          return;
+        }
         this.logger.warn(`Dropped Codex event for unknown turn ${turnId}`);
         return;
       }

@@ -93,8 +93,8 @@ describe("commentary artifact presentation", () => {
   it("renders commentary as mixed prose and activity bullets", () => {
     const entries: ActivityLogEntry[] = [
       { kind: "commentary", text: "Inspecting the renderer." },
-      { kind: "activity", label: "Command Started", detail: "npm test", detailStyle: "inlineCode" },
-      { kind: "activity", label: "Web Search Completed", detail: "markdown-it details support", detailStyle: "text" }
+      { kind: "activity", label: "Command", detail: "npm test", detailStyle: "codeBlock" },
+      { kind: "activity", label: "Web Search", detail: "markdown-it details support", detailStyle: "text" }
     ];
 
     const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
@@ -107,7 +107,7 @@ describe("commentary artifact presentation", () => {
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
       markdownText:
-        "## Activity Log\n\n**Commentary**\n\nInspecting the renderer.\n\n- **Command Started:** `npm test`\n\n- **Web Search Completed:** markdown\\-it details support"
+        "## Activity Log\n\n**Commentary**\n\nInspecting the renderer.\n\n- **Command**\n```\nnpm test\n```\n\n- **Web Search:** markdown\\-it details support"
     });
   });
 });

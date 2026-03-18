@@ -391,42 +391,28 @@ function buildPlanPreviewText(text: string): string {
 }
 
 export function buildActivityLogEntryForItemStarted(item: ThreadItem): ActivityLogEntry | null {
-  switch (item.type) {
-    case "commandExecution":
-      return buildActivityEventEntry("Command Started", item.command, "inlineCode");
-    case "fileChange":
-      return buildActivityEventEntry("File Edit Started", summarizeFileChanges(item.changes), "inlineCode");
-    case "mcpToolCall":
-      return buildActivityEventEntry("Tool Started", `${item.server}.${item.tool}`, "inlineCode");
-    case "dynamicToolCall":
-      return buildActivityEventEntry("Tool Started", item.tool, "inlineCode");
-    case "collabAgentToolCall":
-      return buildActivityEventEntry("Agent Task Started", item.tool, "inlineCode");
-    case "webSearch":
-      return buildActivityEventEntry("Web Search Started", item.query, "text");
-    default:
-      return null;
-  }
+  void item;
+  return null;
 }
 
 export function buildActivityLogEntryForItemCompleted(item: ThreadItem): ActivityLogEntry | null {
   switch (item.type) {
     case "commandExecution":
-      return buildActivityEventEntry(getCommandCompletionLabel(item), item.command, "inlineCode");
+      return buildActivityEventEntry(getCommandCompletionLabel(item), item.command, "codeBlock");
     case "fileChange":
       return buildActivityEventEntry(getFileChangeCompletionLabel(item.status), summarizeFileChanges(item.changes), "inlineCode");
     case "mcpToolCall":
-      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool Completed", `${item.server}.${item.tool}`, "inlineCode");
+      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool", `${item.server}.${item.tool}`, "inlineCode");
     case "dynamicToolCall":
-      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool Completed", item.tool, "inlineCode");
+      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool", item.tool, "inlineCode");
     case "collabAgentToolCall":
       return buildActivityEventEntry(
-        item.status === "failed" ? "Agent Task Failed" : "Agent Task Completed",
+        item.status === "failed" ? "Agent Task Failed" : "Agent Task",
         item.tool,
         "inlineCode"
       );
     case "webSearch":
-      return buildActivityEventEntry("Web Search Completed", item.query, "text");
+      return buildActivityEventEntry("Web Search", item.query, "text");
     default:
       return null;
   }
@@ -444,13 +430,21 @@ function renderActivityLogEntry(entry: ActivityLogEntry): string[] {
   }
 
   const detail = formatActivityDetail(entry.detail, entry.detailStyle);
-  return [detail ? `- **${entry.label}:** ${detail}` : `- **${entry.label}**`];
+  if (!detail) {
+    return [`- **${entry.label}**`];
+  }
+
+  if (entry.detailStyle === "codeBlock") {
+    return [`- **${entry.label}**\n${detail}`];
+  }
+
+  return [`- **${entry.label}:** ${detail}`];
 }
 
 function buildActivityEventEntry(
   label: ActivityLogLabel,
   detail: string | null,
-  detailStyle: "inlineCode" | "text"
+  detailStyle: "codeBlock" | "inlineCode" | "text"
 ): ActivityLogEntry {
   const normalizedDetail = detail?.trim() ?? "";
   return {
@@ -461,30 +455,34 @@ function buildActivityEventEntry(
   };
 }
 
-function getCommandCompletionLabel(item: Extract<ThreadItem, { type: "commandExecution" }>): "Command Completed" | "Command Failed" | "Command Declined" {
+function getCommandCompletionLabel(item: Extract<ThreadItem, { type: "commandExecution" }>): "Command" | "Command Failed" | "Command Declined" {
   if (item.status === "declined") {
     return "Command Declined";
   }
 
-  return isCommandExecutionFailed(item) ? "Command Failed" : "Command Completed";
+  return isCommandExecutionFailed(item) ? "Command Failed" : "Command";
 }
 
 function getFileChangeCompletionLabel(
   status: Extract<ThreadItem, { type: "fileChange" }>["status"]
-): "File Edit Completed" | "File Edit Failed" | "File Edit Declined" {
+): "File Edit" | "File Edit Failed" | "File Edit Declined" {
   switch (status) {
     case "declined":
       return "File Edit Declined";
     case "failed":
       return "File Edit Failed";
     default:
-      return "File Edit Completed";
+      return "File Edit";
   }
 }
 
-function formatActivityDetail(detail: string | null, style: "inlineCode" | "text"): string | null {
+function formatActivityDetail(detail: string | null, style: "codeBlock" | "inlineCode" | "text"): string | null {
   if (!detail) {
     return null;
+  }
+
+  if (style === "codeBlock") {
+    return buildFencedCodeBlock(detail);
   }
 
   return style === "inlineCode" ? renderInlineCodeMarkdown(detail) : escapeMarkdownText(detail);
