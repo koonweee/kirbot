@@ -6,13 +6,17 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json && node scripts/copy-mini-app-assets.mjs",
+    "build": "tsc --project tsconfig.json",
     "dev": "node --watch --watch-path=src --watch-path=KIRBOT.md --watch-path=.env --import tsx src/index.ts",
     "dev:tmux": "node scripts/tmux-session.mjs ensure dev",
     "dev:tmux:attach": "node scripts/tmux-session.mjs attach dev",
     "dev:tmux:restart": "node scripts/tmux-session.mjs restart dev",
     "generate:codex-types": "node scripts/generate-codex-types.mjs",
     "harness:telegram": "node --import tsx src/harness/cli.ts",
+    "mini-app:install": "npm --prefix apps/plan-mini-app install",
+    "mini-app:dev": "npm --prefix apps/plan-mini-app run dev",
+    "mini-app:build": "npm --prefix apps/plan-mini-app run build",
+    "mini-app:check": "npm --prefix apps/plan-mini-app run check",
     "start": "node --enable-source-maps dist/src/index.js",
     "start:tmux": "node scripts/tmux-session.mjs ensure start",
     "start:tmux:attach": "node scripts/tmux-session.mjs attach start",

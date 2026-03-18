@@ -1,0 +1,127 @@
+:root {
+  color-scheme: light;
+  --ink: #1f2c2c;
+  --muted: #5d6e6d;
+  --panel: rgba(255, 251, 245, 0.86);
+  --edge: rgba(31, 44, 44, 0.14);
+  --accent: #0f766e;
+  --accent-soft: rgba(15, 118, 110, 0.12);
+  --paper: #f6efe3;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(194, 120, 58, 0.16), transparent 24%),
+    linear-gradient(180deg, #f4ebdd 0%, #efe4d4 100%);
+  color: var(--ink);
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+
+body {
+  min-height: 100vh;
+}
+
+.shell {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 32px 18px;
+  display: grid;
+  place-items: center;
+}
+
+.card {
+  width: min(900px, 100%);
+  box-sizing: border-box;
+  padding: 28px;
+  border: 1px solid var(--edge);
+  border-radius: 28px;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 20px 60px rgba(55, 41, 23, 0.12);
+}
+
+.hero {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  font: 600 0.78rem/1.2 "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  line-height: 0.95;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.plan-text {
+  margin: 0;
+  min-height: 280px;
+  padding: 22px;
+  border-radius: 22px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 250, 242, 0.92)),
+    var(--accent-soft);
+  color: var(--ink);
+  font: 500 0.96rem/1.7 "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.error-copy {
+  color: #7a2e20;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 640px) {
+  .shell {
+    padding: 18px 12px;
+  }
+
+  .card {
+    padding: 20px;
+    border-radius: 22px;
+  }
+
+  .plan-text {
+    min-height: 220px;
+    padding: 18px;
+  }
+}

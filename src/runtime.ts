@@ -43,8 +43,10 @@ const CODEX_INITIALIZE_TIMEOUT_MS = 10_000;
 export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): Promise<KirbotRuntime> {
   const config = options.config ?? (await import("./config")).loadConfig();
   const normalizedMiniAppPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl);
+  const normalizedMiniAppApiPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.apiPublicUrl);
   const effectiveConfig: AppConfig =
-    normalizedMiniAppPublicUrl === config.telegram.miniApp.publicUrl
+    normalizedMiniAppPublicUrl === config.telegram.miniApp.publicUrl &&
+      normalizedMiniAppApiPublicUrl === config.telegram.miniApp.apiPublicUrl
       ? config
       : {
           ...config,
@@ -52,7 +54,8 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
             ...config.telegram,
             miniApp: {
               ...config.telegram.miniApp,
-              publicUrl: normalizedMiniAppPublicUrl ?? undefined
+              publicUrl: normalizedMiniAppPublicUrl ?? undefined,
+              apiPublicUrl: normalizedMiniAppApiPublicUrl ?? undefined
             }
           }
         };
@@ -64,6 +67,11 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   if (config.telegram.miniApp.publicUrl && !normalizedMiniAppPublicUrl) {
     appLogger.warn(
       "Ignoring TELEGRAM_MINI_APP_PUBLIC_URL because Telegram Mini App buttons require an https URL."
+    );
+  }
+  if (config.telegram.miniApp.apiPublicUrl && !normalizedMiniAppApiPublicUrl) {
+    appLogger.warn(
+      "Ignoring TELEGRAM_MINI_APP_API_PUBLIC_URL because the Mini App artifact API requires an https URL."
     );
   }
 

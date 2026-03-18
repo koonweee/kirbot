@@ -12,6 +12,10 @@ export function deriveMiniAppBasePath(publicUrl: string): string {
   return pathname || "";
 }
 
+export function deriveUrlOrigin(publicUrl: string): string {
+  return new URL(publicUrl).origin;
+}
+
 export function buildPlanArtifactMiniAppUrl(publicUrl: string, turnId: string, itemId: string): string {
   const normalizedBaseUrl = publicUrl.endsWith("/") ? publicUrl : `${publicUrl}/`;
   const url = new URL("plan", normalizedBaseUrl);

@@ -104,11 +104,16 @@ export class TelegramCodexBridge {
     private readonly logger: LoggerLike = console
   ) {
     this.#messenger = new TelegramMessenger(telegram, logger);
+    const normalizedMiniAppPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl);
+    const normalizedMiniAppApiPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.apiPublicUrl);
     this.#lifecycle = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
       messenger: this.#messenger,
       telegram,
-      planArtifactPublicUrl: normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl),
+      planArtifactPublicUrl:
+        normalizedMiniAppPublicUrl && normalizedMiniAppApiPublicUrl
+          ? normalizedMiniAppPublicUrl
+          : null,
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
       completePersistedTurn: (turnId, messageId, status, resolvedText) =>

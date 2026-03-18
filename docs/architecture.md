@@ -16,10 +16,12 @@ kirbot is a single-process bridge with four main responsibilities:
 At runtime, the process owns both sides of the bridge:
 
 - a Telegram bot client
-- an optional same-process Mini App HTTP server for completed plan artifacts
+- an optional same-process Mini App HTTP API for completed plan artifacts
 - a spawned Codex app server from the pinned `@openai/codex` dependency
 - an RPC client connected to that app server
 - a SQLite database for bridge state
+
+The Telegram Mini App frontend itself lives separately in [`apps/plan-mini-app`](/home/jtkw/kirbot/apps/plan-mini-app).
 
 ## Startup And Shutdown
 
@@ -71,7 +73,7 @@ Tracks in-memory turn state that does not belong in the database, especially str
 Owns Telegram delivery behavior: drafts, persistent messages, draft clearing, and chat-action throttling.
 
 [`src/mini-app/server.ts`](/home/jtkw/kirbot/src/mini-app/server.ts)
-Owns the same-process Telegram Mini App surface: static asset delivery, plan-artifact lookup, and `initData` validation.
+Owns the same-process Telegram Mini App backend surface: plan-artifact lookup, CORS handling for the separate frontend, and `initData` validation.
 
 [`src/telegram-format/*`](/home/jtkw/kirbot/src/telegram-format)
 Owns Telegram text/entity formatting. This subsystem has its own local documentation and should be treated as the source of truth for formatting behavior.

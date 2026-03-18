@@ -6,3 +6,5 @@ node_modules
 .tmp
 data/
 .worktrees/
+apps/plan-mini-app/.svelte-kit
+apps/plan-mini-app/build

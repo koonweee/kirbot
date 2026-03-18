@@ -438,6 +438,7 @@ describe("TelegramCodexBridge", () => {
         mediaTempDir: join(tempDir, "telegram-media"),
         miniApp: {
           publicUrl: undefined,
+          apiPublicUrl: undefined,
           bindHost: "127.0.0.1",
           port: 8788
         }
@@ -1554,6 +1555,7 @@ describe("TelegramCodexBridge", () => {
         ...config.telegram,
         miniApp: {
           publicUrl: "https://example.com/mini-app",
+          apiPublicUrl: "https://api.example.com/mini-app",
           bindHost: "127.0.0.1",
           port: 0
         }
@@ -1639,6 +1641,7 @@ describe("TelegramCodexBridge", () => {
         ...config.telegram,
         miniApp: {
           publicUrl: "http://example.com/mini-app",
+          apiPublicUrl: "https://api.example.com/mini-app",
           bindHost: "127.0.0.1",
           port: 0
         }
@@ -1694,6 +1697,72 @@ describe("TelegramCodexBridge", () => {
     ).toHaveLength(1);
     expect(
       invalidMiniAppTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+    ).toBe(false);
+  });
+
+  it("falls back to raw plan bubbles when the Mini App API public URL is missing", async () => {
+    const missingApiUrlConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app",
+          apiPublicUrl: undefined,
+          bindHost: "127.0.0.1",
+          port: 0
+        }
+      }
+    };
+    const missingApiUrlCodex = new FakeCodex();
+    const missingApiUrlTelegram = new FakeTelegram();
+    const missingApiUrlBridge = new TelegramCodexBridge(
+      missingApiUrlConfig,
+      database,
+      missingApiUrlTelegram,
+      missingApiUrlCodex,
+      mediaStore
+    );
+
+    await missingApiUrlBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 788,
+      messageId: 302,
+      updateId: 402,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    missingApiUrlCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "plan",
+          id: "plan-1",
+          text: "1. Draft the rollout"
+        }
+      }
+    });
+    missingApiUrlCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(
+      missingApiUrlTelegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")
+    ).toHaveLength(1);
+    expect(
+      missingApiUrlTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
     ).toBe(false);
   });
 

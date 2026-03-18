@@ -122,19 +122,90 @@ describe("Mini App server", () => {
     await expect(response.json()).resolves.toEqual({ error: "unknown_plan_artifact" });
   });
 
-  it("serves a static preview page without Telegram auth", async () => {
+  it("returns 404 for the removed preview route", async () => {
     const harness = await startServer({
       readPlanArtifact: async () => null
     });
 
     const response = await fetch(`http://127.0.0.1:${harness.port}/mini-app/preview/plan`);
 
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Kirbot Plan");
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "not_found" });
   });
 
-  it("does not start when the Mini App public URL is not https", async () => {
+  it("answers CORS preflight requests for the configured app origin", async () => {
+    const harness = await startServer({
+      readPlanArtifact: async () => null
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://example.com"
+        }
+      }
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://example.com");
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
+    expect(response.headers.get("access-control-allow-headers")).toBe("X-Telegram-Init-Data");
+  });
+
+  it("rejects CORS preflight requests from other origins", async () => {
+    const harness = await startServer({
+      readPlanArtifact: async () => null
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://other.example.com"
+        }
+      }
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "forbidden_origin" });
+  });
+
+  it("rejects artifact fetches from other browser origins", async () => {
+    const harness = await startServer({
+      readPlanArtifact: async () => ({
+        turnId: "turn-1",
+        itemId: "plan-1",
+        text: "1. Draft the rollout"
+      })
+    });
+
+    await harness.database.recordTurnStart({
+      telegramUpdateId: 1,
+      telegramChatId: String(-1001),
+      telegramTopicId: 777,
+      codexThreadId: "thread-1",
+      codexTurnId: "turn-1",
+      draftId: 1
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${harness.port}/mini-app/api/plan-artifact?turnId=turn-1&itemId=plan-1`,
+      {
+        headers: {
+          Origin: "https://other.example.com",
+          "X-Telegram-Init-Data": buildTelegramInitData("token", 42)
+        }
+      }
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "forbidden_origin" });
+  });
+
+  it("does not start when the Mini App API public URL is not https", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "kirbot-mini-app-test-"));
     const database = new BridgeDatabase(join(tempDir, "bridge.sqlite"));
     await database.migrate();
@@ -146,7 +217,8 @@ describe("Mini App server", () => {
           userId: 42,
           mediaTempDir: join(tempDir, "media"),
           miniApp: {
-            publicUrl: "http://example.com/mini-app",
+            publicUrl: "https://example.com/mini-app",
+            apiPublicUrl: "http://api.example.com/mini-app",
             bindHost: "127.0.0.1",
             port: await findAvailablePort()
           }
@@ -179,6 +251,7 @@ async function startServer(input: {
       mediaTempDir: join(tempDir, "media"),
       miniApp: {
         publicUrl: "https://example.com/mini-app",
+        apiPublicUrl: "https://api.example.com/mini-app",
         bindHost: "127.0.0.1",
         port
       }

@@ -460,6 +460,7 @@ describe("Telegram harness", () => {
     const config = createConfig(tempDir);
     config.telegram.miniApp = {
       publicUrl: "https://example.com/mini-app",
+      apiPublicUrl: "https://api.example.com/mini-app",
       bindHost: "127.0.0.1",
       port: 0
     };
@@ -501,6 +502,7 @@ function createConfig(tempDir: string): AppConfig {
       mediaTempDir: join(tempDir, "media"),
       miniApp: {
         publicUrl: undefined,
+        apiPublicUrl: undefined,
         bindHost: "127.0.0.1",
         port: 8788
       }

@@ -1,12 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { join } from "node:path";
 
 import type { AppConfig } from "../config";
 import { BridgeDatabase } from "../db";
 import type { LoggerLike } from "../logging";
-import { deriveMiniAppBasePath, normalizeTelegramMiniAppPublicUrl } from "./url";
+import { deriveMiniAppBasePath, deriveUrlOrigin, normalizeTelegramMiniAppPublicUrl } from "./url";
 
 export type PlanArtifactSnapshot = {
   turnId: string;
@@ -29,20 +27,24 @@ export async function startMiniAppServer(input: {
   logger?: LoggerLike;
 }): Promise<MiniAppServer | null> {
   const logger = input.logger ?? console;
-  const publicUrl = normalizeTelegramMiniAppPublicUrl(input.config.miniApp.publicUrl);
-  if (input.config.miniApp.publicUrl && !publicUrl) {
-    logger.warn("Mini App server disabled because TELEGRAM_MINI_APP_PUBLIC_URL must use https.");
+  const apiPublicUrl = normalizeTelegramMiniAppPublicUrl(input.config.miniApp.apiPublicUrl);
+  if (input.config.miniApp.apiPublicUrl && !apiPublicUrl) {
+    logger.warn("Mini App server disabled because TELEGRAM_MINI_APP_API_PUBLIC_URL must use https.");
     return null;
   }
 
-  if (!publicUrl) {
+  if (!apiPublicUrl) {
     return null;
   }
 
-  const basePath = deriveMiniAppBasePath(publicUrl);
+  const basePath = deriveMiniAppBasePath(apiPublicUrl);
+  const allowedOrigin = input.config.miniApp.publicUrl
+    ? deriveUrlOrigin(input.config.miniApp.publicUrl)
+    : null;
   const server = createServer((request, response) => {
     void handleRequest(request, response, {
       basePath,
+      allowedOrigin,
       config: input.config,
       database: input.database,
       codex: input.codex,
@@ -83,6 +85,7 @@ async function handleRequest(
   response: ServerResponse,
   deps: {
     basePath: string;
+    allowedOrigin: string | null;
     config: AppConfig["telegram"];
     database: BridgeDatabase;
     codex: MiniAppCodexApi;
@@ -91,88 +94,85 @@ async function handleRequest(
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const pathname = url.pathname;
-  const planPath = `${deps.basePath}/plan`;
-  const previewPlanPath = `${deps.basePath}/preview/plan`;
-  const appJsPath = `${deps.basePath}/app.js`;
-  const previewAppJsPath = `${deps.basePath}/preview/app.js`;
-  const stylesPath = `${deps.basePath}/styles.css`;
-  const previewStylesPath = `${deps.basePath}/preview/styles.css`;
   const apiPath = `${deps.basePath}/api/plan-artifact`;
 
-  if (request.method === "GET" && (pathname === planPath || pathname === previewPlanPath)) {
-    sendText(response, 200, readStaticAsset("plan.html"), "text/html; charset=utf-8");
+  if (pathname !== apiPath) {
+    sendJson(response, 404, { error: "not_found" });
     return;
   }
 
-  if (request.method === "GET" && (pathname === appJsPath || pathname === previewAppJsPath)) {
-    sendText(response, 200, readStaticAsset("app.js"), "application/javascript; charset=utf-8");
+  if (request.method === "OPTIONS") {
+    if (!applyCors(response, request.headers.origin, deps.allowedOrigin)) {
+      sendJson(response, 403, { error: "forbidden_origin" });
+      return;
+    }
+
+    response.statusCode = 204;
+    response.end();
     return;
   }
 
-  if (request.method === "GET" && (pathname === stylesPath || pathname === previewStylesPath)) {
-    sendText(response, 200, readStaticAsset("styles.css"), "text/css; charset=utf-8");
+  if (request.method !== "GET") {
+    sendJson(response, 405, { error: "method_not_allowed" });
     return;
   }
 
-  if (request.method === "GET" && pathname === apiPath) {
-    const turnId = url.searchParams.get("turnId")?.trim() ?? "";
-    const itemId = url.searchParams.get("itemId")?.trim() ?? "";
-    if (!turnId || !itemId) {
-      sendJson(response, 400, { error: "missing_turn_or_item" });
-      return;
-    }
-
-    const initData = request.headers["x-telegram-init-data"];
-    if (typeof initData !== "string" || initData.trim().length === 0) {
-      sendJson(response, 401, { error: "missing_init_data" });
-      return;
-    }
-
-    const validatedUserId = validateTelegramInitData(initData, deps.config.botToken);
-    if (validatedUserId === null) {
-      sendJson(response, 401, { error: "invalid_init_data" });
-      return;
-    }
-
-    if (validatedUserId !== deps.config.userId) {
-      sendJson(response, 403, { error: "unauthorized_user" });
-      return;
-    }
-
-    const turn = await deps.database.getTurnByIdOptional(turnId);
-    if (!turn) {
-      sendJson(response, 404, { error: "unknown_turn" });
-      return;
-    }
-
-    try {
-      const artifact = await deps.codex.readPlanArtifact(turn.codexThreadId, turnId, itemId);
-      if (!artifact) {
-        sendJson(response, 404, { error: "unknown_plan_artifact" });
-        return;
-      }
-
-      sendJson(response, 200, {
-        turnId,
-        itemId,
-        topicId: turn.telegramTopicId,
-        title: "Plan",
-        text: artifact.text,
-        generatedAt: new Date().toISOString()
-      });
-      return;
-    } catch (error) {
-      deps.logger.error("Failed to load Mini App plan artifact", error);
-      sendJson(response, 502, { error: "artifact_lookup_failed" });
-      return;
-    }
+  if (!applyCors(response, request.headers.origin, deps.allowedOrigin)) {
+    sendJson(response, 403, { error: "forbidden_origin" });
+    return;
   }
 
-  sendJson(response, 404, { error: "not_found" });
-}
+  const turnId = url.searchParams.get("turnId")?.trim() ?? "";
+  const itemId = url.searchParams.get("itemId")?.trim() ?? "";
+  if (!turnId || !itemId) {
+    sendJson(response, 400, { error: "missing_turn_or_item" });
+    return;
+  }
 
-function readStaticAsset(filename: string): string {
-  return readFileSync(join(__dirname, "static", filename), "utf8");
+  const initData = request.headers["x-telegram-init-data"];
+  if (typeof initData !== "string" || initData.trim().length === 0) {
+    sendJson(response, 401, { error: "missing_init_data" });
+    return;
+  }
+
+  const validatedUserId = validateTelegramInitData(initData, deps.config.botToken);
+  if (validatedUserId === null) {
+    sendJson(response, 401, { error: "invalid_init_data" });
+    return;
+  }
+
+  if (validatedUserId !== deps.config.userId) {
+    sendJson(response, 403, { error: "unauthorized_user" });
+    return;
+  }
+
+  const turn = await deps.database.getTurnByIdOptional(turnId);
+  if (!turn) {
+    sendJson(response, 404, { error: "unknown_turn" });
+    return;
+  }
+
+  try {
+    const artifact = await deps.codex.readPlanArtifact(turn.codexThreadId, turnId, itemId);
+    if (!artifact) {
+      sendJson(response, 404, { error: "unknown_plan_artifact" });
+      return;
+    }
+
+    sendJson(response, 200, {
+      turnId,
+      itemId,
+      topicId: turn.telegramTopicId,
+      title: "Plan",
+      text: artifact.text,
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  } catch (error) {
+    deps.logger.error("Failed to load Mini App plan artifact", error);
+    sendJson(response, 502, { error: "artifact_lookup_failed" });
+    return;
+  }
 }
 
 function sendText(response: ServerResponse, status: number, body: string, contentType: string): void {
@@ -183,6 +183,22 @@ function sendText(response: ServerResponse, status: number, body: string, conten
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   sendText(response, status, JSON.stringify(body), "application/json; charset=utf-8");
+}
+
+function applyCors(response: ServerResponse, requestOrigin: string | undefined, allowedOrigin: string | null): boolean {
+  if (!requestOrigin) {
+    return true;
+  }
+
+  if (!allowedOrigin || requestOrigin !== allowedOrigin) {
+    return false;
+  }
+
+  response.setHeader("access-control-allow-origin", requestOrigin);
+  response.setHeader("access-control-allow-methods", "GET, OPTIONS");
+  response.setHeader("access-control-allow-headers", "X-Telegram-Init-Data");
+  response.setHeader("vary", "Origin");
+  return true;
 }
 
 function validateTelegramInitData(initData: string, botToken: string): number | null {

@@ -2,7 +2,7 @@
 
 <img src="./kirbot.png" alt="kirbot" width="128" />
 
-kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can start sessions from the lobby, continue them inside topics, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. When Mini App support is configured, completed plan artifacts open in a Telegram Mini App instead of dumping the full plan into message bubbles.
+kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can start sessions from the lobby, continue them inside topics, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. When Mini App support is configured, completed plan artifacts open in a separate Telegram Mini App instead of dumping the full plan into message bubbles.
 
 ## Start Here
 
@@ -20,11 +20,12 @@ Formatting work has its own local guide in [src/telegram-format/README.md](src/t
 kirbot sits between Telegram and a pinned local Codex app server:
 
 - Telegram is the user-facing UI.
-- A same-process Mini App HTTP surface can serve completed plan artifacts when configured.
+- A same-process Mini App HTTP API can serve completed plan artifacts when configured.
 - `src/bridge.ts` translates Telegram events into session and turn actions.
 - `src/codex.ts` and `src/rpc.ts` manage the Codex app-server connection.
 - `src/db.ts` stores topic/session state, turn records, and pending requests.
 - `src/telegram-messenger.ts` and `src/telegram-format/*` own Telegram delivery and formatting.
+- `apps/plan-mini-app` is a separate SvelteKit frontend for reading completed plan artifacts.
 
 The bridge is intentionally topic-centric:
 
@@ -45,6 +46,7 @@ Install and configure:
 
 ```bash
 npm install
+npm run mini-app:install
 cp .env.example .env
 ```
 
@@ -57,6 +59,7 @@ Commonly adjusted settings:
 
 - `DATABASE_PATH`
 - `TELEGRAM_MINI_APP_PUBLIC_URL`
+- `TELEGRAM_MINI_APP_API_PUBLIC_URL`
 - `TELEGRAM_MINI_APP_BIND_HOST`
 - `TELEGRAM_MINI_APP_PORT`
 - `CODEX_DEFAULT_CWD`
@@ -75,6 +78,8 @@ Run locally in development:
 
 ```bash
 npm run dev
+npm run mini-app:install
+npm run mini-app:dev
 ```
 
 Run a detached development session in tmux:
@@ -108,6 +113,9 @@ npm run dev
 npm run dev:tmux
 npm run dev:tmux:attach
 npm run dev:tmux:restart
+npm run mini-app:dev
+npm run mini-app:build
+npm run mini-app:check
 npm start
 npm run start:tmux
 npm run start:tmux:attach
@@ -127,6 +135,7 @@ Notes:
 - Codex base instructions are intentionally left unset.
 - `src/generated/codex` is checked in and should stay aligned with the pinned `@openai/codex` version.
 - `npm run dev` is the watched local development entrypoint.
+- `apps/plan-mini-app` is built and deployed separately; it uses `PUBLIC_KIRBOT_PLAN_API_BASE_URL` to call kirbot's artifact API.
 - Detached tmux sessions use stable names: `kirbot-dev` for `npm run dev` and `kirbot-prod` for `npm start`.
 - The attach scripts connect to the existing tmux session, or switch clients if already inside tmux, so they are the fastest way for an agent to inspect live process output.
 - The restart scripts clear the pane scrollback, recreate the pane command in place, and create the session first if it does not already exist.
