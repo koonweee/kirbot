@@ -9,6 +9,7 @@ export function getNotificationTurnId(notification: ServerNotification): string 
     case "turn/plan/updated":
     case "thread/tokenUsage/updated":
     case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
     case "model/rerouted":
     case "item/mcpToolCall/progress":
     case "item/commandExecution/outputDelta":

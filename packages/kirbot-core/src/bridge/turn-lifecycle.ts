@@ -23,6 +23,9 @@ import {
 
 export type { TurnContext } from "./turn-context";
 
+const RAW_REASONING_BUFFER_LIMIT = 2_000;
+const RAW_REASONING_PREVIEW_LIMIT = 140;
+
 export class TurnLifecycleCoordinator {
   readonly #turns = new Map<string, TurnContext>();
   readonly #finalizer: TurnFinalizer;
@@ -72,6 +75,7 @@ export class TurnLifecycleCoordinator {
       }),
       planStreams: new Map(),
       reasoningSummary: null,
+      reasoningFallback: null,
       publishedPlanMessages: 0,
       model,
       reasoningEffort,
@@ -226,6 +230,7 @@ export class TurnLifecycleCoordinator {
     const context = this.#turns.get(turnId);
     if (context) {
       context.reasoningSummary = null;
+      context.reasoningFallback = null;
     }
     await this.updateStatus(turnId, buildStatusDraft("thinking"));
   }
@@ -234,6 +239,7 @@ export class TurnLifecycleCoordinator {
     const context = this.#turns.get(turnId);
     if (context && item.type === "reasoning") {
       context.reasoningSummary = null;
+      context.reasoningFallback = null;
     }
 
     if (item.type === "agentMessage") {
@@ -273,6 +279,36 @@ export class TurnLifecycleCoordinator {
       text: nextText
     };
     await this.updateStatus(turnId, buildStatusDraft("thinking", null, nextText), {
+      force: true
+    });
+  }
+
+  async handleReasoningTextDelta(turnId: string, itemId: string, delta: string): Promise<void> {
+    const context = this.#turns.get(turnId);
+    if (!context || context.phase !== "active") {
+      return;
+    }
+
+    const resetPreview = !context.reasoningFallback || context.reasoningFallback.itemId !== itemId;
+    const previousBuffer = resetPreview ? "" : context.reasoningFallback.buffer;
+    const nextBuffer = `${previousBuffer}${delta}`.slice(-RAW_REASONING_BUFFER_LIMIT);
+    const nextPreview = deriveRawReasoningPreview(nextBuffer);
+
+    context.reasoningFallback = {
+      itemId,
+      buffer: nextBuffer,
+      preview: nextPreview
+    };
+
+    if (context.reasoningSummary?.itemId === itemId && context.reasoningSummary.text.trim().length > 0) {
+      return;
+    }
+
+    if (!nextPreview) {
+      return;
+    }
+
+    await this.updateStatus(turnId, buildStatusDraft("thinking", null, nextPreview), {
       force: true
     });
   }
@@ -426,6 +462,7 @@ export class TurnLifecycleCoordinator {
 
   private async clearStatusDraft(context: TurnContext): Promise<void> {
     context.reasoningSummary = null;
+    context.reasoningFallback = null;
     if (!context.statusDraft) {
       return;
     }
@@ -442,6 +479,7 @@ export class TurnLifecycleCoordinator {
   ): Promise<void> {
     if (nextStatus.state !== "thinking") {
       context.reasoningSummary = null;
+      context.reasoningFallback = null;
       nextStatus = {
         ...nextStatus,
         quotedDetails: null
@@ -450,6 +488,11 @@ export class TurnLifecycleCoordinator {
       nextStatus = {
         ...nextStatus,
         quotedDetails: context.reasoningSummary.text
+      };
+    } else if (!nextStatus.quotedDetails && context.reasoningFallback?.preview) {
+      nextStatus = {
+        ...nextStatus,
+        quotedDetails: context.reasoningFallback.preview
       };
     }
 
@@ -495,4 +538,37 @@ export class TurnLifecycleCoordinator {
       throw error;
     }
   }
+}
+
+function deriveRawReasoningPreview(buffer: string): string | null {
+  const boldPreview = extractFirstBoldMarkdown(buffer);
+  if (boldPreview) {
+    return truncateReasoningPreview(boldPreview);
+  }
+
+  const normalized = normalizeReasoningPreview(buffer);
+  if (!normalized) {
+    return null;
+  }
+
+  const sentenceMatch = normalized.match(/^(.{1,140}?[.!?])(?:\s|$)/);
+  if (sentenceMatch?.[1]) {
+    return truncateReasoningPreview(sentenceMatch[1]);
+  }
+
+  return truncateReasoningPreview(normalized);
+}
+
+function extractFirstBoldMarkdown(text: string): string | null {
+  const match = /\*\*([^*]+)\*\*/.exec(text);
+  return match?.[1] ? normalizeReasoningPreview(match[1]) : null;
+}
+
+function normalizeReasoningPreview(text: string): string | null {
+  const normalized = text.replace(/\*\*/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function truncateReasoningPreview(text: string): string {
+  return text.length > RAW_REASONING_PREVIEW_LIMIT ? `${text.slice(0, RAW_REASONING_PREVIEW_LIMIT - 3)}...` : text;
 }

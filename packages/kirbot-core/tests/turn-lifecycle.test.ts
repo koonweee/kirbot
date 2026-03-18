@@ -671,6 +671,33 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nSecond summary.");
   });
 
+  it("surfaces raw reasoning deltas when no reasoning summary is available", async () => {
+    const harness = createHarness();
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", "**Inspect current renderer**");
+
+    expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nInspect current renderer");
+    expect(harness.telegram.drafts.at(-1)?.options?.entities).toEqual([
+      {
+        type: "blockquote",
+        offset: "thinking · 0s\n\n".length,
+        length: "Inspect current renderer".length
+      }
+    ]);
+  });
+
+  it("prefers reasoning summaries over raw reasoning fallback previews", async () => {
+    const harness = createHarness();
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", "**Inspect current renderer**");
+    await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "Use the summary instead.");
+    await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", " Additional raw detail.");
+
+    expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s\n\nUse the summary instead.");
+  });
+
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
     const harness = createHarness({
       text: "Final answer",

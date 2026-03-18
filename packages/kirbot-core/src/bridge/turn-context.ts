@@ -17,6 +17,12 @@ export type ReasoningSummaryState = {
   text: string;
 };
 
+export type ReasoningFallbackState = {
+  itemId: string;
+  buffer: string;
+  preview: string | null;
+};
+
 export type TurnContext = {
   chatId: number;
   topicId: number;
@@ -33,6 +39,7 @@ export type TurnContext = {
   finalStream: TelegramStreamMessageHandle;
   planStreams: Map<string, PlanStreamState>;
   reasoningSummary: ReasoningSummaryState | null;
+  reasoningFallback: ReasoningFallbackState | null;
   publishedPlanMessages: number;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;

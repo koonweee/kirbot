@@ -763,6 +763,47 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts.at(-1)?.text).toBe("running: npm test · 0s");
   });
 
+  it("falls back to raw reasoning deltas when the app server does not send summaries", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 18,
+      updateId: 31,
+      userId: 42,
+      text: "Inspect the renderer"
+    });
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "reasoning",
+          id: "reasoning-1",
+          summary: [],
+          content: []
+        }
+      }
+    });
+    codex.emitNotification({
+      method: "item/reasoning/textDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "**Inspect current renderer**"
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const quotedDraft = combinedDraft("thinking · 0s", "Inspect current renderer");
+    expect(telegram.drafts.at(-1)?.text).toBe(quotedDraft);
+    expect(telegram.drafts.at(-1)?.options?.entities).toEqual(
+      quoteEntities("Inspect current renderer", "blockquote", "thinking · 0s\n\n".length)
+    );
+  });
+
   it("replays turn completion that arrives before the turn is locally activated", async () => {
     codex.readTurnSnapshotResult = {
       text: "Final from snapshot",

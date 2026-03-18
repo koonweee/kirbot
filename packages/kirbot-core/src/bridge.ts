@@ -854,6 +854,15 @@ export class TelegramCodexBridge {
           );
         }
       },
+      "item/reasoning/textDelta": async () => {
+        if (notification.method === "item/reasoning/textDelta") {
+          await this.#lifecycle.handleReasoningTextDelta(
+            notification.params.turnId,
+            notification.params.itemId,
+            notification.params.delta
+          );
+        }
+      },
       "model/rerouted": async () => {
         if (notification.method === "model/rerouted") {
           this.#lifecycle.handleModelRerouted(notification.params.turnId, notification.params.toModel);
