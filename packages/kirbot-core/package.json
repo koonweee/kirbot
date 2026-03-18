@@ -1,0 +1,26 @@
+{
+  "name": "@kirbot/core",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./mini-app/server": {
+      "development": "./src/mini-app/server.ts",
+      "types": "./src/mini-app/server.ts",
+      "default": "./dist/mini-app/server.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@kirbot/codex-client": "*",
+    "@kirbot/telegram-format": "*"
+  }
+}

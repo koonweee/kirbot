@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/codex-client" },
+    { "path": "../../packages/kirbot-core" },
+    { "path": "../../packages/telegram-harness" }
+  ],
+  "include": ["src/**/*.ts"]
+}

@@ -24,13 +24,13 @@ User experience:
 
 Owned by:
 
-- root-message routing in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
-- topic-title and link presentation in [`src/bridge/presentation.ts`](/home/jtkw/kirbot/src/bridge/presentation.ts)
-- session persistence in [`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
+- root-message routing in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- topic-title and link presentation in [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
+- session persistence in [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
 
 Verified by:
 
-- lobby startup and initial-prompt mirroring behavior in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- lobby startup and initial-prompt mirroring behavior in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## 2. Start A Session Inside An Existing Topic
 
@@ -41,12 +41,12 @@ User experience:
 
 Owned by:
 
-- topic-message routing in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
-- session lookup and activation in [`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
+- topic-message routing in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- session lookup and activation in [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
 
 Verified by:
 
-- unmapped-topic session creation tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- unmapped-topic session creation tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## 3. Stream A Turn Back Into Telegram
 
@@ -60,16 +60,16 @@ User experience:
 
 Owned by:
 
-- active-turn lifecycle in [`src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/src/bridge/turn-lifecycle.ts)
-- status, footer, and chunk rendering in [`src/bridge/presentation.ts`](/home/jtkw/kirbot/src/bridge/presentation.ts)
-- draft and final delivery in [`src/telegram-messenger.ts`](/home/jtkw/kirbot/src/telegram-messenger.ts)
-- Markdown/entity formatting in [`src/telegram-format`](/home/jtkw/kirbot/src/telegram-format)
+- active-turn lifecycle in [`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
+- status, footer, and chunk rendering in [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
+- draft and final delivery in [`packages/kirbot-core/src/telegram-messenger.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-messenger.ts)
+- Markdown/entity formatting in [`packages/telegram-format/src`](/home/jtkw/kirbot/packages/telegram-format/src)
 
 Verified by:
 
-- streaming, chunking, commentary, and footer tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
-- terminal-path tests in [`tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/tests/turn-lifecycle.test.ts)
-- draft-delivery tests in [`tests/telegram-messenger.test.ts`](/home/jtkw/kirbot/tests/telegram-messenger.test.ts)
+- streaming, chunking, commentary, and footer tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- terminal-path tests in [`packages/kirbot-core/tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/turn-lifecycle.test.ts)
+- draft-delivery tests in [`packages/kirbot-core/tests/telegram-messenger.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-messenger.test.ts)
 
 ## 4. Send A Follow-Up While A Turn Is Still Running
 
@@ -82,15 +82,15 @@ User experience:
 
 Owned by:
 
-- turn orchestration in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
-- in-memory queue state in [`src/turn-runtime.ts`](/home/jtkw/kirbot/src/turn-runtime.ts)
-- queue-preview presentation in [`src/bridge/presentation.ts`](/home/jtkw/kirbot/src/bridge/presentation.ts)
-- final drain and requeue behavior in [`src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/src/bridge/turn-lifecycle.ts)
+- turn orchestration in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- in-memory queue state in [`packages/kirbot-core/src/turn-runtime.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/turn-runtime.ts)
+- queue-preview presentation in [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
+- final drain and requeue behavior in [`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
 
 Verified by:
 
-- steer, queueing, and send-now tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
-- pending-steer finalization tests in [`tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/tests/turn-lifecycle.test.ts)
+- steer, queueing, and send-now tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- pending-steer finalization tests in [`packages/kirbot-core/tests/turn-lifecycle.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/turn-lifecycle.test.ts)
 
 ## 5. Stop The Current Response
 
@@ -102,12 +102,12 @@ User experience:
 
 Owned by:
 
-- topic command handling in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
-- post-interrupt finalization in [`src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/src/bridge/turn-lifecycle.ts)
+- topic command handling in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- post-interrupt finalization in [`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
 
 Verified by:
 
-- stop and stale-interrupt tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- stop and stale-interrupt tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## 6. Switch Between Planning And Implementation
 
@@ -120,14 +120,14 @@ User experience:
 
 Owned by:
 
-- slash-command routing in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
-- command definitions in [`src/telegram-commands.ts`](/home/jtkw/kirbot/src/telegram-commands.ts)
-- preferred-mode persistence in [`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
+- slash-command routing in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- command definitions in [`packages/kirbot-core/src/telegram-commands.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-commands.ts)
+- preferred-mode persistence in [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
 
 Verified by:
 
-- root and topic mode-command tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
-- command-menu tests in [`tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/tests/telegram-command-sync.test.ts)
+- root and topic mode-command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
 
 ## 7. Handle Approvals And Structured User Input
 
@@ -140,14 +140,14 @@ User experience:
 
 Owned by:
 
-- request routing in [`src/bridge/request-coordinator.ts`](/home/jtkw/kirbot/src/bridge/request-coordinator.ts)
-- request persistence in [`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
-- status updates for waiting turns in [`src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/src/bridge/turn-lifecycle.ts)
+- request routing in [`packages/kirbot-core/src/bridge/request-coordinator.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/request-coordinator.ts)
+- request persistence in [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
+- status updates for waiting turns in [`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
 
 Verified by:
 
-- approval and user-input request tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
-- request persistence tests in [`tests/db.test.ts`](/home/jtkw/kirbot/tests/db.test.ts)
+- approval and user-input request tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- request persistence tests in [`packages/kirbot-core/tests/db.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/db.test.ts)
 
 ## 8. Send Images
 
@@ -159,13 +159,13 @@ User experience:
 
 Owned by:
 
-- Telegram image message intake in [`src/index.ts`](/home/jtkw/kirbot/src/index.ts)
-- temporary media lifecycle in [`src/media-store.ts`](/home/jtkw/kirbot/src/media-store.ts)
-- turn cleanup in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts) and [`src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/src/bridge/turn-lifecycle.ts)
+- Telegram image message intake in [`apps/bot/src/index.ts`](/home/jtkw/kirbot/apps/bot/src/index.ts)
+- temporary media lifecycle in [`packages/kirbot-core/src/media-store.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/media-store.ts)
+- turn cleanup in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts) and [`packages/kirbot-core/src/bridge/turn-lifecycle.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/turn-lifecycle.ts)
 
 Verified by:
 
-- image retention and cleanup tests in [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- image retention and cleanup tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## 9. Recover Across Restarts And Topic Closure
 
@@ -177,13 +177,13 @@ User experience:
 
 Owned by:
 
-- startup cleanup in [`src/index.ts`](/home/jtkw/kirbot/src/index.ts)
-- topic archival in [`src/bridge.ts`](/home/jtkw/kirbot/src/bridge.ts)
-- update deduplication and persistence in [`src/db.ts`](/home/jtkw/kirbot/src/db.ts)
+- startup cleanup in [`apps/bot/src/index.ts`](/home/jtkw/kirbot/apps/bot/src/index.ts)
+- topic archival in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- update deduplication and persistence in [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
 
 Verified by:
 
-- restart and archival behavior in [`tests/db.test.ts`](/home/jtkw/kirbot/tests/db.test.ts) and [`tests/bridge.test.ts`](/home/jtkw/kirbot/tests/bridge.test.ts)
+- restart and archival behavior in [`packages/kirbot-core/tests/db.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/db.test.ts) and [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## Flow Boundaries That Matter
 
