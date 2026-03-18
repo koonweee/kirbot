@@ -432,6 +432,54 @@ describe("CodexRpcClient", () => {
     });
   });
 
+  it("rejects unknown server requests after initialize with method-not-found", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+
+    const serverRequests: unknown[] = [];
+    client.on("serverRequest", (request) => serverRequests.push(request));
+
+    const initializePromise = client.initialize({
+      clientInfo: {
+        name: "test",
+        title: "Test",
+        version: "0.1.0"
+      },
+      capabilities: {
+        experimentalApi: true
+      }
+    });
+    await Promise.resolve();
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: "unknown-after-init",
+      method: "unsupported/request",
+      params: {
+        threadId: "thread-1"
+      }
+    });
+
+    expect(serverRequests).toEqual([]);
+    expect(transport.sent).toContainEqual({
+      jsonrpc: "2.0",
+      id: "unknown-after-init",
+      error: {
+        code: -32601,
+        message: "unsupported remote app-server request `unsupported/request`"
+      }
+    });
+  });
+
   it("sends turn/steer requests with typed params", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);

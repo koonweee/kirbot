@@ -472,14 +472,12 @@ export class CodexRpcClient extends EventEmitter {
     if ("id" in message) {
       const method = String(message.method);
       if (!KNOWN_SERVER_REQUEST_METHODS.has(method)) {
-        if (this.#initializeState) {
-          void this.respondError(message.id as RequestId, {
-            code: -32601,
-            message: `unsupported remote app-server request \`${method}\``
-          }).catch((error) => {
-            this.emit("transportError", error instanceof Error ? error : new Error(String(error)));
-          });
-        }
+        void this.respondError(message.id as RequestId, {
+          code: -32601,
+          message: `unsupported remote app-server request \`${method}\``
+        }).catch((error) => {
+          this.emit("transportError", error instanceof Error ? error : new Error(String(error)));
+        });
         return null;
       }
 
