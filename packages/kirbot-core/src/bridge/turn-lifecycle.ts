@@ -471,9 +471,7 @@ export class TurnLifecycleCoordinator {
   }
 
   private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {
-    const messageId = this.deps.planArtifactPublicUrl
-      ? await this.sendMiniAppPlanMessage(context, plan.text)
-      : await this.sendRenderedPlanMessages(context, buildRenderedPlanMessages(plan.text));
+    const messageId = await this.sendMiniAppPlanMessage(context, plan.text);
 
     context.publishedPlanMessages += 1;
     return messageId;

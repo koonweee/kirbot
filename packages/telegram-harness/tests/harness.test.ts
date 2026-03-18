@@ -489,7 +489,7 @@ function createConfig(tempDir: string): AppConfig {
       userId: 42,
       mediaTempDir: join(tempDir, "media"),
       miniApp: {
-        publicUrl: undefined
+        publicUrl: "https://example.com/mini-app"
       }
     },
     database: {

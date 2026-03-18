@@ -30,7 +30,7 @@ export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
   messenger: TelegramMessenger;
   telegram: TelegramApi;
-  planArtifactPublicUrl: string | null;
+  planArtifactPublicUrl: string;
   releaseTurnFiles(turnId: string): Promise<void>;
   appendTurnStream(turnId: string, streamText: string): Promise<void>;
   completePersistedTurn(
@@ -205,7 +205,7 @@ export class TurnFinalizer {
   }
 
   private buildCommentaryPublication(items: string[], hasAssistantText: boolean): CommentaryPublication {
-    if (items.length === 0 || !this.deps.planArtifactPublicUrl) {
+    if (items.length === 0) {
       return { kind: "hidden" };
     }
 

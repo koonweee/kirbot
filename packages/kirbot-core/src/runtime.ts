@@ -11,7 +11,6 @@ import {
   type TelegramCommandApi
 } from "./telegram-command-sync";
 import type { TelegramApi } from "./telegram-messenger";
-import { normalizeTelegramMiniAppPublicUrl } from "./mini-app/url";
 
 export type BridgeActivitySnapshot = {
   activeTurnCount: number;
@@ -41,32 +40,13 @@ const CODEX_INITIALIZE_TIMEOUT_MS = 10_000;
 
 export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): Promise<KirbotRuntime> {
   const config = options.config ?? (await import("./config")).loadConfig();
-  const normalizedMiniAppPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl);
-  const effectiveConfig: AppConfig =
-    normalizedMiniAppPublicUrl === config.telegram.miniApp.publicUrl
-      ? config
-      : {
-          ...config,
-          telegram: {
-            ...config.telegram,
-            miniApp: {
-              publicUrl: normalizedMiniAppPublicUrl ?? undefined
-            }
-          }
-        };
   const baseLogger = options.fallbackLogger ?? console;
   const logTarget = options.logTarget ?? createConsoleLogTarget(baseLogger);
   const appLogger = createSourceLogger(logTarget, "kirbot");
   const codexLogger = createSourceLogger(logTarget, "codex-app-server");
 
-  if (config.telegram.miniApp.publicUrl && !normalizedMiniAppPublicUrl) {
-    appLogger.warn(
-      "Ignoring TELEGRAM_MINI_APP_PUBLIC_URL because Telegram Mini App buttons require an https URL."
-    );
-  }
-
-  const database = new BridgeDatabase(effectiveConfig.database.path);
-  const mediaStore = new TemporaryImageStore(effectiveConfig.telegram.mediaTempDir);
+  const database = new BridgeDatabase(config.database.path);
+  const mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
   await database.migrate();
   await mediaStore.cleanupStaleFiles();
 
@@ -82,14 +62,14 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
 
   let rpcClient: CodexRpcClient | null = null;
   let spawnedAppServer: SpawnedAppServer | null = null;
-  const codex = await initializeCodex(effectiveConfig, options.codexApi, codexLogger).then((result) => {
+  const codex = await initializeCodex(config, options.codexApi, codexLogger).then((result) => {
     rpcClient = result.rpcClient;
     spawnedAppServer = result.spawnedAppServer;
     return result.codex;
   });
 
   const bridge = new TelegramCodexBridge(
-    effectiveConfig,
+    config,
     database,
     options.telegramApi,
     codex,
@@ -98,12 +78,12 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   );
 
   if (options.telegramCommandApi) {
-    const commandSync = new TelegramCommandSync(options.telegramCommandApi, effectiveConfig.telegram.userId, appLogger);
+    const commandSync = new TelegramCommandSync(options.telegramCommandApi, config.telegram.userId, appLogger);
     await initializeTelegramCommandSyncFailOpen(commandSync, appLogger);
   }
 
   return {
-    config: effectiveConfig,
+    config,
     bridge,
     database,
     codex,

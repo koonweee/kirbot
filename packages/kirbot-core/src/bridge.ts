@@ -31,7 +31,6 @@ import type { LoggerLike } from "./logging";
 import { isAllowedRootCommand, isAllowedTopicCommand } from "./telegram-commands";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
-import { normalizeTelegramMiniAppPublicUrl } from "./mini-app/url";
 import type { AppServerEvent } from "@kirbot/codex-client";
 
 export type CallbackQueryEvent = {
@@ -102,12 +101,11 @@ export class TelegramCodexBridge {
     private readonly logger: LoggerLike = console
   ) {
     this.#messenger = new TelegramMessenger(telegram, logger);
-    const normalizedMiniAppPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl);
     this.#lifecycle = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
       messenger: this.#messenger,
       telegram,
-      planArtifactPublicUrl: normalizedMiniAppPublicUrl,
+      planArtifactPublicUrl: config.telegram.miniApp.publicUrl,
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       appendTurnStream: (turnId, streamText) => this.database.appendTurnStream(turnId, streamText).then(() => undefined),
       completePersistedTurn: (turnId, messageId, status, resolvedText) =>

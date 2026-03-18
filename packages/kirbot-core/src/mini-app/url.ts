@@ -25,15 +25,6 @@ export type MiniAppCommentaryArtifact = MiniAppMarkdownArtifactBase & {
 
 export type MiniAppArtifact = MiniAppPlanArtifact | MiniAppCommentaryArtifact;
 
-export function normalizeTelegramMiniAppPublicUrl(publicUrl: string | undefined): string | null {
-  if (!publicUrl) {
-    return null;
-  }
-
-  const parsed = new URL(publicUrl);
-  return parsed.protocol === "https:" ? parsed.toString() : null;
-}
-
 export function encodeMiniAppArtifact(artifact: MiniAppArtifact): string {
   return compressToEncodedURIComponent(JSON.stringify(validateMiniAppArtifact(artifact)));
 }

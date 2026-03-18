@@ -18,6 +18,7 @@ Prerequisites:
 - `tmux` if you want detached dev or production sessions
 - a Telegram bot token
 - the Telegram user ID kirbot should accept
+- a deployed Telegram Mini App URL over `https`
 
 Initial setup:
 

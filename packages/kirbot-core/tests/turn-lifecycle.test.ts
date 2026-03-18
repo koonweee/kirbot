@@ -164,7 +164,7 @@ function createHarness(
     runtime,
     messenger: new TelegramMessenger(telegram),
     telegram,
-    planArtifactPublicUrl: null,
+    planArtifactPublicUrl: "https://example.com/mini-app",
     releaseTurnFiles: async (turnId) => {
       releasedTurnIds.push(turnId);
     },
@@ -277,15 +277,9 @@ describe("TurnLifecycleCoordinator", () => {
     });
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.filter((message) => message.text.startsWith("Plan"))).toEqual([
-      {
-        chatId: -1001,
-        text: "Plan\n\n1. Draft the rollout",
-        options: {
-          message_thread_id: 777
-        }
-      }
-    ]);
+    const planMessages = harness.telegram.sentMessages.filter((message) => message.text.startsWith("Plan"));
+    expect(planMessages).toHaveLength(1);
+    expect(planMessages[0]?.text).toBe("Plan is ready");
     expect(harness.appendCalls.at(-1)).toBe("1. Draft the rollout");
   });
 

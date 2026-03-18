@@ -24,7 +24,12 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_USER_ID: z.coerce.number().int(),
   TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
-  TELEGRAM_MINI_APP_PUBLIC_URL: optionalEnvString(z.string().url()),
+  TELEGRAM_MINI_APP_PUBLIC_URL: z
+    .string()
+    .url()
+    .refine((value) => new URL(value).protocol === "https:", {
+      message: "TELEGRAM_MINI_APP_PUBLIC_URL must use https"
+    }),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
   CODEX_MODEL: optionalEnvString(z.string()),
@@ -45,7 +50,7 @@ export type AppConfig = {
     userId: number;
     mediaTempDir: string;
     miniApp: {
-      publicUrl: string | undefined;
+      publicUrl: string;
     };
   };
   database: {
