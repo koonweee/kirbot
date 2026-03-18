@@ -47,13 +47,15 @@ is usually the status draft message in Telegram.
 `commentary`
 
 Intermediate assistant narration about ongoing work. Commentary is buffered
-during the turn, then published separately from the final answer so the topic
+during the turn, then exposed separately from the final answer so the topic
 stays readable.
 
 `commentary block` / `commentary message`
 
-A rendered commentary output, typically shown as a preformatted Telegram
-message. Each completed commentary item can persist as its own durable message.
+The Telegram affordance that exposes commentary. When Mini App support is
+configured, this is usually a `View commentary` Mini App button on the
+following assistant message. If no assistant message follows, kirbot can send a
+compact commentary stub instead.
 
 `footer`
 

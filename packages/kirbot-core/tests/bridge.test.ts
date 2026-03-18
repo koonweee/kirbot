@@ -17,7 +17,6 @@ import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import { JsonRpcMethodError, type AppServerEvent } from "@kirbot/codex-client";
-import { renderMarkdownToFormattedText } from "@kirbot/telegram-format";
 import type { TelegramApi, TelegramSendOptions } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
@@ -63,9 +62,18 @@ function combinedDraft(...parts: string[]): string {
   return parts.join("\n\n");
 }
 
-function commentaryRendered(...blocks: string[]) {
-  const markdown = `Commentary\n\n${blocks.map((block) => `\`\`\`\n${block}\n\`\`\``).join("\n\n")}`;
-  return renderMarkdownToFormattedText(markdown);
+function getWebAppUrl(message: { options?: TelegramSendOptions } | undefined): string | null {
+  return (
+    ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
+      ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null)
+  );
+}
+
+function getInlineButtonText(message: { options?: TelegramSendOptions } | undefined): string | null {
+  return (
+    ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)
+      ?.inline_keyboard?.[0]?.[0]?.text ?? null)
+  );
 }
 
 function getFinalAnswerMessage(telegram: FakeTelegram) {
@@ -1283,8 +1291,21 @@ describe("TelegramCodexBridge", () => {
     }
   });
 
-  it("keeps commentary out of the status draft and publishes it before the final answer", async () => {
-    await bridge.handleUserTextMessage({
+  it("keeps commentary out of the status draft and attaches a Mini App button to the final answer", async () => {
+    const miniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app"
+        }
+      }
+    };
+    const miniAppCodex = new FakeCodex();
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
       messageId: 71,
@@ -1293,7 +1314,7 @@ describe("TelegramCodexBridge", () => {
       text: "Summarize the change"
     });
 
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -1308,9 +1329,9 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const initialDraftCount = telegram.appliedDrafts.length;
+    const initialDraftCount = miniAppTelegram.appliedDrafts.length;
 
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/agentMessage/delta",
       params: {
         threadId: "thread-1",
@@ -1321,13 +1342,13 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
-    expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
-    expect(telegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
-    expect(telegram.appliedDrafts.length).toBe(initialDraftCount);
-    expect(telegram.appliedDrafts.some((draft) => draft.text.includes("\nNow:"))).toBe(false);
+    expect(miniAppTelegram.drafts.at(-1)?.text).toBe("thinking · 0s");
+    expect(miniAppTelegram.drafts.at(-1)?.options?.entities).toBeUndefined();
+    expect(miniAppTelegram.sentMessages.at(-1)?.text).not.toBe("Inspecting the files");
+    expect(miniAppTelegram.appliedDrafts.length).toBe(initialDraftCount);
+    expect(miniAppTelegram.appliedDrafts.some((draft) => draft.text.includes("\nNow:"))).toBe(false);
 
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -1342,7 +1363,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/agentMessage/delta",
       params: {
         threadId: "thread-1",
@@ -1353,12 +1374,12 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    expect(telegram.drafts.some((draft) => draft.text === "Here is the answer.")).toBe(true);
+    expect(miniAppTelegram.drafts.some((draft) => draft.text === "Here is the answer.")).toBe(true);
     expect(
-      telegram.drafts.findLast((draft) => draft.text === "Here is the answer.")?.options?.entities
+      miniAppTelegram.drafts.findLast((draft) => draft.text === "Here is the answer.")?.options?.entities
     ).toBeUndefined();
 
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -1372,20 +1393,19 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const renderedCommentary = commentaryRendered("Inspecting the files");
-    expect(telegram.sentMessages).toContainEqual(
-      expect.objectContaining({
-        text: renderedCommentary.text,
-        options: expect.objectContaining({
-          entities: renderedCommentary.entities
-        })
-      })
-    );
-    const commentaryIndex = telegram.sentMessages.findIndex((message) => message.text === renderedCommentary.text);
-    const answerIndex = telegram.sentMessages.findIndex((message) => message.text === "Here is the answer.");
-    expect(commentaryIndex).toBeGreaterThanOrEqual(0);
-    expect(answerIndex).toBeGreaterThan(commentaryIndex);
-    expect(getFinalAnswerMessage(telegram)?.text).toBe("Here is the answer.");
+    expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
+    const answerMessage = getFinalAnswerMessage(miniAppTelegram);
+    expect(answerMessage?.text).toBe("Here is the answer.");
+    expect(getInlineButtonText(answerMessage)).toBe("View commentary");
+    const url = getWebAppUrl(answerMessage);
+    expect(url?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: "```\nInspecting the files\n```"
+    });
   });
 
   it("chunks long final assistant output into multiple Telegram messages", async () => {
@@ -1429,6 +1449,100 @@ describe("TelegramCodexBridge", () => {
     expect(partMessages.length).toBeGreaterThan(1);
     expect(partMessages[0]?.text).toContain("Part 1/");
     expect(partMessages[1]?.text).toContain("Part 2/");
+  });
+
+  it("attaches the commentary Mini App button only to the first chunk of a long final answer", async () => {
+    const miniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app"
+        }
+      }
+    };
+    const miniAppCodex = new FakeCodex();
+    miniAppCodex.readTurnMessagesResult = longText(
+      "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+      90
+    );
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 11,
+      updateId: 21,
+      userId: 42,
+      text: "Explain the fix"
+    });
+
+    miniAppCodex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Inspecting files"
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "Inspecting files",
+          phase: "commentary"
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-2",
+        delta: "streaming started"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    miniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
+    const partMessages = miniAppTelegram.sentMessages.filter((message) => message.text.startsWith("Part "));
+    expect(partMessages.length).toBeGreaterThan(1);
+    expect(getInlineButtonText(partMessages[0])).toBe("View commentary");
+    expect(partMessages[1]?.options?.reply_markup).toBeUndefined();
   });
 
   it("truncates oversized streaming draft previews", async () => {
@@ -1498,7 +1612,146 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
-  it("combines commentary items into one commentary message when the turn finalizes", async () => {
+  it("combines commentary items into one Mini App artifact on the final answer", async () => {
+    const miniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app"
+        }
+      }
+    };
+    const miniAppCodex = new FakeCodex();
+    miniAppCodex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 73,
+      updateId: 83,
+      userId: 42,
+      text: "Narrate the work"
+    });
+
+    miniAppCodex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    miniAppCodex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Inspecting files"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    miniAppCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "Inspecting files",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    miniAppCodex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-2",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    miniAppCodex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-2",
+        delta: "Planning edits"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    miniAppCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-2",
+          text: "Planning edits",
+          phase: "commentary"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(miniAppTelegram.sentMessages.some((message) => message.text.includes("Inspecting files"))).toBe(false);
+
+    miniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
+    const answerMessage = getFinalAnswerMessage(miniAppTelegram);
+    expect(answerMessage?.text).toBe("Final answer");
+    expect(getInlineButtonText(answerMessage)).toBe("View commentary");
+    const url = getWebAppUrl(answerMessage);
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: "```\nInspecting files\n```\n\n```\nPlanning edits\n```"
+    });
+  });
+
+  it("hides commentary when Mini App support is unavailable", async () => {
     codex.readTurnSnapshotResult = {
       text: "Final answer",
       assistantText: "Final answer"
@@ -1507,8 +1760,8 @@ describe("TelegramCodexBridge", () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
-      messageId: 73,
-      updateId: 83,
+      messageId: 74,
+      updateId: 84,
       userId: 42,
       text: "Narrate the work"
     });
@@ -1526,8 +1779,6 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
     codex.emitNotification({
       method: "item/agentMessage/delta",
       params: {
@@ -1537,8 +1788,6 @@ describe("TelegramCodexBridge", () => {
         delta: "Inspecting files"
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
     codex.emitNotification({
       method: "item/completed",
       params: {
@@ -1552,51 +1801,6 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    codex.emitNotification({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "item-2",
-          text: "",
-          phase: "commentary"
-        }
-      }
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    codex.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-2",
-        delta: "Planning edits"
-      }
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    codex.emitNotification({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "item-2",
-          text: "Planning edits",
-          phase: "commentary"
-        }
-      }
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(telegram.sentMessages.some((message) => message.text.includes("Inspecting files"))).toBe(false);
-
     codex.emitNotification({
       method: "turn/completed",
       params: {
@@ -1609,18 +1813,12 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForAsyncNotifications();
 
-    const renderedCommentary = commentaryRendered("Inspecting files", "Planning edits");
-    expect(telegram.sentMessages).toContainEqual(
-      expect.objectContaining({
-        text: renderedCommentary.text,
-        options: expect.objectContaining({
-          entities: renderedCommentary.entities
-        })
-      })
-    );
-    expect(getFinalAnswerMessage(telegram)?.text).toBe("Final answer");
+    expect(telegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
+    const answerMessage = getFinalAnswerMessage(telegram);
+    expect(answerMessage?.text).toBe("Final answer");
+    expect(answerMessage?.options?.reply_markup).toBeUndefined();
   });
 
   it("streams and persists plan items separately from assistant output", async () => {
@@ -1925,8 +2123,21 @@ describe("TelegramCodexBridge", () => {
     ).toBe(false);
   });
 
-  it("publishes one consolidated commentary message before completed plan artifacts", async () => {
-    await bridge.handleUserTextMessage({
+  it("publishes a standalone commentary stub before completed plan artifacts when no assistant answer follows", async () => {
+    const miniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: "https://example.com/mini-app"
+        }
+      }
+    };
+    const miniAppCodex = new FakeCodex();
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 789,
       messageId: 301,
@@ -1935,7 +2146,7 @@ describe("TelegramCodexBridge", () => {
       text: "Plan the rollout"
     });
 
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -1948,7 +2159,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/agentMessage/delta",
       params: {
         threadId: "thread-1",
@@ -1957,7 +2168,7 @@ describe("TelegramCodexBridge", () => {
         delta: "Inspecting files"
       }
     });
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -1970,7 +2181,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -1982,7 +2193,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/plan/delta",
       params: {
         threadId: "thread-1",
@@ -1991,7 +2202,7 @@ describe("TelegramCodexBridge", () => {
         delta: "Draft the rollout"
       }
     });
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -2003,7 +2214,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    codex.emitNotification({
+    miniAppCodex.emitNotification({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -2017,16 +2228,20 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    const renderedCommentary = commentaryRendered("Inspecting files");
-    expect(telegram.sentMessages.filter((message) => message.text === renderedCommentary.text)).toHaveLength(1);
-    expect(
-      telegram.sentMessages.find((message) => message.text === renderedCommentary.text)?.options?.entities
-    ).toEqual(renderedCommentary.entities);
-    const planIndex = telegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
+    const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available.");
+    expect(commentaryStub).toBeTruthy();
+    expect(getInlineButtonText(commentaryStub)).toBe("View commentary");
+    const url = getWebAppUrl(commentaryStub);
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: "```\nInspecting files\n```"
+    });
+    const planIndex = miniAppTelegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
     expect(planIndex).toBeGreaterThanOrEqual(0);
-    expect(
-      telegram.sentMessages.findIndex((message) => message.text === renderedCommentary.text)
-    ).toBeLessThan(planIndex);
+    expect(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available.")).toBeLessThan(planIndex);
   });
 
   it("flushes the latest draft after fast consecutive deltas", async () => {

@@ -177,19 +177,8 @@ export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
   return renderMarkdownToFormattedText(buildPlanPreviewText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT)));
 }
 
-export function buildRenderedCommentaryMessages(items: string[]): TelegramRenderedMessage[] {
-  if (items.length === 0) {
-    return [];
-  }
-
-  return buildHeaderedMarkdownMessages(buildCommentaryMarkdown(items), "Commentary");
-}
-
-export function buildCommentaryArtifactMessage(publicUrl: string, items: string[]): {
-  text: string;
-  replyMarkup: InlineKeyboardMarkup;
-} {
-  return buildMarkdownArtifactMessage({
+export function buildCommentaryArtifactReplyMarkup(publicUrl: string, items: string[]): InlineKeyboardMarkup {
+  return buildMarkdownArtifactReplyMarkup({
     publicUrl,
     artifact: {
       v: 1,
@@ -197,9 +186,18 @@ export function buildCommentaryArtifactMessage(publicUrl: string, items: string[
       title: "Commentary",
       markdownText: buildCommentaryMarkdown(items)
     },
-    text: "Commentary ready. Open in Mini App.",
-    buttonText: "Open commentary"
+    buttonText: "View commentary"
   });
+}
+
+export function buildCommentaryArtifactStubMessage(replyMarkup: InlineKeyboardMarkup): {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+} {
+  return {
+    text: "Commentary is available.",
+    replyMarkup
+  };
 }
 
 export function buildOversizeCommentaryArtifactMessage(): { text: string } {
@@ -224,17 +222,19 @@ export function buildPlanArtifactMessage(publicUrl: string, markdownText: string
   text: string;
   replyMarkup: InlineKeyboardMarkup;
 } {
-  return buildMarkdownArtifactMessage({
-    publicUrl,
-    artifact: {
-      v: 1,
-      type: MiniAppArtifactType.Plan,
-      title: "Plan",
-      markdownText
-    },
+  return {
     text: "Plan is ready",
-    buttonText: "Open plan"
-  });
+    replyMarkup: buildMarkdownArtifactReplyMarkup({
+      publicUrl,
+      artifact: {
+        v: 1,
+        type: MiniAppArtifactType.Plan,
+        title: "Plan",
+        markdownText
+      },
+      buttonText: "Open plan"
+    })
+  };
 }
 
 export function buildOversizePlanArtifactMessage(): { text: string } {
@@ -251,20 +251,13 @@ function buildHeaderedMarkdownMessages(text: string, header?: string): TelegramR
   return buildHeaderedFormattedMessages(renderMarkdownToFormattedText(text), header);
 }
 
-function buildMarkdownArtifactMessage(input: {
+function buildMarkdownArtifactReplyMarkup(input: {
   publicUrl: string;
   artifact: MiniAppArtifact;
-  text: string;
   buttonText: string;
-}): {
-  text: string;
-  replyMarkup: InlineKeyboardMarkup;
-} {
+}): InlineKeyboardMarkup {
   return {
-    text: input.text,
-    replyMarkup: {
-      inline_keyboard: [[{ text: input.buttonText, web_app: { url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) } }]]
-    }
+    inline_keyboard: [[{ text: input.buttonText, web_app: { url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) } }]]
   };
 }
 

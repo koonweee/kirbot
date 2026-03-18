@@ -210,7 +210,12 @@ export class TelegramStreamMessageHandle {
     await this.#session.update(rendered, force);
   }
 
-  async finalize(rendered: TelegramRenderedMessage | TelegramRenderedMessage[]): Promise<number | null> {
+  async finalize(
+    rendered: TelegramRenderedMessage | TelegramRenderedMessage[],
+    options?: {
+      firstMessageReplyMarkup?: InlineKeyboardMarkup;
+    }
+  ): Promise<number | null> {
     const outputs = Array.isArray(rendered) ? rendered : [rendered];
     let firstMessageId: number | null = null;
 
@@ -220,6 +225,9 @@ export class TelegramStreamMessageHandle {
     for (const output of outputs) {
       const message = await this.telegram.sendMessage(this.chatId, output.text, {
         message_thread_id: this.topicId,
+        ...(firstMessageId === null && options?.firstMessageReplyMarkup
+          ? { reply_markup: options.firstMessageReplyMarkup }
+          : {}),
         ...(output.entities ? { entities: output.entities } : {})
       });
       if (firstMessageId === null) {

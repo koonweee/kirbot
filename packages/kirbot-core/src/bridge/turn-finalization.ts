@@ -1,13 +1,14 @@
 import type { UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
-  buildRenderedCommentaryMessages,
-  buildCommentaryArtifactMessage,
+  buildCommentaryArtifactReplyMarkup,
+  buildCommentaryArtifactStubMessage,
   buildRenderedPlanMessages,
+  buildOversizeCommentaryArtifactMessage,
   buildRenderedCompletionFooter,
   type CompletionFooterDetails
 } from "./presentation";
-import type { TelegramApi, TelegramMessenger, TelegramRenderedMessage } from "../telegram-messenger";
+import type { InlineKeyboardMarkup, TelegramApi, TelegramMessenger, TelegramRenderedMessage } from "../telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../turn-runtime";
 import {
   type TerminalTurnStatus,
@@ -59,6 +60,12 @@ export type FinalizationPolicy = {
   buildFinalText(resolvedText: string): string;
 };
 
+type CommentaryPublication =
+  | { kind: "hidden" }
+  | { kind: "attach_to_assistant"; replyMarkup: InlineKeyboardMarkup }
+  | { kind: "standalone_stub"; text: string; replyMarkup: InlineKeyboardMarkup }
+  | { kind: "oversize_stub"; text: string };
+
 export class TurnFinalizer {
   constructor(
     private readonly deps: TurnLifecycleDependencies,
@@ -85,7 +92,9 @@ export class TurnFinalizer {
     await this.beginFinalization(context);
     const commentaryItems = this.deps.runtime.renderCommentaryItems(context.turnId);
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
-    await this.publishCommentary(context, commentaryItems);
+    const hasAssistantText = snapshot.assistantText.trim().length > 0;
+    const commentaryPublication = this.buildCommentaryPublication(commentaryItems, hasAssistantText);
+    await this.publishStandaloneCommentary(context, commentaryPublication);
     const publishedPlanMessageId =
       snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
         ? await this.callbacks.publishCompletedPlan(context, {
@@ -94,12 +103,16 @@ export class TurnFinalizer {
           })
         : null;
     const finalText = policy.buildFinalText(snapshot.text);
-    const hasAssistantText = snapshot.assistantText.trim().length > 0;
     const messageId =
       policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0
         ? publishedPlanMessageId
         : finalText.trim().length > 0 || policy.publishWhenEmpty
-          ? await this.publishFinalTurnText(context, finalText, hasAssistantText ? "assistant" : "plan")
+          ? await this.publishFinalTurnText(
+              context,
+              finalText,
+              hasAssistantText ? "assistant" : "plan",
+              commentaryPublication.kind === "attach_to_assistant" ? commentaryPublication.replyMarkup : undefined
+            )
           : null;
 
     if (policy.publishFooter) {
@@ -175,11 +188,14 @@ export class TurnFinalizer {
   private async publishFinalTurnText(
     context: TurnContext,
     text: string,
-    kind: "assistant" | "plan"
+    kind: "assistant" | "plan",
+    replyMarkup?: InlineKeyboardMarkup
   ): Promise<number> {
     const outputs = kind === "assistant" ? buildRenderedAssistantMessages(text) : buildRenderedPlanMessages(text);
     if (kind === "assistant") {
-      const messageId = await context.finalStream.finalize(outputs);
+      const messageId = await context.finalStream.finalize(outputs, {
+        ...(replyMarkup ? { firstMessageReplyMarkup: replyMarkup } : {})
+      });
       if (messageId !== null) {
         return messageId;
       }
@@ -188,31 +204,56 @@ export class TurnFinalizer {
     return this.sendRenderedMessages(context.chatId, context.topicId, outputs);
   }
 
-  private async publishCommentary(context: TurnContext, items: string[]): Promise<void> {
-    if (items.length === 0) {
-      return;
-    }
-
-    const renderedMessages = buildRenderedCommentaryMessages(items);
-    if (renderedMessages.length <= 1 || !this.deps.planArtifactPublicUrl) {
-      await this.sendRenderedMessages(context.chatId, context.topicId, renderedMessages);
-      return;
+  private buildCommentaryPublication(items: string[], hasAssistantText: boolean): CommentaryPublication {
+    if (items.length === 0 || !this.deps.planArtifactPublicUrl) {
+      return { kind: "hidden" };
     }
 
     try {
-      await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        ...buildCommentaryArtifactMessage(this.deps.planArtifactPublicUrl, items)
-      });
+      const replyMarkup = buildCommentaryArtifactReplyMarkup(this.deps.planArtifactPublicUrl, items);
+      if (hasAssistantText) {
+        return {
+          kind: "attach_to_assistant",
+          replyMarkup
+        };
+      }
+
+      return {
+        kind: "standalone_stub",
+        ...buildCommentaryArtifactStubMessage(replyMarkup)
+      };
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
-        await this.sendRenderedMessages(context.chatId, context.topicId, renderedMessages);
-        return;
+        return {
+          kind: "oversize_stub",
+          ...buildOversizeCommentaryArtifactMessage()
+        };
       }
 
       throw error;
     }
+  }
+
+  private async publishStandaloneCommentary(context: TurnContext, publication: CommentaryPublication): Promise<void> {
+    if (publication.kind === "hidden" || publication.kind === "attach_to_assistant") {
+      return;
+    }
+
+    if (publication.kind === "standalone_stub") {
+      await this.deps.messenger.sendMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        text: publication.text,
+        replyMarkup: publication.replyMarkup
+      });
+      return;
+    }
+
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text: publication.text
+    });
   }
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {

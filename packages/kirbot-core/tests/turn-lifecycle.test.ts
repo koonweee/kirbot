@@ -29,6 +29,20 @@ function message(text: string, updateId = 1): UserTurnMessage {
   };
 }
 
+function getWebAppUrl(entry: { options?: Record<string, unknown> } | undefined): string | null {
+  return (
+    ((entry?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
+      ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null)
+  );
+}
+
+function getInlineButtonText(entry: { options?: Record<string, unknown> } | undefined): string | null {
+  return (
+    ((entry?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)
+      ?.inline_keyboard?.[0]?.[0]?.text ?? null)
+  );
+}
+
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
@@ -326,14 +340,130 @@ describe("TurnLifecycleCoordinator", () => {
     });
   });
 
-  it("publishes oversized commentary as a Mini App artifact before the final answer", async () => {
+  it("attaches the commentary Mini App button to the final answer when assistant output follows", async () => {
     const telegram = new FakeTelegram();
-    const commentaryText = longText("Inspecting the rollout plan", 220);
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
       messenger: new TelegramMessenger(telegram),
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      appendTurnStream: async () => undefined,
+      completePersistedTurn: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "Final answer",
+        assistantText: "Final answer",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting the rollout plan",
+      phase: "commentary"
+    });
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(telegram.sentMessages.some((entry) => entry.text.startsWith("Commentary"))).toBe(false);
+    const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    expect(getInlineButtonText(finalAnswer)).toBe("View commentary");
+    const url = getWebAppUrl(finalAnswer);
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: "```\nInspecting the rollout plan\n```"
+    });
+  });
+
+  it("publishes a standalone commentary stub before plan output when no assistant answer follows", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      appendTurnStream: async () => undefined,
+      completePersistedTurn: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "1. Draft the rollout",
+        assistantText: "",
+        planText: "1. Draft the rollout",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting the rollout plan",
+      phase: "commentary"
+    });
+    await coordinator.handleItemStarted("turn-1", {
+      type: "plan",
+      id: "plan-1",
+      text: ""
+    });
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "plan",
+      id: "plan-1",
+      text: "1. Draft the rollout"
+    });
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available.");
+    expect(getInlineButtonText(stub)).toBe("View commentary");
+    const url = getWebAppUrl(stub);
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText: "```\nInspecting the rollout plan\n```"
+    });
+    expect(
+      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available.")
+    ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text.startsWith("Plan")));
+  });
+
+  it("publishes oversized commentary as a stub before the final answer", async () => {
+    const telegram = new FakeTelegram();
+    const commentaryText = "Inspecting the rollout plan";
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`,
       releaseTurnFiles: async () => undefined,
       appendTurnStream: async () => undefined,
       completePersistedTurn: async () => undefined,
@@ -366,21 +496,11 @@ describe("TurnLifecycleCoordinator", () => {
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
-    const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary ready. Open in Mini App.");
-    const url =
-      ((stub?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
-        ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null);
-    expect(url).toBeTruthy();
-    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
-    expect(encoded).toBeTruthy();
-    expect(decodeMiniAppArtifact(encoded!)).toEqual({
-      v: 1,
-      type: MiniAppArtifactType.Commentary,
-      title: "Commentary",
-      markdownText: `\`\`\`\n${commentaryText}\n\`\`\``
-    });
     expect(
-      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary ready. Open in Mini App.")
+      telegram.sentMessages.find((entry) => entry.text === "Commentary ready, but too large for Mini App link.")
+    ).toBeTruthy();
+    expect(
+      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary ready, but too large for Mini App link.")
     ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Final answer"));
   });
 
