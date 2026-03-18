@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -7,8 +6,6 @@ import { sql } from "kysely";
 import { Generated, Kysely, Selectable, SqliteDialect } from "kysely";
 
 import type {
-  ArtifactKind,
-  ArtifactRecord,
   PendingServerRequest,
   SessionMode,
   SessionStatus,
@@ -72,29 +69,11 @@ type ProcessedUpdatesTable = {
   processed_at: TimestampString;
 };
 
-type ArtifactsTable = {
-  id: Generated<number>;
-  artifact_id: string;
-  kind: ArtifactKind;
-  title: string;
-  telegram_chat_id: string;
-  telegram_topic_id: number;
-  codex_thread_id: string;
-  codex_turn_id: string;
-  item_id: string;
-  markdown_text: string;
-  mdast_json: string;
-  ast_version: string;
-  created_at: TimestampString;
-  updated_at: TimestampString;
-};
-
 export type DatabaseSchema = {
   topic_sessions: TopicSessionsTable;
   turn_messages: TurnMessagesTable;
   server_requests: ServerRequestsTable;
   processed_updates: ProcessedUpdatesTable;
-  artifacts: ArtifactsTable;
 };
 
 function now(): string {
@@ -151,25 +130,6 @@ function mapServerRequest(row: Selectable<ServerRequestsTable>): PendingServerRe
     stateJson: row.state_json,
     responseJson: row.response_json,
     status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function mapArtifact(row: Selectable<ArtifactsTable>): ArtifactRecord {
-  return {
-    id: row.id,
-    artifactId: row.artifact_id,
-    kind: row.kind,
-    title: row.title,
-    telegramChatId: row.telegram_chat_id,
-    telegramTopicId: row.telegram_topic_id,
-    codexThreadId: row.codex_thread_id,
-    codexTurnId: row.codex_turn_id,
-    itemId: row.item_id,
-    markdownText: row.markdown_text,
-    mdastJson: row.mdast_json,
-    astVersion: row.ast_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -281,41 +241,6 @@ export class BridgeDatabase {
       .ifNotExists()
       .addColumn("telegram_update_id", "integer", (column) => column.primaryKey())
       .addColumn("processed_at", "text", (column) => column.notNull())
-      .execute();
-
-    await this.kysely.schema
-      .createTable("artifacts")
-      .ifNotExists()
-      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
-      .addColumn("artifact_id", "text", (column) => column.notNull())
-      .addColumn("kind", "text", (column) => column.notNull())
-      .addColumn("title", "text", (column) => column.notNull())
-      .addColumn("telegram_chat_id", "text", (column) => column.notNull())
-      .addColumn("telegram_topic_id", "integer", (column) => column.notNull())
-      .addColumn("codex_thread_id", "text", (column) => column.notNull())
-      .addColumn("codex_turn_id", "text", (column) => column.notNull())
-      .addColumn("item_id", "text", (column) => column.notNull())
-      .addColumn("markdown_text", "text", (column) => column.notNull())
-      .addColumn("mdast_json", "text", (column) => column.notNull())
-      .addColumn("ast_version", "text", (column) => column.notNull())
-      .addColumn("created_at", "text", (column) => column.notNull())
-      .addColumn("updated_at", "text", (column) => column.notNull())
-      .execute();
-
-    await this.kysely.schema
-      .createIndex("artifacts_artifact_id_unique")
-      .ifNotExists()
-      .on("artifacts")
-      .column("artifact_id")
-      .unique()
-      .execute();
-
-    await this.kysely.schema
-      .createIndex("artifacts_turn_item_unique")
-      .ifNotExists()
-      .on("artifacts")
-      .columns(["kind", "codex_turn_id", "item_id"])
-      .unique()
       .execute();
 
     this.ensureColumn("topic_sessions", "preferred_mode", "TEXT NOT NULL DEFAULT 'default'");
@@ -567,88 +492,6 @@ export class BridgeDatabase {
       .executeTakeFirst();
 
     return row ? mapTurnMessage(row) : undefined;
-  }
-
-  async upsertArtifact(input: {
-    kind: ArtifactKind;
-    title: string;
-    telegramChatId: string;
-    telegramTopicId: number;
-    codexThreadId: string;
-    codexTurnId: string;
-    itemId: string;
-    markdownText: string;
-    mdastJson: string;
-    astVersion: string;
-  }): Promise<ArtifactRecord> {
-    const existing = await this.getArtifactByTurnItem(input.kind, input.codexTurnId, input.itemId);
-    const timestamp = now();
-    const artifactId = existing?.artifactId ?? randomUUID();
-
-    await this.kysely
-      .insertInto("artifacts")
-      .values({
-        artifact_id: artifactId,
-        kind: input.kind,
-        title: input.title,
-        telegram_chat_id: input.telegramChatId,
-        telegram_topic_id: input.telegramTopicId,
-        codex_thread_id: input.codexThreadId,
-        codex_turn_id: input.codexTurnId,
-        item_id: input.itemId,
-        markdown_text: input.markdownText,
-        mdast_json: input.mdastJson,
-        ast_version: input.astVersion,
-        created_at: existing?.createdAt ?? timestamp,
-        updated_at: timestamp
-      })
-      .onConflict((oc) =>
-        oc.columns(["kind", "codex_turn_id", "item_id"]).doUpdateSet({
-          title: input.title,
-          telegram_chat_id: input.telegramChatId,
-          telegram_topic_id: input.telegramTopicId,
-          codex_thread_id: input.codexThreadId,
-          markdown_text: input.markdownText,
-          mdast_json: input.mdastJson,
-          ast_version: input.astVersion,
-          updated_at: timestamp
-        })
-      )
-      .execute();
-
-    return this.getArtifactByArtifactId(artifactId);
-  }
-
-  async getArtifactByArtifactId(artifactId: string): Promise<ArtifactRecord> {
-    const row = await this.kysely
-      .selectFrom("artifacts")
-      .selectAll()
-      .where("artifact_id", "=", artifactId)
-      .executeTakeFirstOrThrow();
-
-    return mapArtifact(row);
-  }
-
-  async getArtifactByArtifactIdOptional(artifactId: string): Promise<ArtifactRecord | undefined> {
-    const row = await this.kysely
-      .selectFrom("artifacts")
-      .selectAll()
-      .where("artifact_id", "=", artifactId)
-      .executeTakeFirst();
-
-    return row ? mapArtifact(row) : undefined;
-  }
-
-  async getArtifactByTurnItem(kind: ArtifactKind, turnId: string, itemId: string): Promise<ArtifactRecord | undefined> {
-    const row = await this.kysely
-      .selectFrom("artifacts")
-      .selectAll()
-      .where("kind", "=", kind)
-      .where("codex_turn_id", "=", turnId)
-      .where("item_id", "=", itemId)
-      .executeTakeFirst();
-
-    return row ? mapArtifact(row) : undefined;
   }
 
   async createPendingRequest(input: {

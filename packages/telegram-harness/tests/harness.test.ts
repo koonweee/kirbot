@@ -450,10 +450,7 @@ describe("Telegram harness", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
     const config = createConfig(tempDir);
     config.telegram.miniApp = {
-      publicUrl: "https://example.com/mini-app",
-      apiPublicUrl: "https://api.example.com/mini-app",
-      bindHost: "127.0.0.1",
-      port: 0
+      publicUrl: "https://example.com/mini-app"
     };
     const harness = await createTelegramHarness({
       config,
@@ -470,9 +467,7 @@ describe("Telegram harness", () => {
     const stub = topicMessages.find((message) => message.text === "Plan ready. Open in Mini App.");
     const button = stub?.buttons?.[0]?.[0];
     expect(button?.text).toBe("Open plan");
-    expect(button && "web_app" in button ? button.web_app.url : null).toMatch(
-      /^https:\/\/example\.com\/mini-app\/plan\?artifactId=/
-    );
+    expect(button && "web_app" in button ? button.web_app.url : null).toMatch(/^https:\/\/example\.com\/mini-app\/plan#d=/);
   });
 });
 
@@ -494,10 +489,7 @@ function createConfig(tempDir: string): AppConfig {
       userId: 42,
       mediaTempDir: join(tempDir, "media"),
       miniApp: {
-        publicUrl: undefined,
-        apiPublicUrl: undefined,
-        bindHost: "127.0.0.1",
-        port: 8788
+        publicUrl: undefined
       }
     },
     database: {

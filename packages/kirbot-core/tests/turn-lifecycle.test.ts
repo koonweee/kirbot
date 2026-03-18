@@ -3,7 +3,7 @@ import type { MessageEntity } from "grammy/types";
 
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
-import { MARKDOWN_AST_VERSION, parseMarkdownToMdast, serializeMarkdownAst } from "@kirbot/telegram-format";
+import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import { TelegramMessenger, type TelegramApi } from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
 
@@ -142,22 +142,6 @@ function createHarness(
     messenger: new TelegramMessenger(telegram),
     telegram,
     planArtifactPublicUrl: null,
-    upsertPlanArtifact: async ({ chatId, topicId, threadId, turnId, itemId, markdownText }) => ({
-      id: 1,
-      artifactId: `artifact:${turnId}:${itemId}`,
-      kind: "plan",
-      title: "Plan",
-      telegramChatId: String(chatId),
-      telegramTopicId: topicId,
-      codexThreadId: threadId,
-      codexTurnId: turnId,
-      itemId,
-      markdownText,
-      mdastJson: serializeMarkdownAst(parseMarkdownToMdast(markdownText)),
-      astVersion: MARKDOWN_AST_VERSION,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }),
     releaseTurnFiles: async (turnId) => {
       releasedTurnIds.push(turnId);
     },
@@ -280,6 +264,56 @@ describe("TurnLifecycleCoordinator", () => {
       }
     ]);
     expect(harness.appendCalls.at(-1)).toBe("1. Draft the rollout");
+  });
+
+  it("publishes Mini App plan links with encoded typed payloads", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      appendTurnStream: async () => undefined,
+      completePersistedTurn: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "1. Draft the rollout",
+        assistantText: "",
+        planText: "1. Draft the rollout",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "plan",
+      id: "plan-1",
+      text: ""
+    });
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "plan",
+      id: "plan-1",
+      text: "1. Draft the rollout"
+    });
+
+    const stub = telegram.sentMessages.find((entry) => entry.text === "Plan ready. Open in Mini App.");
+    const url =
+      ((stub?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
+        ?.inline_keyboard?.[0]?.[0]?.web_app?.url ?? null);
+    expect(url).toBeTruthy();
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(encoded).toBeTruthy();
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Plan,
+      title: "Plan",
+      markdownText: "1. Draft the rollout"
+    });
   });
 
   it("submits merged pending steers when an interrupted turn is finalized with send-now intent", async () => {

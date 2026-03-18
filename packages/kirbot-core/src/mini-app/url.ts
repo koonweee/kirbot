@@ -1,3 +1,22 @@
+import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
+
+export const MAX_MINI_APP_ARTIFACT_URL_LENGTH = 12_000;
+export const MINI_APP_ARTIFACT_FRAGMENT_KEY = "d";
+export const MINI_APP_ARTIFACT_VERSION = 1;
+
+export enum MiniAppArtifactType {
+  Plan = "plan"
+}
+
+export type MiniAppPlanArtifact = {
+  v: typeof MINI_APP_ARTIFACT_VERSION;
+  type: MiniAppArtifactType.Plan;
+  title: string;
+  markdownText: string;
+};
+
+export type MiniAppArtifact = MiniAppPlanArtifact;
+
 export function normalizeTelegramMiniAppPublicUrl(publicUrl: string | undefined): string | null {
   if (!publicUrl) {
     return null;
@@ -7,18 +26,74 @@ export function normalizeTelegramMiniAppPublicUrl(publicUrl: string | undefined)
   return parsed.protocol === "https:" ? parsed.toString() : null;
 }
 
-export function deriveMiniAppBasePath(publicUrl: string): string {
-  const pathname = new URL(publicUrl).pathname.replace(/\/+$/, "");
-  return pathname || "";
+export function encodeMiniAppArtifact(artifact: MiniAppArtifact): string {
+  return compressToEncodedURIComponent(JSON.stringify(validateMiniAppArtifact(artifact)));
 }
 
-export function deriveUrlOrigin(publicUrl: string): string {
-  return new URL(publicUrl).origin;
+export function decodeMiniAppArtifact(encoded: string): MiniAppArtifact {
+  const json = decompressFromEncodedURIComponent(encoded);
+  if (!json) {
+    throw new Error("invalid_compressed_artifact");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("invalid_artifact_json");
+  }
+
+  return validateMiniAppArtifact(parsed);
 }
 
-export function buildPlanArtifactMiniAppUrl(publicUrl: string, artifactId: string): string {
+export function getEncodedMiniAppArtifactFromHash(hash: string): string | null {
+  const normalized = hash.startsWith("#") ? hash.slice(1) : hash;
+  const params = new URLSearchParams(normalized);
+  const encoded = params.get(MINI_APP_ARTIFACT_FRAGMENT_KEY)?.trim() ?? "";
+  return encoded.length > 0 ? encoded : null;
+}
+
+export function buildMiniAppArtifactUrl(publicUrl: string, artifact: MiniAppArtifact): string {
   const normalizedBaseUrl = publicUrl.endsWith("/") ? publicUrl : `${publicUrl}/`;
   const url = new URL("plan", normalizedBaseUrl);
-  url.searchParams.set("artifactId", artifactId);
-  return url.toString();
+  url.hash = buildMiniAppArtifactHash(artifact);
+  const rendered = url.toString();
+  if (rendered.length > MAX_MINI_APP_ARTIFACT_URL_LENGTH) {
+    throw new Error("mini_app_artifact_too_large");
+  }
+
+  return rendered;
+}
+
+export function buildMiniAppArtifactHash(artifact: MiniAppArtifact): string {
+  const params = new URLSearchParams();
+  params.set(MINI_APP_ARTIFACT_FRAGMENT_KEY, encodeMiniAppArtifact(artifact));
+  return params.toString();
+}
+
+function validateMiniAppArtifact(value: unknown): MiniAppArtifact {
+  if (!value || typeof value !== "object") {
+    throw new Error("invalid_artifact_shape");
+  }
+
+  const artifact = value as Partial<MiniAppArtifact> & Record<string, unknown>;
+  if (artifact.v !== MINI_APP_ARTIFACT_VERSION) {
+    throw new Error("unsupported_artifact_version");
+  }
+
+  switch (artifact.type) {
+    case MiniAppArtifactType.Plan:
+      if (typeof artifact.title !== "string" || typeof artifact.markdownText !== "string") {
+        throw new Error("invalid_plan_artifact");
+      }
+
+      return {
+        v: MINI_APP_ARTIFACT_VERSION,
+        type: MiniAppArtifactType.Plan,
+        title: artifact.title,
+        markdownText: artifact.markdownText
+      };
+    default:
+      throw new Error("unsupported_artifact_type");
+  }
 }

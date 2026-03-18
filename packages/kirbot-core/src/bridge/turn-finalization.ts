@@ -1,4 +1,4 @@
-import type { ArtifactRecord, UserTurnMessage } from "../domain";
+import type { UserTurnMessage } from "../domain";
 import {
   buildRenderedAssistantMessages,
   buildRenderedPlanMessages,
@@ -29,14 +29,6 @@ export type TurnLifecycleDependencies = {
   messenger: TelegramMessenger;
   telegram: TelegramApi;
   planArtifactPublicUrl: string | null;
-  upsertPlanArtifact(input: {
-    chatId: number;
-    topicId: number;
-    threadId: string;
-    turnId: string;
-    itemId: string;
-    markdownText: string;
-  }): Promise<ArtifactRecord>;
   releaseTurnFiles(turnId: string): Promise<void>;
   appendTurnStream(turnId: string, streamText: string): Promise<void>;
   completePersistedTurn(

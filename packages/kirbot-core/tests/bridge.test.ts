@@ -19,6 +19,7 @@ import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/Reaso
 import { JsonRpcMethodError, type AppServerEvent } from "@kirbot/codex-client";
 import type { TelegramApi, TelegramSendOptions } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
+import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 
 const EMPTY_DRAFT_TEXT = "";
 
@@ -424,10 +425,7 @@ describe("TelegramCodexBridge", () => {
         userId: 42,
         mediaTempDir: join(tempDir, "telegram-media"),
         miniApp: {
-          publicUrl: undefined,
-          apiPublicUrl: undefined,
-          bindHost: "127.0.0.1",
-          port: 8788
+          publicUrl: undefined
         }
       },
       database: {
@@ -1669,10 +1667,7 @@ describe("TelegramCodexBridge", () => {
       telegram: {
         ...config.telegram,
         miniApp: {
-          publicUrl: "https://example.com/mini-app",
-          apiPublicUrl: "https://api.example.com/mini-app",
-          bindHost: "127.0.0.1",
-          port: 0
+          publicUrl: "https://example.com/mini-app"
         }
       }
     };
@@ -1742,12 +1737,19 @@ describe("TelegramCodexBridge", () => {
 
     expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready. Open in Mini App.")).toHaveLength(1);
     expect(miniAppTelegram.sentMessages.some((message) => message.text === "Plan\n\n1. Draft the rollout")).toBe(false);
-    const artifact = await database.getArtifactByTurnItem("plan", "turn-1", "plan-1");
-    expect(artifact?.artifactId).toBeTruthy();
-    expect(
-      miniAppTelegram.sentMessages.find((message) => message.text === "Plan ready. Open in Mini App.")?.options?.reply_markup
-    ).toEqual({
-      inline_keyboard: [[{ text: "Open plan", web_app: { url: `https://example.com/mini-app/plan?artifactId=${artifact?.artifactId}` } }]]
+    const stub = miniAppTelegram.sentMessages.find((message) => message.text === "Plan ready. Open in Mini App.");
+    const url =
+      (((stub?.options?.reply_markup as { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } | undefined)
+        ?.inline_keyboard?.[0]?.[0]?.web_app?.url) ?? null);
+    expect(url).toBeTruthy();
+    expect(url?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(encoded).toBeTruthy();
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Plan,
+      title: "Plan",
+      markdownText: "1. Draft the rollout"
     });
   });
 
@@ -1757,10 +1759,7 @@ describe("TelegramCodexBridge", () => {
       telegram: {
         ...config.telegram,
         miniApp: {
-          publicUrl: "http://example.com/mini-app",
-          apiPublicUrl: "https://api.example.com/mini-app",
-          bindHost: "127.0.0.1",
-          port: 0
+          publicUrl: "http://example.com/mini-app"
         }
       }
     };
@@ -1817,30 +1816,30 @@ describe("TelegramCodexBridge", () => {
     ).toBe(false);
   });
 
-  it("falls back to raw plan bubbles when the Mini App API public URL is missing", async () => {
-    const missingApiUrlConfig: AppConfig = {
+  it("publishes an oversize stub instead of Telegram plan bubbles when the Mini App payload is too large", async () => {
+    const oversizeMiniAppConfig: AppConfig = {
       ...config,
       telegram: {
         ...config.telegram,
         miniApp: {
-          publicUrl: "https://example.com/mini-app",
-          apiPublicUrl: undefined,
-          bindHost: "127.0.0.1",
-          port: 0
+          publicUrl: "https://example.com/mini-app"
         }
       }
     };
-    const missingApiUrlCodex = new FakeCodex();
-    const missingApiUrlTelegram = new FakeTelegram();
-    const missingApiUrlBridge = new TelegramCodexBridge(
-      missingApiUrlConfig,
+    const oversizeMiniAppCodex = new FakeCodex();
+    const oversizeMiniAppTelegram = new FakeTelegram();
+    const oversizeMiniAppBridge = new TelegramCodexBridge(
+      oversizeMiniAppConfig,
       database,
-      missingApiUrlTelegram,
-      missingApiUrlCodex,
+      oversizeMiniAppTelegram,
+      oversizeMiniAppCodex,
       mediaStore
     );
+    const longPlan = Array.from({ length: 250 }, (_, index) =>
+      `${index + 1}. ${Array.from({ length: 20 }, (__unused, wordIndex) => `token-${index}-${wordIndex}`).join(" ")}`
+    ).join("\n");
 
-    await missingApiUrlBridge.handleUserTextMessage({
+    await oversizeMiniAppBridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 788,
       messageId: 302,
@@ -1849,7 +1848,7 @@ describe("TelegramCodexBridge", () => {
       text: "Plan the rollout"
     });
 
-    missingApiUrlCodex.emitNotification({
+    oversizeMiniAppCodex.emitNotification({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -1857,11 +1856,11 @@ describe("TelegramCodexBridge", () => {
         item: {
           type: "plan",
           id: "plan-1",
-          text: "1. Draft the rollout"
+          text: longPlan
         }
       }
     });
-    missingApiUrlCodex.emitNotification({
+    oversizeMiniAppCodex.emitNotification({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -1876,10 +1875,13 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(
-      missingApiUrlTelegram.sentMessages.filter((message) => message.text === "Plan\n\n1. Draft the rollout")
+      oversizeMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan ready, but too large for Mini App link.")
     ).toHaveLength(1);
     expect(
-      missingApiUrlTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Plan ready. Open in Mini App.")
+    ).toBe(false);
+    expect(
+      oversizeMiniAppTelegram.sentMessages.some((message) => message.text.startsWith("Plan\n\n"))
     ).toBe(false);
   });
 

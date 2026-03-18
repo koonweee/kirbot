@@ -11,7 +11,6 @@ import {
   type TelegramCommandApi
 } from "./telegram-command-sync";
 import type { TelegramApi } from "./telegram-messenger";
-import { startMiniAppServer } from "./mini-app/server";
 import { normalizeTelegramMiniAppPublicUrl } from "./mini-app/url";
 
 export type BridgeActivitySnapshot = {
@@ -43,19 +42,15 @@ const CODEX_INITIALIZE_TIMEOUT_MS = 10_000;
 export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): Promise<KirbotRuntime> {
   const config = options.config ?? (await import("./config")).loadConfig();
   const normalizedMiniAppPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.publicUrl);
-  const normalizedMiniAppApiPublicUrl = normalizeTelegramMiniAppPublicUrl(config.telegram.miniApp.apiPublicUrl);
   const effectiveConfig: AppConfig =
-    normalizedMiniAppPublicUrl === config.telegram.miniApp.publicUrl &&
-      normalizedMiniAppApiPublicUrl === config.telegram.miniApp.apiPublicUrl
+    normalizedMiniAppPublicUrl === config.telegram.miniApp.publicUrl
       ? config
       : {
           ...config,
           telegram: {
             ...config.telegram,
             miniApp: {
-              ...config.telegram.miniApp,
-              publicUrl: normalizedMiniAppPublicUrl ?? undefined,
-              apiPublicUrl: normalizedMiniAppApiPublicUrl ?? undefined
+              publicUrl: normalizedMiniAppPublicUrl ?? undefined
             }
           }
         };
@@ -67,11 +62,6 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   if (config.telegram.miniApp.publicUrl && !normalizedMiniAppPublicUrl) {
     appLogger.warn(
       "Ignoring TELEGRAM_MINI_APP_PUBLIC_URL because Telegram Mini App buttons require an https URL."
-    );
-  }
-  if (config.telegram.miniApp.apiPublicUrl && !normalizedMiniAppApiPublicUrl) {
-    appLogger.warn(
-      "Ignoring TELEGRAM_MINI_APP_API_PUBLIC_URL because the Mini App artifact API requires an https URL."
     );
   }
 
@@ -97,14 +87,6 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
     spawnedAppServer = result.spawnedAppServer;
     return result.codex;
   });
-  const miniAppServer = await startMiniAppServer({
-    config: effectiveConfig.telegram,
-    database,
-    logger: appLogger
-  }).catch((error) => {
-    appLogger.warn("Mini App server failed during startup; continuing without Mini App support.", error);
-    return null;
-  });
 
   const bridge = new TelegramCodexBridge(
     effectiveConfig,
@@ -126,7 +108,6 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
     database,
     codex,
     shutdown: async () => {
-      await miniAppServer?.stop();
       await rpcClient?.close();
       if (spawnedAppServer) {
         await spawnedAppServer.stop();
