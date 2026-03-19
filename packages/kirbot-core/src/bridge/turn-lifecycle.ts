@@ -1,4 +1,5 @@
 import type { UserTurnMessage } from "../domain";
+import type { SessionMode } from "../domain";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
@@ -44,7 +45,8 @@ export class TurnLifecycleCoordinator {
     threadId: string,
     turnId: string,
     model: string | null,
-    reasoningEffort: ReasoningEffort | null = null
+    reasoningEffort: ReasoningEffort | null = null,
+    mode: SessionMode = "default"
   ): TurnContext {
     if (message.topicId === null) {
       throw new Error("Cannot create an active turn without a Telegram topic id");
@@ -60,22 +62,19 @@ export class TurnLifecycleCoordinator {
       stopRequested: false,
       submitPendingSteersAfterInterrupt: false,
       startedAtMs,
+      draftMode: "status",
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: startedAtMs,
-      statusHandle: this.deps.messenger.statusDraft({
+      draftHandle: this.deps.messenger.streamMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        draftId: buildStableDraftId(`${turnId}:status`)
+        draftId: buildStableDraftId(`${turnId}:draft`)
       }),
       statusElapsedTimer: null,
-      finalStream: this.deps.messenger.streamMessage({
-        chatId: message.chatId,
-        topicId: message.topicId,
-        draftId: buildStableDraftId(`${turnId}:final`)
-      }),
       planStreams: new Map(),
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
+      mode,
       model,
       reasoningEffort,
       tokenUsage: null
@@ -222,14 +221,16 @@ export class TurnLifecycleCoordinator {
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
     const context = this.#turns.get(turnId);
-    if (!context || context.phase !== "active" || !context.statusDraft) {
+    if (!context || context.phase !== "active" || !context.statusDraft || context.draftMode !== "status") {
       return;
     }
 
-    await context.statusHandle.set(
-      renderTelegramStatusDraft(context.statusDraft, Date.now() - context.startedAtMs),
-      force
-    );
+    const rendered = renderTelegramStatusDraft(context.statusDraft, Date.now() - context.startedAtMs);
+    if (!rendered) {
+      return;
+    }
+
+    await context.draftHandle.update(rendered, force);
   }
 
   async handleTurnStarted(turnId: string): Promise<void> {
@@ -430,8 +431,9 @@ export class TurnLifecycleCoordinator {
     }
 
     if (update.draftKind === "assistant") {
-      await context.finalStream.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
-      await this.clearStatusDraft(context);
+      context.draftMode = "assistant";
+      context.statusDraft = null;
+      await context.draftHandle.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
     }
   }
 
@@ -443,15 +445,6 @@ export class TurnLifecycleCoordinator {
     void context;
     void update;
     void stage;
-  }
-
-  private async clearStatusDraft(context: TurnContext): Promise<void> {
-    if (!context.statusDraft) {
-      return;
-    }
-
-    context.statusDraft = null;
-    await context.statusHandle.clear();
   }
 
   private async setStatusDraft(
@@ -470,10 +463,16 @@ export class TurnLifecycleCoordinator {
 
     context.statusDraft = nextStatus;
     context.lastStatusUpdateAt = now;
-    await context.statusHandle.set(
-      renderTelegramStatusDraft(nextStatus, Date.now() - context.startedAtMs),
-      force
-    );
+    if (context.draftMode !== "status") {
+      return;
+    }
+
+    const rendered = renderTelegramStatusDraft(nextStatus, Date.now() - context.startedAtMs);
+    if (!rendered) {
+      return;
+    }
+
+    await context.draftHandle.update(rendered, force);
   }
 
   private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {

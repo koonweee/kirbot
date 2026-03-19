@@ -2512,7 +2512,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.appliedDrafts.some((draft) => draft.text === "Retry me")).toBe(true);
   });
 
-  it("clears the assistant draft before sending the final persisted message", async () => {
+  it("sends the final persisted message before clearing the assistant draft", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -2559,8 +2559,8 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.events).toContain("draft:Hello");
-    expect(telegram.events.indexOf("draft:")).toBeGreaterThan(telegram.events.indexOf("draft:Hello"));
-    expect(telegram.events.indexOf("message:Hello world")).toBeGreaterThan(telegram.events.indexOf("draft:"));
+    expect(telegram.events.indexOf("message:Hello world")).toBeGreaterThan(telegram.events.indexOf("draft:Hello"));
+    expect(telegram.events.indexOf("draft:")).toBeGreaterThan(telegram.events.indexOf("message:Hello world"));
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello world");
   });

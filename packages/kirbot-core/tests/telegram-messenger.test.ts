@@ -176,7 +176,7 @@ describe("TelegramMessenger", () => {
         }
       }
     ]);
-    expect(telegram.events).toEqual(["draft:Working", "draft:", "message:Done"]);
+    expect(telegram.events).toEqual(["draft:Working", "message:Done", "draft:"]);
     expect(telegram.chatActions).toEqual([
       {
         chatId: 1,
@@ -226,7 +226,7 @@ describe("TelegramMessenger", () => {
     await stream.update({ text: "Working more" });
     await stream.finalize({ text: "Done" });
 
-    expect(telegram.events).toEqual(["draft:Working", "draft:", "message:Done"]);
+    expect(telegram.events).toEqual(["draft:Working", "message:Done", "draft:"]);
     expect(telegram.drafts.at(-1)).toEqual({
       chatId: 1,
       draftId: 105,

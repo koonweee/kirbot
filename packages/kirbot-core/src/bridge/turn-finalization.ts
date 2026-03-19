@@ -101,10 +101,12 @@ export class TurnFinalizer {
         : null;
     const finalText = policy.buildFinalText(snapshot.text);
     const responsePublication = publishesPlanOnly ? null : this.buildResponsePublication(finalText);
+    const publishedFinalAssistantMessage =
+      !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
     const messageId =
       publishesPlanOnly
         ? publishedPlanMessageId
-        : finalText.trim().length > 0 || policy.publishWhenEmpty
+        : publishedFinalAssistantMessage
           ? await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication)
           : null;
 
@@ -114,6 +116,10 @@ export class TurnFinalizer {
 
     if (policy.publishFooter) {
       await this.publishCompletionFooter(context, snapshot);
+    }
+
+    if (!publishedFinalAssistantMessage) {
+      await context.draftHandle.clear();
     }
 
     await this.deps.releaseTurnFiles(context.turnId);
@@ -164,7 +170,6 @@ export class TurnFinalizer {
       context.statusElapsedTimer = null;
     }
     context.statusDraft = null;
-    await context.statusHandle.clear();
 
     for (const [itemId, plan] of context.planStreams) {
       if (plan.text.trim().length > 0) {
@@ -188,7 +193,7 @@ export class TurnFinalizer {
   ): Promise<number> {
     const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
 
-    const messageId = await context.finalStream.finalize(
+    const messageId = await context.draftHandle.finalize(
       buildRenderedAssistantMessage(text, {
         includeContinueInViewNote: attachment.includeContinueInViewNote
       }),
@@ -285,6 +290,7 @@ export class TurnFinalizer {
   private buildCompletionFooterDetails(context: TurnContext, snapshot: ResolvedTurnSnapshot): CompletionFooterDetails {
     const contextLeftPercent = computeContextLeftPercent(context.tokenUsage);
     return {
+      mode: context.mode,
       model: context.model,
       reasoningEffort: context.reasoningEffort,
       durationMs: Math.max(0, Date.now() - context.startedAtMs),

@@ -17,7 +17,11 @@ import {
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import type { ActivityLogEntry } from "../src/turn-runtime";
 
-function getWebAppUrl(entry: { replyMarkup: { inline_keyboard: Array<Array<{ web_app?: { url?: string } }>> } }): string {
+function getWebAppUrl(entry: {
+  replyMarkup: {
+    inline_keyboard: Array<Array<{ web_app?: { url?: string }; callback_data?: string }>>;
+  };
+}): string {
   const url = entry.replyMarkup.inline_keyboard.flatMap((row) => row).find((button) => button.web_app?.url)?.web_app?.url;
   expect(url).toBeTruthy();
   return url!;
@@ -85,6 +89,7 @@ describe("status presentation", () => {
     });
     expect(
       buildRenderedCompletionFooter({
+        mode: "default",
         model: "gpt-5",
         reasoningEffort: null,
         durationMs: 60_000,
@@ -100,6 +105,31 @@ describe("status presentation", () => {
           type: "pre",
           offset: 0,
           length: "gpt-5 • 1m 0s • 0 files • 100% left • /workspace • main".length,
+          language: "status"
+        }
+      ]
+    });
+  });
+
+  it("adds a plan-mode label to completion footers for plan turns", () => {
+    expect(
+      buildRenderedCompletionFooter({
+        mode: "plan",
+        model: "gpt-5",
+        reasoningEffort: "high",
+        durationMs: 2_000,
+        changedFiles: 1,
+        contextLeftPercent: 88,
+        cwd: "/workspace",
+        branch: "main"
+      })
+    ).toEqual({
+      text: "gpt-5 high • 2s • 1 file • 88% left • /workspace • main • planning",
+      entities: [
+        {
+          type: "pre",
+          offset: 0,
+          length: "gpt-5 high • 2s • 1 file • 88% left • /workspace • main • planning".length,
           language: "status"
         }
       ]

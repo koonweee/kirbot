@@ -1,7 +1,8 @@
 import type { TurnStatusDraft } from "./presentation";
+import type { SessionMode } from "../domain";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
-import type { TelegramStatusDraftHandle, TelegramStreamMessageHandle } from "../telegram-messenger";
+import type { TelegramStreamMessageHandle } from "../telegram-messenger";
 
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
 export type TerminalTurnStatus = Extract<TurnPhase, "completed" | "failed" | "interrupted">;
@@ -10,6 +11,8 @@ export type PlanStreamState = {
   handle: TelegramStreamMessageHandle;
   text: string;
 };
+
+export type TurnDraftMode = "status" | "assistant";
 
 export type TurnContext = {
   chatId: number;
@@ -20,14 +23,15 @@ export type TurnContext = {
   stopRequested: boolean;
   submitPendingSteersAfterInterrupt: boolean;
   startedAtMs: number;
+  draftMode: TurnDraftMode;
   statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
-  statusHandle: TelegramStatusDraftHandle;
+  draftHandle: TelegramStreamMessageHandle;
   statusElapsedTimer: NodeJS.Timeout | null;
-  finalStream: TelegramStreamMessageHandle;
   planStreams: Map<string, PlanStreamState>;
   compactionNoticeSent: boolean;
   publishedPlanMessages: number;
+  mode: SessionMode;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
   tokenUsage: ThreadTokenUsage | null;

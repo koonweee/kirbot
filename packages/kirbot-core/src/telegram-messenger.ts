@@ -88,6 +88,7 @@ type DraftSessionState = {
   lastEntities: MessageEntity[] | undefined;
   lastUpdateAt: number;
   lastChatActionAt: number;
+  frozen: boolean;
   closed: boolean;
 };
 
@@ -240,8 +241,7 @@ export class TelegramStreamMessageHandle {
     const outputs = Array.isArray(rendered) ? rendered : [rendered];
     let firstMessageId: number | null = null;
 
-    await this.#session.clear();
-    await this.#session.close();
+    await this.#session.prepareForFinalize();
 
     for (const output of outputs) {
       const message = await this.telegram.sendMessage(this.chatId, output.text, {
@@ -255,6 +255,9 @@ export class TelegramStreamMessageHandle {
         firstMessageId = message.message_id;
       }
     }
+
+    await this.#session.clear();
+    await this.#session.close();
 
     return firstMessageId;
   }
@@ -275,6 +278,7 @@ class TelegramDraftSession {
     lastEntities: undefined,
     lastUpdateAt: 0,
     lastChatActionAt: 0,
+    frozen: false,
     closed: false
   };
 
@@ -290,7 +294,7 @@ class TelegramDraftSession {
   ) {}
 
   async update(rendered: TelegramRenderedMessage, force = false): Promise<void> {
-    if (this.#state.closed) {
+    if (this.#state.closed || this.#state.frozen) {
       return;
     }
 
@@ -351,8 +355,21 @@ class TelegramDraftSession {
     this.#state.pending = null;
   }
 
+  async prepareForFinalize(): Promise<void> {
+    if (this.#state.closed) {
+      return;
+    }
+
+    this.#state.frozen = true;
+    this.cancelTimers();
+    if (this.#state.inFlight) {
+      await this.#state.inFlight;
+    }
+    this.#state.pending = null;
+  }
+
   private scheduleFlush(delayMs: number): void {
-    if (this.#state.closed || this.#state.inFlight || this.#state.retryTimer) {
+    if (this.#state.closed || this.#state.frozen || this.#state.inFlight || this.#state.retryTimer) {
       return;
     }
 
@@ -364,7 +381,7 @@ class TelegramDraftSession {
       this.#state.flushTimer = null;
       this.#state.inFlight = this.flushPending().finally(() => {
         this.#state.inFlight = null;
-        if (!this.#state.closed && this.#state.pending) {
+        if (!this.#state.closed && !this.#state.frozen && this.#state.pending) {
           this.scheduleFlush(0);
         }
       });
@@ -375,7 +392,7 @@ class TelegramDraftSession {
       this.#state.flushTimer = null;
       this.#state.inFlight = this.flushPending().finally(() => {
         this.#state.inFlight = null;
-        if (!this.#state.closed && this.#state.pending) {
+        if (!this.#state.closed && !this.#state.frozen && this.#state.pending) {
           this.scheduleFlush(0);
         }
       });
@@ -384,7 +401,7 @@ class TelegramDraftSession {
 
   private async flushPending(): Promise<void> {
     const pending = this.#state.pending;
-    if (!pending || this.#state.closed) {
+    if (!pending || this.#state.closed || this.#state.frozen) {
       return;
     }
 
@@ -413,7 +430,7 @@ class TelegramDraftSession {
         const retryDelayMs = getRetryAfterDelayMs(error);
         this.#state.retryTimer = setTimeout(() => {
           this.#state.retryTimer = null;
-          if (!this.#state.closed && this.#state.pending) {
+          if (!this.#state.closed && !this.#state.frozen && this.#state.pending) {
             this.scheduleFlush(0);
           }
         }, retryDelayMs);
