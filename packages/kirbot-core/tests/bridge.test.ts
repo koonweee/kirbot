@@ -2049,6 +2049,77 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("keeps failed command detail in commentary without sending a Telegram failure bubble", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 74,
+      updateId: 84,
+      userId: 42,
+      text: "Diagnose the failing tests"
+    });
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "npm test -- --runInBand",
+          cwd: "/workspace/packages/kirbot-core",
+          processId: null,
+          status: "failed",
+          commandActions: [],
+          aggregatedOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"',
+          exitCode: 1,
+          durationMs: 12_000
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(
+      telegram.sentMessages.some((message) =>
+        message.text.includes('Command failed\nnpm test -- --runInBand')
+      )
+    ).toBe(false);
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const answerMessage = getFinalAnswerMessage(telegram);
+    expect(answerMessage?.text).toBe("Final answer");
+    expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
+
+    const commentaryUrl = getWebAppUrlByButtonText(answerMessage, "Commentary");
+    const commentaryEncoded = getEncodedMiniAppArtifactFromHash(new URL(commentaryUrl!).hash);
+    expect(decodeMiniAppArtifact(commentaryEncoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        ':::details Logs (1)\n**Command failed**\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n> FAIL bridge.test.ts\n> Error: expected "waiting · 6s" to equal "waiting · 5s"\n:::'
+    });
+  });
+
   it("falls back to a standalone commentary stub when combined response and commentary buttons exceed the markup budget", async () => {
     const miniAppConfig: AppConfig = {
       ...config,

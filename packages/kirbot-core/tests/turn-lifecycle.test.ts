@@ -965,12 +965,15 @@ describe("TurnLifecycleCoordinator", () => {
       id: "compact-2"
     });
 
-    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed\nlookup_docs\n\nDuration: <1s"]);
+    expect(harness.telegram.sentMessages).toEqual([]);
     expect(harness.telegram.drafts).toEqual([]);
   });
 
-  it("publishes failed command details as a formatted durable message", async () => {
-    const harness = createHarness();
+  it("keeps failed command details in commentary without sending a standalone bubble", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
     await harness.coordinator.handleItemCompleted("turn-1", {
@@ -986,16 +989,24 @@ describe("TurnLifecycleCoordinator", () => {
       durationMs: 12_000
     });
 
-    expect(harness.telegram.sentMessages).toHaveLength(1);
-    expect(harness.telegram.sentMessages[0]).toMatchObject({
-      text:
-        'Command failed\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+    expect(harness.telegram.sentMessages).toEqual([]);
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    const finalAnswer = harness.telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    expect(finalAnswer).toBeTruthy();
+    expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response", "Commentary"]);
+
+    const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
+    expect(url).toBeTruthy();
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        ':::details Logs (1)\n**Command failed**\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n> FAIL bridge.test.ts\n> Error: expected "waiting · 6s" to equal "waiting · 5s"\n:::'
     });
-    expect(
-      ((harness.telegram.sentMessages[0]?.options as { entities?: MessageEntity[] } | undefined)?.entities ?? []).map(
-        (entity) => entity.type
-      )
-    ).toEqual(["pre", "code", "code", "code", "expandable_blockquote"]);
     expect(harness.telegram.drafts).toEqual([]);
   });
 

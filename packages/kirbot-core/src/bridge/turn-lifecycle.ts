@@ -8,12 +8,10 @@ import type { LoggerLike } from "../logging";
 import {
   buildActivityLogEntryForItemCompleted,
   buildPlanArtifactMessages,
-  buildRenderedCompletedItemMessage,
   buildOversizePlanArtifactMessage,
   buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
-  isDurableCompletedItem,
   isSameStatusDraft,
   renderTelegramAssistantDraft,
   renderTelegramStatusDraft,
@@ -359,22 +357,6 @@ export class TurnLifecycleCoordinator {
       }
       context.compactionNoticeSent = true;
     }
-
-    if (!isDurableCompletedItem(item)) {
-      return;
-    }
-
-    const rendered = buildRenderedCompletedItemMessage(item);
-    if (!rendered) {
-      return;
-    }
-
-    await this.deps.messenger.sendMessage({
-      chatId: context.chatId,
-      topicId: context.topicId,
-      text: rendered.text,
-      ...(rendered.entities ? { entities: rendered.entities } : {})
-    });
   }
 
   async completeTurn(threadId: string, turnId: string): Promise<void> {

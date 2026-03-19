@@ -1,5 +1,3 @@
-import { basename } from "node:path";
-
 import type { CommandExecutionRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { FileChangeRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/FileChangeRequestApprovalParams";
 import type { PermissionsRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalParams";
@@ -11,7 +9,6 @@ import {
   renderCodeText,
   renderMarkdownToFormattedText,
   renderPreformattedText,
-  renderQuotedText,
   TelegramEntityBuilder,
   truncateFormattedText
 } from "@kirbot/telegram-format";
@@ -115,74 +112,6 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
       return buildStatusDraft("searching");
     default:
       return buildStatusDraft("thinking");
-  }
-}
-
-export function isDurableCompletedItem(item: ThreadItem): boolean {
-  switch (item.type) {
-    case "commandExecution":
-      return isCommandExecutionFailed(item);
-    case "fileChange":
-      return item.status !== "completed";
-    case "mcpToolCall":
-    case "dynamicToolCall":
-    case "collabAgentToolCall":
-      return item.status === "failed";
-    case "imageGeneration":
-      return !isImageGenerationSuccess(item);
-    default:
-      return false;
-  }
-}
-
-export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRenderedMessage | null {
-  switch (item.type) {
-    case "reasoning":
-      return null;
-    case "commandExecution":
-      return buildRenderedCommandExecutionCompletionMessage(item);
-    case "fileChange":
-      return buildRenderedFileChangeCompletionMessage(item);
-    case "mcpToolCall":
-      return item.status === "failed"
-        ? buildRenderedStructuredFailureMessage(buildStructuredFailureForMcpToolCall(item))
-        : {
-            text: `Tool completed: ${item.server}.${item.tool}`
-          };
-    case "dynamicToolCall":
-      return item.status === "failed"
-        ? buildRenderedStructuredFailureMessage(buildStructuredFailureForDynamicToolCall(item))
-        : {
-            text: `Tool completed: ${item.tool}`
-          };
-    case "collabAgentToolCall":
-      return item.status === "failed"
-        ? buildRenderedStructuredFailureMessage(buildStructuredFailureForCollabAgentToolCall(item))
-        : {
-            text: `Agent task updated: ${item.tool}`
-          };
-    case "webSearch": {
-      const query = item.query.trim();
-      return { text: query ? `Web search completed: ${query}` : "Web search completed." };
-    }
-    case "imageView":
-      return buildLabeledCodeMessage("Viewed image: ", basename(item.path) || item.path);
-    case "imageGeneration":
-      return isImageGenerationSuccess(item)
-        ? { text: "Image generated." }
-        : buildRenderedStructuredFailureMessage(buildStructuredFailureForImageGeneration(item));
-    case "enteredReviewMode": {
-      const review = item.review.trim();
-      return { text: review ? `Entered review mode: ${review}` : "Entered review mode." };
-    }
-    case "exitedReviewMode": {
-      const review = item.review.trim();
-      return { text: review ? `Exited review mode: ${review}` : "Exited review mode." };
-    }
-    case "contextCompaction":
-      return { text: "Context compacted." };
-    default:
-      return null;
   }
 }
 
@@ -1059,14 +988,6 @@ function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = fals
   return `${minutes}m ${seconds}s`;
 }
 
-function buildRenderedCommandExecutionCompletionMessage(
-  item: Extract<ThreadItem, { type: "commandExecution" }>
-): TelegramRenderedMessage {
-  return item.status === "declined" || isCommandExecutionFailed(item)
-    ? buildRenderedStructuredFailureMessage(buildStructuredFailureForCommandExecution(item))
-    : buildLabeledCodeMessage("Command completed: ", item.command);
-}
-
 function truncateCommandFailureOutput(output: string | null): string | null {
   const normalized = output?.replace(/\r\n/g, "\n").trim() ?? "";
   if (!normalized) {
@@ -1074,46 +995,6 @@ function truncateCommandFailureOutput(output: string | null): string | null {
   }
 
   return buildTruncatedPreview(normalized, COMMAND_FAILURE_OUTPUT_CHAR_LIMIT, "...\n", "");
-}
-
-function buildRenderedFileChangeCompletionMessage(
-  item: Extract<ThreadItem, { type: "fileChange" }>
-): TelegramRenderedMessage {
-  return item.status === "completed"
-    ? buildLabeledCodeMessage("Applied file changes: ", summarizeFileChanges(item.changes) ?? "(unknown files)")
-    : buildRenderedStructuredFailureMessage(buildStructuredFailureForFileChange(item));
-}
-
-function buildRenderedStructuredFailureMessage(entry: StructuredFailureEntry): TelegramRenderedMessage {
-  const builder = new TelegramEntityBuilder();
-  builder.appendText(entry.title);
-
-  if (entry.subject) {
-    builder.appendText("\n");
-    appendStructuredFailureBlock(builder, entry.subject);
-  }
-
-  if (entry.metadata.length > 0) {
-    builder.appendText(entry.subject ? "\n\n" : "\n");
-    entry.metadata.forEach((line, index) => {
-      if (index > 0) {
-        builder.appendText("\n");
-      }
-      builder.appendText(`${line.label}: `);
-      if (line.code) {
-        builder.appendFormatted(renderCodeText(line.value));
-      } else {
-        builder.appendText(line.value);
-      }
-    });
-  }
-
-  if (entry.detail) {
-    builder.appendText(`\n\n${entry.detail.title}\n`);
-    appendStructuredFailureBlock(builder, entry.detail);
-  }
-
-  return builder.build();
 }
 
 function buildStructuredFailureMarkdown(entry: StructuredFailureEntry): string {
@@ -1134,30 +1015,6 @@ function buildStructuredFailureMarkdown(entry: StructuredFailureEntry): string {
   }
 
   return markdown;
-}
-
-function appendStructuredFailureBlock(
-  builder: TelegramEntityBuilder,
-  block: StructuredFailureEntry["subject"] | NonNullable<StructuredFailureEntry["detail"]>
-): void {
-  if (!block) {
-    return;
-  }
-
-  switch (block.style) {
-    case "codeBlock":
-      builder.appendFormatted(renderPreformattedText(block.value));
-      return;
-    case "quoteBlock":
-      builder.appendFormatted(renderQuotedText(block.value));
-      return;
-    case "inlineCode":
-      builder.appendFormatted(renderCodeText(block.value));
-      return;
-    case "text":
-      builder.appendText(block.value);
-      return;
-  }
 }
 
 function renderStructuredFailureBlockMarkdown(
@@ -1533,13 +1390,6 @@ function summarizeFileChangePaths(changes: Array<{ path: string }>): { paths: st
     paths: first?.path ? [first.path] : [],
     additionalCount: changes.length - 1
   };
-}
-
-function buildLabeledCodeMessage(prefix: string, value: string): TelegramRenderedMessage {
-  const builder = new TelegramEntityBuilder();
-  builder.appendText(prefix);
-  builder.appendFormatted(renderCodeText(value.trim().length > 0 ? value : "(unknown)"));
-  return builder.build();
 }
 
 function isCommandExecutionFailed(item: Extract<ThreadItem, { type: "commandExecution" }>): boolean {

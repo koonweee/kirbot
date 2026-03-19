@@ -7,7 +7,6 @@ import {
   buildPlanArtifactMessages,
   buildRenderedCommandApprovalPrompt,
   buildRenderedFileChangeApprovalPrompt,
-  buildRenderedCompletedItemMessage,
   buildRenderedCompletionFooter,
   buildResponseArtifactPublication,
   buildStatusDraft,
@@ -334,69 +333,6 @@ describe("multipart artifact presentation", () => {
 });
 
 describe("command presentation", () => {
-  it("renders failed command completions with code blocks and inline metadata", () => {
-    const rendered = buildRenderedCompletedItemMessage({
-      type: "commandExecution",
-      id: "cmd-1",
-      command: "npm test -- --runInBand",
-      cwd: "/workspace/packages/kirbot-core",
-      processId: null,
-      status: "failed",
-      commandActions: [],
-      aggregatedOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"',
-      exitCode: 1,
-      durationMs: 12_000
-    });
-
-    expect(rendered).toMatchObject({
-      text:
-        'Command failed\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
-    });
-    expect(rendered?.entities?.map((entity) => entity.type)).toEqual([
-      "pre",
-      "code",
-      "code",
-      "code",
-      "expandable_blockquote"
-    ]);
-  });
-
-  it("renders failed file changes with a code-block file list", () => {
-    const rendered = buildRenderedCompletedItemMessage({
-      type: "fileChange",
-      id: "patch-1",
-      status: "failed",
-      changes: [
-        { path: "src/app.ts", kind: { type: "update", move_path: null }, diff: "" },
-        { path: "src/server.ts", kind: { type: "update", move_path: null }, diff: "" }
-      ]
-    });
-
-    expect(rendered).toMatchObject({
-      text: "File changes failed\nsrc/app.ts\nsrc/server.ts\n\nFiles: 2"
-    });
-    expect(rendered?.entities?.map((entity) => entity.type)).toEqual(["pre", "code"]);
-  });
-
-  it("renders failed tool calls with metadata and error output when available", () => {
-    const rendered = buildRenderedCompletedItemMessage({
-      type: "mcpToolCall",
-      id: "tool-1",
-      server: "github",
-      tool: "search_code",
-      status: "failed",
-      arguments: {},
-      result: null,
-      error: { message: "rate limited by upstream" },
-      durationMs: 10_000
-    });
-
-    expect(rendered).toMatchObject({
-      text: "Tool failed\ngithub.search_code\n\nDuration: 10s\n\nError\nrate limited by upstream"
-    });
-    expect(rendered?.entities?.map((entity) => entity.type)).toEqual(["code", "code", "expandable_blockquote"]);
-  });
-
   it("renders command approval cards with code-block commands and inline CWD", () => {
     const rendered = buildRenderedCommandApprovalPrompt({
       threadId: "thread-1",
