@@ -541,6 +541,7 @@ class FakeTelegram implements TelegramApi {
     messageId: number;
     options?: TelegramSendOptions;
   }> = [];
+  callbackAnswers: Array<{ callbackQueryId: string; options?: { text?: string } }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
   downloads: Array<{ fileId: string }> = [];
 
@@ -638,7 +639,8 @@ class FakeTelegram implements TelegramApi {
     return true;
   }
 
-  async answerCallbackQuery(): Promise<true> {
+  async answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true> {
+    this.callbackAnswers.push(options ? { callbackQueryId, options } : { callbackQueryId });
     return true;
   }
 
@@ -1070,6 +1072,190 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
   });
 
+  it("shows a short help blurb for /cmd with no arguments", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 16,
+      updateId: 26,
+      userId: 42,
+      text: "/cmd"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      [
+        "Manage custom thread commands.",
+        "Usage: /cmd add <command> <prompt>",
+        "Usage: /cmd update <command> <prompt>",
+        "Usage: /cmd delete <command>",
+        "Custom commands are typed-only and only work in topics."
+      ].join("\n")
+    );
+  });
+
+  it("creates a pending custom command confirmation instead of adding immediately", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "/cmd add standup Draft the daily update."
+    });
+
+    const pending = await database.getPendingCustomCommandAddByCommand("standup");
+    expect(pending?.status).toBe("pending");
+    expect(await database.getCustomCommandByName("standup")).toBeUndefined();
+    expect(telegram.sentMessages.at(-1)).toMatchObject({
+      chatId: -1001,
+      text: "Add custom command /standup?\n\nPrompt:\nDraft the daily update."
+    });
+    expect(getInlineButtonTexts(telegram.sentMessages.at(-1))).toEqual(["Add", "Cancel"]);
+  });
+
+  it("confirms a pending custom command add through callback", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/cmd add standup Draft the daily update."
+    });
+
+    const pending = await database.getPendingCustomCommandAddByCommand("standup");
+    const confirmationMessage = telegram.sentMessages.at(-1);
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "customcmd-confirm",
+      data: getCallbackDataByButtonText(confirmationMessage, "Add")!,
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    expect(await database.getCustomCommandByName("standup")).toMatchObject({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+    expect((await database.getPendingCustomCommandAddById(pending!.id))?.status).toBe("confirmed");
+    expect(telegram.edits.at(-1)?.text).toBe("Added /standup.");
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Command added.");
+  });
+
+  it("cancels a pending custom command add through callback", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 19,
+      updateId: 29,
+      userId: 42,
+      text: "/cmd add standup Draft the daily update."
+    });
+
+    const pending = await database.getPendingCustomCommandAddByCommand("standup");
+    const confirmationMessage = telegram.sentMessages.at(-1);
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "customcmd-cancel",
+      data: getCallbackDataByButtonText(confirmationMessage, "Cancel")!,
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    expect((await database.getPendingCustomCommandAddById(pending!.id))?.status).toBe("canceled");
+    expect(await database.getCustomCommandByName("standup")).toBeUndefined();
+    expect(telegram.edits.at(-1)?.text).toBe("Canceled adding /standup.");
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Canceled.");
+  });
+
+  it("treats repeated custom command confirmation callbacks as stale", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 20,
+      updateId: 30,
+      userId: 42,
+      text: "/cmd add standup Draft the daily update."
+    });
+
+    const confirmationMessage = telegram.sentMessages.at(-1);
+    const confirmData = getCallbackDataByButtonText(confirmationMessage, "Add")!;
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "customcmd-confirm-first",
+      data: confirmData,
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "customcmd-confirm-second",
+      data: confirmData,
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("This confirmation is no longer pending.");
+  });
+
+  it("rejects duplicate and reserved custom command names", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 20,
+      updateId: 30,
+      userId: 42,
+      text: "/cmd add standup Draft something else."
+    });
+    expect(telegram.sentMessages.at(-1)?.text).toBe("/standup already exists.");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 21,
+      updateId: 31,
+      userId: 42,
+      text: "/cmd add plan Draft something else."
+    });
+    expect(telegram.sentMessages.at(-1)?.text).toBe("/plan is reserved.");
+  });
+
+  it("updates and deletes an existing custom command from root /cmd", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 22,
+      updateId: 32,
+      userId: 42,
+      text: "/cmd update standup Draft the weekly update."
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Updated /standup.");
+    expect((await database.getCustomCommandByName("standup"))?.prompt).toBe("Draft the weekly update.");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 23,
+      updateId: 33,
+      userId: 42,
+      text: "/cmd delete standup"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Deleted /standup.");
+    expect(await database.getCustomCommandByName("standup")).toBeUndefined();
+  });
+
   it("ignores messages from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1297,6 +1483,19 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
     const session = await database.getSessionByTopic(-1001, 778);
     expect(session).toBeUndefined();
+  });
+
+  it("rejects /cmd inside a topic", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 779,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "/cmd"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
   });
 
   it("requires an existing session before enabling plan mode", async () => {
@@ -3809,6 +4008,115 @@ describe("TelegramCodexBridge", () => {
         }
       }
     ]);
+  });
+
+  it("invokes a custom command as a normal topic turn after the session is active", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 401,
+      updateId: 501,
+      userId: 42,
+      text: "Start the session"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 402,
+      updateId: 502,
+      userId: 42,
+      text: "/standup"
+    });
+
+    expect(codex.turns.at(-1)).toMatchObject({
+      threadId: "thread-1",
+      text: "Draft the daily update."
+    });
+  });
+
+  it("appends extra text when a custom command steers an active turn", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 786,
+      messageId: 403,
+      updateId: 503,
+      userId: 42,
+      text: "Start the session"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 786,
+      messageId: 404,
+      updateId: 504,
+      userId: 42,
+      text: "/standup blockers from yesterday"
+    });
+
+    expect(codex.steerCalls.at(-1)?.text).toBe("Draft the daily update.\n\nblockers from yesterday");
+  });
+
+  it("starts a topic session from a custom command in an unmapped topic", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 787,
+      messageId: 405,
+      updateId: 505,
+      userId: 42,
+      text: "/standup blockers from yesterday"
+    });
+
+    expect(codex.turns.at(-1)?.text).toBe("Draft the daily update.\n\nblockers from yesterday");
+    expect(await database.getSessionByTopic(-1001, 787)).toBeDefined();
+  });
+
+  it("rejects custom command invocation from root chat", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 406,
+      updateId: 506,
+      userId: 42,
+      text: "/standup"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(codex.turns).toHaveLength(0);
   });
 
   it("rejects unknown slash commands during an active turn instead of steering", async () => {

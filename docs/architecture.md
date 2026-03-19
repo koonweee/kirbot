@@ -62,6 +62,9 @@ Owns the lifecycle of an active turn after submission: status drafts, streaming 
 [`packages/kirbot-core/src/bridge/request-coordinator.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/request-coordinator.ts)
 Owns Codex server requests that need user action in Telegram: command approvals, file approvals, and structured user-input prompts.
 
+[`packages/kirbot-core/src/bridge/custom-commands.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/custom-commands.ts)
+Owns custom slash-command parsing, validation, prompt expansion, and confirmation callback payload helpers for the root `/cmd` flow and typed topic invocation.
+
 [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
 Owns Telegram-facing presentation outside the formatting subsystem: topic titles, status text, completion footers, and queue previews.
 
@@ -115,6 +118,14 @@ kirbot stores bridge state in SQLite, not Telegram metadata.
 `processed_updates`
 
 - deduplicates Telegram updates so retries do not resubmit turns
+
+`custom_commands`
+
+- stores active user-defined topic slash commands and their expanded prompt text
+
+`pending_custom_command_adds`
+
+- stores pending `/cmd add` confirmations so add and cancel buttons survive async handling and process restarts
 
 ## Stable Design Rules
 

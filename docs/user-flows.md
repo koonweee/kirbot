@@ -142,7 +142,29 @@ Verified by:
 - global settings command and callback tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
 
-## 7. Switch Between Planning And Implementation
+## 7. Manage Custom Thread Commands
+
+User experience:
+
+- `/cmd` in the lobby shows a short help blurb for `add`, `update`, and `delete`.
+- `/cmd add <command> <prompt>` validates the command name and prompt, then sends a confirmation message in the lobby with `Add` and `Cancel` buttons instead of creating the command immediately.
+- `/cmd update <command> <prompt>` and `/cmd delete <command>` update the saved command set immediately after validation.
+- Confirmed custom commands are typed-only; kirbot does not add them to Telegram’s visible slash-command picker.
+- A custom command can be invoked only inside topics. When invoked, kirbot expands it to the stored prompt text plus any extra trailing text and routes it like a normal user message, including session bootstrap in an unmapped topic and steer or queue behavior during an active turn.
+
+Owned by:
+
+- root `/cmd` routing and typed custom command invocation in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- custom command parsing and validation helpers in [`packages/kirbot-core/src/bridge/custom-commands.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/custom-commands.ts)
+- custom command persistence and pending add confirmation state in [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
+
+Verified by:
+
+- custom command management and invocation tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- custom command persistence tests in [`packages/kirbot-core/tests/db.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/db.test.ts)
+- command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
+
+## 8. Switch Between Planning And Implementation
 
 User experience:
 
@@ -162,7 +184,7 @@ Verified by:
 - root and topic mode-command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
 
-## 8. Handle Approvals And Structured User Input
+## 9. Handle Approvals And Structured User Input
 
 User experience:
 
@@ -187,7 +209,7 @@ Verified by:
 - approval and user-input request tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - request persistence tests in [`packages/kirbot-core/tests/db.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/db.test.ts)
 
-## 9. Send Images
+## 10. Send Images
 
 User experience:
 
@@ -205,7 +227,7 @@ Verified by:
 
 - image retention and cleanup tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
-## 10. Recover Across Restarts And Topic Closure
+## 11. Recover Across Restarts And Topic Closure
 
 User experience:
 

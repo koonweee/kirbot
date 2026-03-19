@@ -3,11 +3,16 @@ export type TelegramBotCommand = {
   description: string;
 };
 
-export type KirbotSlashCommand = "stop" | "plan" | "start" | "implement";
+export type KirbotSlashCommand = "stop" | "plan" | "start" | "implement" | "cmd";
 export type CodexSlashCommand = "model" | "fast" | "approvals" | "permissions";
 export type SlashCommandName = KirbotSlashCommand | CodexSlashCommand;
 export type SlashCommandKind = "kirbot" | "codex";
 export type SlashCommandScope = "root" | "topic";
+
+export type ParsedSlashCommandToken = {
+  command: string;
+  argsText: string;
+};
 
 export type ParsedSlashCommand = {
   command: SlashCommandName;
@@ -56,6 +61,14 @@ const SLASH_COMMAND_DEFINITIONS = [
     visible: true,
     allowInRoot: false,
     allowInTopic: true
+  },
+  {
+    command: "cmd",
+    description: "Manage custom thread commands",
+    kind: "kirbot",
+    visible: true,
+    allowInRoot: true,
+    allowInTopic: false
   },
   {
     command: "model",
@@ -115,7 +128,7 @@ export function isAllowedSlashCommandInScope(command: string, scope: SlashComman
   return scope === "root" ? ROOT_COMMAND_SET.has(command as SlashCommandName) : TOPIC_COMMAND_SET.has(command as SlashCommandName);
 }
 
-export function parseSlashCommand(text: string): ParsedSlashCommand | null {
+export function parseSlashCommandToken(text: string): ParsedSlashCommandToken | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) {
     return null;
@@ -129,21 +142,37 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   const command = token
     .slice(1)
     .split("@", 1)[0]
-    ?.toLowerCase() as SlashCommandName | undefined;
+    ?.toLowerCase();
   if (!command) {
-    return null;
-  }
-
-  const definition = SLASH_COMMAND_BY_NAME.get(command);
-  if (!definition) {
     return null;
   }
 
   return {
     command,
-    argsText: rest.join(" ").trim(),
+    argsText: rest.join(" ").trim()
+  };
+}
+
+export function parseSlashCommand(text: string): ParsedSlashCommand | null {
+  const parsed = parseSlashCommandToken(text);
+  if (!parsed) {
+    return null;
+  }
+
+  const definition = SLASH_COMMAND_BY_NAME.get(parsed.command as SlashCommandName);
+  if (!definition) {
+    return null;
+  }
+
+  return {
+    command: parsed.command as SlashCommandName,
+    argsText: parsed.argsText,
     definition
   };
+}
+
+export function isBuiltInSlashCommand(command: string): command is SlashCommandName {
+  return SLASH_COMMAND_BY_NAME.has(command as SlashCommandName);
 }
 
 export function isCodexSlashCommand(command: SlashCommandName): command is CodexSlashCommand {

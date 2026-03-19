@@ -4,7 +4,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
-import type { SessionMode, TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
+import type { PendingCustomCommandAdd, SessionMode, TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
 import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
 import type { CollaborationMode } from "@kirbot/codex-client/generated/codex/CollaborationMode";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
@@ -36,9 +36,29 @@ import {
   type CodexThreadSettingsOverride
 } from "./bridge/codex-thread-settings";
 import {
+  buildCustomCommandAddedText,
+  buildCustomCommandCanceledText,
+  buildCustomCommandConfirmationText,
+  buildCustomCommandDeletedText,
+  buildCustomCommandDuplicateText,
+  buildCustomCommandHelpText,
+  buildCustomCommandReservedText,
+  buildCustomCommandUpdatedText,
+  buildMissingCustomCommandText,
+  buildPendingCustomCommandCallbackData,
+  expandCustomCommandPrompt,
+  normalizeCustomCommandName,
+  parseCustomCommandManagerRequest,
+  parsePendingCustomCommandCallbackData,
+  validateCustomCommandName,
+  validateCustomCommandPrompt
+} from "./bridge/custom-commands";
+import {
   isAllowedSlashCommandInScope,
+  isBuiltInSlashCommand,
   isCodexSlashCommand,
   parseSlashCommand,
+  parseSlashCommandToken,
   type ParsedSlashCommand
 } from "./bridge/slash-commands";
 import {
@@ -111,6 +131,7 @@ const PLAN_MODE_EXITED_TEXT = "Exited plan mode.";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
+const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending.";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -222,6 +243,11 @@ export class TelegramCodexBridge {
     }
 
     if (await this.#requestCoordinator.handleCallbackQuery(event)) {
+      return;
+    }
+
+    if (event.data.startsWith("customcmd:")) {
+      await this.handleCustomCommandCallbackQuery(event);
       return;
     }
 
@@ -360,6 +386,17 @@ export class TelegramCodexBridge {
       return;
     }
 
+    const parsedCustomCommand = parseSlashCommandToken(message.text);
+    if (parsedCustomCommand) {
+      const handled = await this.tryHandleCustomCommandInvocation(message, parsedCustomCommand.command, parsedCustomCommand.argsText);
+      if (handled) {
+        return;
+      }
+
+      await this.sendInvalidSlashCommandMessage(message);
+      return;
+    }
+
     if (looksLikeSlashCommand(message.text)) {
       await this.sendInvalidSlashCommandMessage(message);
       return;
@@ -418,6 +455,11 @@ export class TelegramCodexBridge {
       return;
     }
 
+    if (command.command === "cmd") {
+      await this.handleCustomCommandManager(message, command.argsText);
+      return;
+    }
+
     await this.sendInvalidSlashCommandMessage(message);
   }
 
@@ -462,6 +504,233 @@ export class TelegramCodexBridge {
     }
 
     await this.sendInvalidSlashCommandMessage(message);
+  }
+
+  private async handleCustomCommandManager(message: UserTurnMessage, argsText: string): Promise<void> {
+    const parsed = parseCustomCommandManagerRequest(argsText);
+    if (parsed.kind === "help") {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: buildCustomCommandHelpText()
+      });
+      return;
+    }
+
+    if (parsed.kind === "invalid") {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: parsed.message
+      });
+      return;
+    }
+
+    const commandName = normalizeCustomCommandName(parsed.commandName);
+    const commandValidationError = validateCustomCommandName(commandName);
+    if (commandValidationError) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: commandValidationError
+      });
+      return;
+    }
+
+    if (parsed.action === "add" || parsed.action === "update") {
+      const promptValidationError = validateCustomCommandPrompt(parsed.prompt);
+      if (promptValidationError) {
+        await this.#messenger.sendMessage({
+          chatId: message.chatId,
+          text: promptValidationError
+        });
+        return;
+      }
+    }
+
+    if (parsed.action === "add") {
+      const conflict = await this.getCustomCommandConflictText(commandName);
+      if (conflict) {
+        await this.#messenger.sendMessage({
+          chatId: message.chatId,
+          text: conflict
+        });
+        return;
+      }
+
+      const pending = await this.database.createPendingCustomCommandAdd({
+        command: commandName,
+        prompt: parsed.prompt.trim(),
+        telegramChatId: String(message.chatId)
+      });
+      const confirmation = await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: buildCustomCommandConfirmationText(commandName, parsed.prompt.trim()),
+        replyMarkup: {
+          inline_keyboard: [[
+            {
+              text: "Add",
+              callback_data: buildPendingCustomCommandCallbackData(pending.id, "confirm")
+            },
+            {
+              text: "Cancel",
+              callback_data: buildPendingCustomCommandCallbackData(pending.id, "cancel")
+            }
+          ]]
+        }
+      });
+      await this.database.updatePendingCustomCommandAddMessageId(pending.id, confirmation.messageId);
+      return;
+    }
+
+    if (parsed.action === "update") {
+      const updated = await this.database.updateCustomCommandPrompt(commandName, parsed.prompt.trim());
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: updated ? buildCustomCommandUpdatedText(commandName) : buildMissingCustomCommandText(commandName)
+      });
+      return;
+    }
+
+    const deleted = await this.database.deleteCustomCommand(commandName);
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      text: deleted ? buildCustomCommandDeletedText(commandName) : buildMissingCustomCommandText(commandName)
+    });
+  }
+
+  private async tryHandleCustomCommandInvocation(
+    message: UserTurnMessage,
+    commandName: string,
+    argsText: string
+  ): Promise<boolean> {
+    if (message.topicId === null || isBuiltInSlashCommand(commandName)) {
+      return false;
+    }
+
+    const customCommand = await this.database.getCustomCommandByName(commandName);
+    if (!customCommand) {
+      return false;
+    }
+
+    const expandedPrompt = expandCustomCommandPrompt(customCommand.prompt, argsText);
+    const expandedMessage = replaceMessageText(message, expandedPrompt);
+    const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
+    if (!session) {
+      await this.startSessionInExistingTopic(expandedMessage);
+      return true;
+    }
+
+    if (!session.codexThreadId) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: "This topic is still provisioning a Codex session. Try again in a moment."
+      });
+      return true;
+    }
+
+    const activeTurn = this.findActiveTurnByTopic(message.chatId, message.topicId);
+    if (activeTurn) {
+      await this.trySteerTurn(activeTurn, expandedMessage);
+      return true;
+    }
+
+    await this.sendTurnForSession(session, expandedMessage);
+    return true;
+  }
+
+  private async handleCustomCommandCallbackQuery(event: CallbackQueryEvent): Promise<void> {
+    const parsed = parsePendingCustomCommandCallbackData(event.data);
+    if (!parsed) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Unsupported callback."
+      });
+      return;
+    }
+
+    const pending = await this.database.getPendingCustomCommandAddById(parsed.pendingId);
+    if (!pending || pending.status !== "pending") {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT
+      });
+      return;
+    }
+
+    if (parsed.action === "cancel") {
+      await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
+      await this.maybeEditPendingCustomCommandMessage(pending, buildCustomCommandCanceledText(pending.command));
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Canceled."
+      });
+      return;
+    }
+
+    const conflict = await this.getCustomCommandConflictText(pending.command, pending.id);
+    if (conflict) {
+      await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
+      await this.maybeEditPendingCustomCommandMessage(pending, conflict);
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Could not add command."
+      });
+      return;
+    }
+
+    try {
+      await this.database.createCustomCommand({
+        command: pending.command,
+        prompt: pending.prompt
+      });
+    } catch (error) {
+      const duplicateConflict = await this.getCustomCommandConflictText(pending.command, pending.id);
+      if (duplicateConflict) {
+        await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
+        await this.maybeEditPendingCustomCommandMessage(pending, duplicateConflict);
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Could not add command."
+        });
+        return;
+      }
+
+      this.logger.error("Failed to add custom command", error);
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Failed to add command."
+      });
+      return;
+    }
+
+    await this.database.updatePendingCustomCommandAddStatus(pending.id, "confirmed");
+    await this.maybeEditPendingCustomCommandMessage(pending, buildCustomCommandAddedText(pending.command));
+    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      text: "Command added."
+    });
+  }
+
+  private async getCustomCommandConflictText(commandName: string, ignoredPendingId?: number): Promise<string | null> {
+    if (isBuiltInSlashCommand(commandName)) {
+      return buildCustomCommandReservedText(commandName);
+    }
+
+    const existing = await this.database.getCustomCommandByName(commandName);
+    if (existing) {
+      return buildCustomCommandDuplicateText(commandName);
+    }
+
+    const pending = await this.database.getPendingCustomCommandAddByCommand(commandName);
+    if (pending && pending.id !== ignoredPendingId) {
+      return buildCustomCommandDuplicateText(commandName);
+    }
+
+    return null;
+  }
+
+  private async maybeEditPendingCustomCommandMessage(pending: PendingCustomCommandAdd, text: string): Promise<void> {
+    if (!pending.telegramMessageId) {
+      return;
+    }
+
+    await this.telegram.editMessageText(
+      Number.parseInt(pending.telegramChatId, 10),
+      pending.telegramMessageId,
+      text
+    );
   }
 
   private async enterPlanMode(message: UserTurnMessage, promptText: string): Promise<void> {

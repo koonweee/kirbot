@@ -6,6 +6,9 @@ import { sql } from "kysely";
 import { Generated, Kysely, Selectable, SqliteDialect } from "kysely";
 
 import type {
+  CustomCommand,
+  PendingCustomCommandAdd,
+  PendingCustomCommandStatus,
   PendingServerRequest,
   SessionMode,
   SessionStatus,
@@ -13,7 +16,7 @@ import type {
 } from "./domain";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 type TopicSessionsTable = {
   id: Generated<number>;
@@ -37,6 +40,25 @@ type ServerRequestsTable = {
   created_at: TimestampString;
 };
 
+type CustomCommandsTable = {
+  id: Generated<number>;
+  command: string;
+  prompt: string;
+  created_at: TimestampString;
+  updated_at: TimestampString;
+};
+
+type PendingCustomCommandAddsTable = {
+  id: Generated<number>;
+  command: string;
+  prompt: string;
+  telegram_chat_id: string;
+  telegram_message_id: number | null;
+  status: PendingCustomCommandStatus;
+  created_at: TimestampString;
+  updated_at: TimestampString;
+};
+
 type ProcessedUpdatesTable = {
   telegram_update_id: Generated<number>;
 };
@@ -44,6 +66,8 @@ type ProcessedUpdatesTable = {
 export type DatabaseSchema = {
   topic_sessions: TopicSessionsTable;
   server_requests: ServerRequestsTable;
+  custom_commands: CustomCommandsTable;
+  pending_custom_command_adds: PendingCustomCommandAddsTable;
   processed_updates: ProcessedUpdatesTable;
 };
 
@@ -74,6 +98,29 @@ function mapServerRequest(row: Selectable<ServerRequestsTable>): PendingServerRe
     stateJson: row.state_json,
     status: row.status,
     createdAt: row.created_at
+  };
+}
+
+function mapCustomCommand(row: Selectable<CustomCommandsTable>): CustomCommand {
+  return {
+    id: row.id,
+    command: row.command,
+    prompt: row.prompt,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapPendingCustomCommandAdd(row: Selectable<PendingCustomCommandAddsTable>): PendingCustomCommandAdd {
+  return {
+    id: row.id,
+    command: row.command,
+    prompt: row.prompt,
+    telegramChatId: row.telegram_chat_id,
+    telegramMessageId: row.telegram_message_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 
@@ -150,6 +197,44 @@ export class BridgeDatabase {
       .createTable("processed_updates")
       .ifNotExists()
       .addColumn("telegram_update_id", "integer", (column) => column.primaryKey())
+      .execute();
+
+    await this.kysely.schema
+      .createTable("custom_commands")
+      .ifNotExists()
+      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
+      .addColumn("command", "text", (column) => column.notNull())
+      .addColumn("prompt", "text", (column) => column.notNull())
+      .addColumn("created_at", "text", (column) => column.notNull())
+      .addColumn("updated_at", "text", (column) => column.notNull())
+      .execute();
+
+    await this.kysely.schema
+      .createIndex("custom_commands_command_unique")
+      .ifNotExists()
+      .on("custom_commands")
+      .column("command")
+      .unique()
+      .execute();
+
+    await this.kysely.schema
+      .createTable("pending_custom_command_adds")
+      .ifNotExists()
+      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
+      .addColumn("command", "text", (column) => column.notNull())
+      .addColumn("prompt", "text", (column) => column.notNull())
+      .addColumn("telegram_chat_id", "text", (column) => column.notNull())
+      .addColumn("telegram_message_id", "integer")
+      .addColumn("status", "text", (column) => column.notNull())
+      .addColumn("created_at", "text", (column) => column.notNull())
+      .addColumn("updated_at", "text", (column) => column.notNull())
+      .execute();
+
+    await this.kysely.schema
+      .createIndex("pending_custom_command_adds_status_command_index")
+      .ifNotExists()
+      .on("pending_custom_command_adds")
+      .columns(["status", "command"])
       .execute();
 
     this.#writeSchemaVersion(SCHEMA_VERSION);
@@ -455,6 +540,162 @@ export class BridgeDatabase {
     return Number(row.count);
   }
 
+  async createCustomCommand(input: {
+    command: string;
+    prompt: string;
+  }): Promise<CustomCommand> {
+    const timestamp = now();
+
+    await this.kysely
+      .insertInto("custom_commands")
+      .values({
+        command: input.command,
+        prompt: input.prompt,
+        created_at: timestamp,
+        updated_at: timestamp
+      })
+      .execute();
+
+    return this.getCustomCommandByNameOrThrow(input.command);
+  }
+
+  async getCustomCommandByName(command: string): Promise<CustomCommand | undefined> {
+    const row = await this.kysely
+      .selectFrom("custom_commands")
+      .selectAll()
+      .where("command", "=", command)
+      .executeTakeFirst();
+
+    return row ? mapCustomCommand(row) : undefined;
+  }
+
+  async updateCustomCommandPrompt(command: string, prompt: string): Promise<CustomCommand | undefined> {
+    const existing = await this.getCustomCommandByName(command);
+    if (!existing) {
+      return undefined;
+    }
+
+    await this.kysely
+      .updateTable("custom_commands")
+      .set({
+        prompt,
+        updated_at: now()
+      })
+      .where("id", "=", existing.id)
+      .execute();
+
+    return this.getCustomCommandByName(command);
+  }
+
+  async deleteCustomCommand(command: string): Promise<boolean> {
+    const result = await this.kysely
+      .deleteFrom("custom_commands")
+      .where("command", "=", command)
+      .executeTakeFirst();
+
+    return Number(result.numDeletedRows ?? 0) > 0;
+  }
+
+  async createPendingCustomCommandAdd(input: {
+    command: string;
+    prompt: string;
+    telegramChatId: string;
+  }): Promise<PendingCustomCommandAdd> {
+    const timestamp = now();
+
+    await this.kysely
+      .insertInto("pending_custom_command_adds")
+      .values({
+        command: input.command,
+        prompt: input.prompt,
+        telegram_chat_id: input.telegramChatId,
+        telegram_message_id: null,
+        status: "pending",
+        created_at: timestamp,
+        updated_at: timestamp
+      })
+      .execute();
+
+    const row = await this.kysely
+      .selectFrom("pending_custom_command_adds")
+      .selectAll()
+      .where("command", "=", input.command)
+      .where("status", "=", "pending")
+      .orderBy("id", "desc")
+      .executeTakeFirstOrThrow();
+
+    return mapPendingCustomCommandAdd(row);
+  }
+
+  async getPendingCustomCommandAddById(id: number): Promise<PendingCustomCommandAdd | undefined> {
+    const row = await this.kysely
+      .selectFrom("pending_custom_command_adds")
+      .selectAll()
+      .where("id", "=", id)
+      .executeTakeFirst();
+
+    return row ? mapPendingCustomCommandAdd(row) : undefined;
+  }
+
+  async getPendingCustomCommandAddByCommand(command: string): Promise<PendingCustomCommandAdd | undefined> {
+    const row = await this.kysely
+      .selectFrom("pending_custom_command_adds")
+      .selectAll()
+      .where("command", "=", command)
+      .where("status", "=", "pending")
+      .orderBy("id", "desc")
+      .executeTakeFirst();
+
+    return row ? mapPendingCustomCommandAdd(row) : undefined;
+  }
+
+  async updatePendingCustomCommandAddMessageId(id: number, telegramMessageId: number): Promise<void> {
+    await this.kysely
+      .updateTable("pending_custom_command_adds")
+      .set({
+        telegram_message_id: telegramMessageId,
+        updated_at: now()
+      })
+      .where("id", "=", id)
+      .execute();
+  }
+
+  async updatePendingCustomCommandAddStatus(
+    id: number,
+    status: PendingCustomCommandStatus
+  ): Promise<PendingCustomCommandAdd | undefined> {
+    await this.kysely
+      .updateTable("pending_custom_command_adds")
+      .set({
+        status,
+        updated_at: now()
+      })
+      .where("id", "=", id)
+      .execute();
+
+    return this.getPendingCustomCommandAddById(id);
+  }
+
+  async countPendingCustomCommandAdds(): Promise<number> {
+    const row = await this.kysely
+      .selectFrom("pending_custom_command_adds")
+      .select(sql<number>`count(*)`.as("count"))
+      .where("status", "=", "pending")
+      .executeTakeFirstOrThrow();
+
+    return Number(row.count);
+  }
+
+  async getCustomCommandByNameOrThrow(command: string): Promise<CustomCommand> {
+    const row = await this.kysely
+      .selectFrom("custom_commands")
+      .selectAll()
+      .where("command", "=", command)
+      .executeTakeFirstOrThrow();
+
+    return mapCustomCommand(row);
+  }
+
   #readSchemaVersion(): number {
     return Number(this.#sqlite.pragma("user_version", { simple: true }) ?? 0);
   }
@@ -466,6 +707,8 @@ export class BridgeDatabase {
   #dropAllTables(): void {
     this.#sqlite.exec(`
       DROP TABLE IF EXISTS processed_updates;
+      DROP TABLE IF EXISTS pending_custom_command_adds;
+      DROP TABLE IF EXISTS custom_commands;
       DROP TABLE IF EXISTS server_requests;
       DROP TABLE IF EXISTS turn_messages;
       DROP TABLE IF EXISTS topic_sessions;

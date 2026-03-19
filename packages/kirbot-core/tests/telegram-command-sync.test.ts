@@ -104,6 +104,10 @@ describe("TelegramCommandSync", () => {
             description: "Implement the plan in this topic"
           },
           {
+            command: "cmd",
+            description: "Manage custom thread commands"
+          },
+          {
             command: "model",
             description: "Choose the global model"
           },
@@ -139,6 +143,10 @@ describe("TelegramCommandSync", () => {
           {
             command: "implement",
             description: "Implement the plan in this topic"
+          },
+          {
+            command: "cmd",
+            description: "Manage custom thread commands"
           },
           {
             command: "model",

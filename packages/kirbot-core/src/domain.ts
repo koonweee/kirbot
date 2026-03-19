@@ -2,6 +2,7 @@ import type { UserInput } from "@kirbot/codex-client/generated/codex/v2/UserInpu
 
 export type SessionStatus = "provisioning" | "active" | "archived" | "errored";
 export type SessionMode = "default" | "plan";
+export type PendingCustomCommandStatus = "pending" | "confirmed" | "canceled";
 
 export type UserTurnInput =
   | Extract<UserInput, { type: "text" }>
@@ -32,6 +33,25 @@ export type PendingServerRequest = {
   stateJson: string | null;
   status: "pending" | "resolved" | "expired";
   createdAt: string;
+};
+
+export type CustomCommand = {
+  id: number;
+  command: string;
+  prompt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PendingCustomCommandAdd = {
+  id: number;
+  command: string;
+  prompt: string;
+  telegramChatId: string;
+  telegramMessageId: number | null;
+  status: PendingCustomCommandStatus;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type UserTurnMessage = {

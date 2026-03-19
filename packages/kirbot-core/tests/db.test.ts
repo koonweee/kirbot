@@ -107,4 +107,40 @@ describe("BridgeDatabase", () => {
     expect(await database.markUpdateProcessed(123)).toBe(true);
     expect(await database.markUpdateProcessed(123)).toBe(false);
   });
+
+  it("stores, updates, and deletes custom commands", async () => {
+    const created = await database.createCustomCommand({
+      command: "deploy-check",
+      prompt: "Review the deploy checklist."
+    });
+
+    expect(created.command).toBe("deploy-check");
+    expect(created.prompt).toBe("Review the deploy checklist.");
+
+    const updated = await database.updateCustomCommandPrompt("deploy-check", "Review the release checklist.");
+    expect(updated?.prompt).toBe("Review the release checklist.");
+
+    expect(await database.deleteCustomCommand("deploy-check")).toBe(true);
+    expect(await database.getCustomCommandByName("deploy-check")).toBeUndefined();
+  });
+
+  it("stores and resolves pending custom command adds", async () => {
+    const pending = await database.createPendingCustomCommandAdd({
+      command: "standup",
+      prompt: "Draft the daily update.",
+      telegramChatId: "-1001"
+    });
+
+    expect(pending.status).toBe("pending");
+    expect(pending.telegramMessageId).toBeNull();
+    expect(await database.countPendingCustomCommandAdds()).toBe(1);
+
+    await database.updatePendingCustomCommandAddMessageId(pending.id, 123);
+    const withMessage = await database.getPendingCustomCommandAddById(pending.id);
+    expect(withMessage?.telegramMessageId).toBe(123);
+
+    const confirmed = await database.updatePendingCustomCommandAddStatus(pending.id, "confirmed");
+    expect(confirmed?.status).toBe("confirmed");
+    expect(await database.countPendingCustomCommandAdds()).toBe(0);
+  });
 });
