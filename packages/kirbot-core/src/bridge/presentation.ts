@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 
+import type { CommandExecutionRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import {
@@ -23,6 +24,7 @@ import {
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
+const COMMAND_FAILURE_OUTPUT_CHAR_LIMIT = 1200;
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
 const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
 export const TOPIC_IMPLEMENT_CALLBACK_DATA = "topic:implement";
@@ -36,7 +38,6 @@ export type TurnStatusState =
   | "searching"
   | "streaming"
   | "waiting"
-  | "done"
   | "failed"
   | "interrupted";
 
@@ -95,33 +96,6 @@ export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
   }
 }
 
-export function buildCompletedStatusDraftForItem(item: ThreadItem): TurnStatusDraft | null {
-  switch (item.type) {
-    case "commandExecution":
-      return buildStatusDraft("done");
-    case "fileChange":
-      return buildStatusDraft("done");
-    case "mcpToolCall":
-      return buildStatusDraft("done");
-    case "dynamicToolCall":
-      return buildStatusDraft("done");
-    case "collabAgentToolCall":
-      return buildStatusDraft("done");
-    case "webSearch":
-      return buildStatusDraft("done");
-    case "imageView":
-      return buildStatusDraft("done");
-    case "imageGeneration":
-      return isImageGenerationSuccess(item) ? buildStatusDraft("done") : null;
-    case "enteredReviewMode":
-    case "exitedReviewMode":
-    case "contextCompaction":
-      return buildStatusDraft("done");
-    default:
-      return null;
-  }
-}
-
 export function isDurableCompletedItem(item: ThreadItem): boolean {
   switch (item.type) {
     case "commandExecution":
@@ -144,10 +118,7 @@ export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRen
     case "reasoning":
       return null;
     case "commandExecution":
-      return buildLabeledCodeMessage(
-        isCommandExecutionFailed(item) ? "Command failed: " : "Command completed: ",
-        item.command
-      );
+      return buildRenderedCommandExecutionCompletionMessage(item);
     case "fileChange":
       return buildRenderedFileChangeCompletionMessage(item.status, item.changes);
     case "mcpToolCall":
@@ -183,6 +154,49 @@ export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRen
     default:
       return null;
   }
+}
+
+export function buildRenderedCommandApprovalPrompt(
+  params: CommandExecutionRequestApprovalParams
+): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText("Command approval needed");
+
+  const reason = buildCommandApprovalReason(params);
+  if (reason) {
+    builder.appendText("\n\nReason: ");
+    builder.appendText(reason);
+  }
+
+  builder.appendText("\n\n");
+  builder.appendFormatted(renderPreformattedText(params.command?.trim() || "(unknown command)"));
+
+  builder.appendText("\n\nCWD: ");
+  builder.appendFormatted(renderCodeText(params.cwd?.trim() || "(unknown cwd)"));
+
+  const intent = summarizeCommandActions(params.commandActions ?? null);
+  if (intent) {
+    builder.appendText("\nIntent: ");
+    builder.appendText(intent);
+  }
+
+  const permissionLines = buildApprovalPermissionLines(params);
+  for (const line of permissionLines) {
+    builder.appendText(`\n${line.label}: `);
+    if (line.code) {
+      builder.appendFormatted(renderCodeText(line.value));
+    } else {
+      builder.appendText(line.value);
+    }
+  }
+
+  const scope = buildApprovalScopeNote(params);
+  if (scope) {
+    builder.appendText("\nScope: ");
+    builder.appendText(scope);
+  }
+
+  return builder.build();
 }
 
 export function isSameStatusDraft(left: TurnStatusDraft | null, right: TurnStatusDraft | null): boolean {
@@ -398,7 +412,7 @@ export function buildActivityLogEntryForItemStarted(item: ThreadItem): ActivityL
 export function buildActivityLogEntryForItemCompleted(item: ThreadItem): ActivityLogEntry | null {
   switch (item.type) {
     case "commandExecution":
-      return buildActivityEventEntry(getCommandCompletionLabel(item), item.command, "codeBlock");
+      return buildActivityLogEntryForCommandCompletion(item);
     case "fileChange":
       return buildActivityEventEntry(getFileChangeCompletionLabel(item.status), summarizeFileChanges(item.changes), "inlineCode");
     case "mcpToolCall":
@@ -429,6 +443,10 @@ function renderActivityLogEntry(entry: ActivityLogEntry): string[] {
     return text.length > 0 ? [`**Commentary**\n\n${text}`] : [];
   }
 
+  if (entry.kind === "commandFailure") {
+    return [buildCommandFailureMarkdown(entry)];
+  }
+
   const detail = formatActivityDetail(entry.detail, entry.detailStyle);
   if (!detail) {
     return [`- **${entry.label}**`];
@@ -439,6 +457,36 @@ function renderActivityLogEntry(entry: ActivityLogEntry): string[] {
   }
 
   return [`- **${entry.label}:** ${detail}`];
+}
+
+function buildActivityLogEntryForCommandCompletion(
+  item: Extract<ThreadItem, { type: "commandExecution" }>
+): ActivityLogEntry {
+  if (item.status === "declined") {
+    return {
+      kind: "commandFailure",
+      title: "Command declined",
+      command: item.command,
+      cwd: item.cwd,
+      exitCode: null,
+      durationMs: item.durationMs,
+      errorOutput: null
+    };
+  }
+
+  if (isCommandExecutionFailed(item)) {
+    return {
+      kind: "commandFailure",
+      title: "Command failed",
+      command: item.command,
+      cwd: item.cwd,
+      exitCode: item.exitCode,
+      durationMs: item.durationMs,
+      errorOutput: item.aggregatedOutput
+    };
+  }
+
+  return buildActivityEventEntry("Command", item.command, "codeBlock");
 }
 
 function buildActivityEventEntry(
@@ -453,14 +501,6 @@ function buildActivityEventEntry(
     detail: normalizedDetail.length > 0 ? normalizedDetail : null,
     detailStyle
   };
-}
-
-function getCommandCompletionLabel(item: Extract<ThreadItem, { type: "commandExecution" }>): "Command" | "Command Failed" | "Command Declined" {
-  if (item.status === "declined") {
-    return "Command Declined";
-  }
-
-  return isCommandExecutionFailed(item) ? "Command Failed" : "Command";
 }
 
 function getFileChangeCompletionLabel(
@@ -559,6 +599,234 @@ function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = fals
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds}s`;
+}
+
+function buildRenderedCommandExecutionCompletionMessage(
+  item: Extract<ThreadItem, { type: "commandExecution" }>
+): TelegramRenderedMessage {
+  if (item.status === "declined") {
+    return buildRenderedCommandFailureMessage({
+      title: "Command declined",
+      command: item.command,
+      cwd: item.cwd,
+      exitCode: null,
+      durationMs: item.durationMs,
+      errorOutput: null
+    });
+  }
+
+  if (isCommandExecutionFailed(item)) {
+    return buildRenderedCommandFailureMessage({
+      title: "Command failed",
+      command: item.command,
+      cwd: item.cwd,
+      exitCode: item.exitCode,
+      durationMs: item.durationMs,
+      errorOutput: item.aggregatedOutput
+    });
+  }
+
+  return buildLabeledCodeMessage("Command completed: ", item.command);
+}
+
+function buildRenderedCommandFailureMessage(input: {
+  title: "Command failed" | "Command declined";
+  command: string;
+  cwd: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+  errorOutput: string | null;
+}): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText(input.title);
+  builder.appendText("\n\n");
+  builder.appendFormatted(renderPreformattedText(input.command.trim() || "(unknown command)"));
+  builder.appendText("\n\nCWD: ");
+  builder.appendFormatted(renderCodeText(input.cwd?.trim() || "(unknown cwd)"));
+
+  if (input.exitCode !== null) {
+    builder.appendText("\nExit code: ");
+    builder.appendFormatted(renderCodeText(String(input.exitCode)));
+  }
+
+  if (input.durationMs !== null) {
+    builder.appendText("\nDuration: ");
+    builder.appendFormatted(renderCodeText(formatElapsedDuration(input.durationMs, true)));
+  }
+
+  const errorOutput = truncateCommandFailureOutput(input.errorOutput);
+  if (errorOutput) {
+    builder.appendText("\n\nError\n\n");
+    builder.appendFormatted(renderPreformattedText(errorOutput));
+  }
+
+  return builder.build();
+}
+
+function buildCommandFailureMarkdown(entry: Extract<ActivityLogEntry, { kind: "commandFailure" }>): string {
+  const sections = [
+    `**${escapeMarkdownText(entry.title)}**`,
+    buildFencedCodeBlock(entry.command.trim() || "(unknown command)")
+  ];
+
+  const metadataLines = [
+    `CWD: ${renderInlineCodeMarkdown(entry.cwd?.trim() || "(unknown cwd)")}`,
+    ...(entry.exitCode !== null ? [`Exit code: ${renderInlineCodeMarkdown(String(entry.exitCode))}`] : []),
+    ...(entry.durationMs !== null
+      ? [`Duration: ${renderInlineCodeMarkdown(formatElapsedDuration(entry.durationMs, true))}`]
+      : [])
+  ];
+  sections.push(metadataLines.join("  \n"));
+
+  const errorOutput = truncateCommandFailureOutput(entry.errorOutput);
+  if (errorOutput) {
+    sections.push(`Error\n\n${buildFencedCodeBlock(errorOutput)}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+function truncateCommandFailureOutput(output: string | null): string | null {
+  const normalized = output?.replace(/\r\n/g, "\n").trim() ?? "";
+  if (!normalized) {
+    return null;
+  }
+
+  return buildTruncatedPreview(normalized, COMMAND_FAILURE_OUTPUT_CHAR_LIMIT, "...\n", "");
+}
+
+function buildCommandApprovalReason(params: CommandExecutionRequestApprovalParams): string | null {
+  if (params.reason?.trim()) {
+    return params.reason.trim();
+  }
+
+  if (params.networkApprovalContext) {
+    return `network access required for ${params.networkApprovalContext.protocol}://${params.networkApprovalContext.host}`;
+  }
+
+  if (params.additionalPermissions) {
+    return "additional permissions required";
+  }
+
+  return null;
+}
+
+function summarizeCommandActions(actions: CommandExecutionRequestApprovalParams["commandActions"]): string | null {
+  if (!actions || actions.length === 0) {
+    return null;
+  }
+
+  const summaries = actions
+    .slice(0, 3)
+    .map((action) => {
+      switch (action.type) {
+        case "read":
+          return `read ${action.name} from ${action.path}`;
+        case "listFiles":
+          return action.path ? `list files in ${action.path}` : "list files";
+        case "search":
+          return action.query
+            ? `search for ${action.query}${action.path ? ` in ${action.path}` : ""}`
+            : action.path
+              ? `search ${action.path}`
+              : "search files";
+        case "unknown":
+        default:
+          return null;
+      }
+    })
+    .filter((value): value is string => Boolean(value));
+
+  if (summaries.length === 0) {
+    return null;
+  }
+
+  return summaries.join(", ");
+}
+
+function buildApprovalPermissionLines(
+  params: CommandExecutionRequestApprovalParams
+): Array<{ label: string; value: string; code: boolean }> {
+  const lines: Array<{ label: string; value: string; code: boolean }> = [];
+
+  if (params.networkApprovalContext) {
+    lines.push({
+      label: "Network",
+      value: `${params.networkApprovalContext.protocol}://${params.networkApprovalContext.host}`,
+      code: true
+    });
+  }
+
+  const permissionSummary = summarizeAdditionalPermissions(params);
+  if (permissionSummary) {
+    lines.push({
+      label: "Permissions",
+      value: permissionSummary,
+      code: false
+    });
+  }
+
+  if (params.skillMetadata?.pathToSkillsMd?.trim()) {
+    lines.push({
+      label: "Skill",
+      value: params.skillMetadata.pathToSkillsMd.trim(),
+      code: true
+    });
+  }
+
+  return lines;
+}
+
+function summarizeAdditionalPermissions(params: CommandExecutionRequestApprovalParams): string | null {
+  const profile = params.additionalPermissions;
+  if (!profile) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (profile.network?.enabled) {
+    parts.push("network");
+  }
+
+  const readCount = profile.fileSystem?.read?.length ?? 0;
+  if (readCount > 0) {
+    parts.push(`filesystem read (${readCount})`);
+  }
+
+  const writeCount = profile.fileSystem?.write?.length ?? 0;
+  if (writeCount > 0) {
+    parts.push(`filesystem write (${writeCount})`);
+  }
+
+  if (profile.macos) {
+    parts.push("macOS");
+  }
+
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+function buildApprovalScopeNote(params: CommandExecutionRequestApprovalParams): string | null {
+  const decisions = params.availableDecisions ?? [];
+  const hasSession = decisions.some((decision) => decision === "acceptForSession");
+  const hasReusable = decisions.some((decision) => typeof decision === "object" && decision !== null);
+
+  if (hasSession && hasReusable) {
+    return "allow only this run, allow matching runs for this session, or apply the proposed reusable permission";
+  }
+
+  if (hasSession) {
+    return "allow only this run, or all matching runs for this session";
+  }
+
+  if (hasReusable) {
+    return "this approval includes a proposed reusable permission for similar requests";
+  }
+
+  if (decisions.some((decision) => decision === "accept")) {
+    return "this approval is for this command only";
+  }
+
+  return null;
 }
 
 function buildFencedCodeBlock(text: string): string {

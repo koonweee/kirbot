@@ -19,6 +19,15 @@ export type ActivityLogEntry =
       text: string;
     }
   | {
+      kind: "commandFailure";
+      title: "Command failed" | "Command declined";
+      command: string;
+      cwd: string | null;
+      exitCode: number | null;
+      durationMs: number | null;
+      errorOutput: string | null;
+    }
+  | {
       kind: "activity";
       label: ActivityLogLabel;
       detail: string | null;

@@ -752,10 +752,54 @@ describe("TurnLifecycleCoordinator", () => {
     });
 
     expect(harness.telegram.sentMessages).toEqual([]);
-    expect(harness.telegram.drafts.at(-1)).toMatchObject({
-      text: "done · 0s"
-    });
-    expect(harness.telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
+    expect(harness.telegram.drafts).toEqual([]);
+  });
+
+  it("treats successful transient completions as a status-draft no-op", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const harness = createHarness();
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+      await harness.coordinator.publishCurrentStatus("turn-1", true);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await harness.coordinator.handleItemStarted("turn-1", {
+        type: "commandExecution",
+        id: "cmd-1",
+        command: "npm test",
+        cwd: "/workspace",
+        processId: null,
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null
+      });
+
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s");
+      const draftCountBeforeCompletion = harness.telegram.drafts.length;
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "commandExecution",
+        id: "cmd-1",
+        command: "npm test",
+        cwd: "/workspace",
+        processId: null,
+        status: "completed",
+        commandActions: [],
+        aggregatedOutput: "ok",
+        exitCode: 0,
+        durationMs: 123
+      });
+
+      expect(harness.telegram.drafts).toHaveLength(draftCountBeforeCompletion);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s");
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps successful item completions transient but still publishes failures durably", async () => {
@@ -833,8 +877,37 @@ describe("TurnLifecycleCoordinator", () => {
     });
 
     expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed: lookup_docs"]);
-    expect(harness.telegram.drafts.map((entry) => entry.text)).toEqual(["done · 0s"]);
-    expect(harness.telegram.drafts.every((entry) => !entry.options?.entities)).toBe(true);
+    expect(harness.telegram.drafts).toEqual([]);
+  });
+
+  it("publishes failed command details as a formatted durable message", async () => {
+    const harness = createHarness();
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "npm test -- --runInBand",
+      cwd: "/workspace/packages/kirbot-core",
+      processId: null,
+      status: "failed",
+      commandActions: [],
+      aggregatedOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"',
+      exitCode: 1,
+      durationMs: 12_000
+    });
+
+    expect(harness.telegram.sentMessages).toHaveLength(1);
+    expect(harness.telegram.sentMessages[0]).toMatchObject({
+      text:
+        'Command failed\n\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\n\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+    });
+    expect(
+      ((harness.telegram.sentMessages[0]?.options as { entities?: MessageEntity[] } | undefined)?.entities ?? []).map(
+        (entity) => entity.type
+      )
+    ).toEqual(["pre", "code", "code", "code", "pre"]);
+    expect(harness.telegram.drafts).toEqual([]);
   });
 
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {

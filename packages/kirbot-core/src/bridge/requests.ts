@@ -1,6 +1,5 @@
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
-import type { CommandExecutionRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
 import type { FileChangeRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/FileChangeRequestApprovalParams";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
@@ -17,34 +16,31 @@ type UserInputQuestion = UserInputServerRequest["params"]["questions"][number];
 
 export function buildApprovalKeyboard(
   requestId: number,
-  availableDecisions: ReadonlyArray<unknown> | null
+  availableDecisions: ReadonlyArray<CommandExecutionApprovalDecision> | null
 ): InlineKeyboardMarkup {
-  const allows = (decision: string): boolean =>
-    availableDecisions ? availableDecisions.some((value) => typeof value === "string" && value === decision) : true;
+  const decisions = availableDecisions ?? ["accept", "decline", "cancel"];
 
-  const approveRow = [
-    allows("accept") ? { text: "Approve", callback_data: `req:${requestId}:accept` } : null,
-    allows("acceptForSession")
-      ? { text: "Approve Session", callback_data: `req:${requestId}:acceptForSession` }
-      : null
-  ].filter((value): value is { text: string; callback_data: string } => value !== null);
+  const allowRow = decisions
+    .map((decision, index) => buildCommandApprovalButton(requestId, decision, index))
+    .filter(
+      (button): button is {
+        text: string;
+        callback_data: string;
+      } => button !== null && isAllowApprovalButton(button.text)
+    );
 
-  const denyRow = [
-    allows("decline") ? { text: "Deny", callback_data: `req:${requestId}:decline` } : null,
-    allows("cancel") ? { text: "Interrupt", callback_data: `req:${requestId}:cancel` } : null
-  ].filter((value): value is { text: string; callback_data: string } => value !== null);
+  const denyRow = decisions
+    .map((decision, index) => buildCommandApprovalButton(requestId, decision, index))
+    .filter(
+      (button): button is {
+        text: string;
+        callback_data: string;
+      } => button !== null && !isAllowApprovalButton(button.text)
+    );
 
   return {
-    inline_keyboard: [approveRow, denyRow].filter((row) => row.length > 0)
+    inline_keyboard: [allowRow, denyRow].filter((row) => row.length > 0)
   };
-}
-
-export function formatCommandApprovalPrompt(params: CommandExecutionRequestApprovalParams): string {
-  const command = params.command ?? "(unknown command)";
-  const cwd = params.cwd ?? "(unknown cwd)";
-  const reason = params.reason ? `Reason: ${params.reason}` : "Reason: not provided";
-
-  return ["Codex requested command approval.", `Command: ${command}`, `Cwd: ${cwd}`, reason].join("\n");
 }
 
 export function formatFileChangeApprovalPrompt(params: FileChangeRequestApprovalParams): string {
@@ -208,7 +204,23 @@ export function parseRequestId(value: string): RequestId {
   return JSON.parse(value) as RequestId;
 }
 
-export function normalizeCommandApprovalDecision(action: string): CommandExecutionApprovalDecision {
+export function resolveCommandApprovalDecision(
+  availableDecisions: ReadonlyArray<CommandExecutionApprovalDecision> | null,
+  actionParts: string[]
+): CommandExecutionApprovalDecision {
+  const [action, value] = actionParts;
+  if (action === "decision") {
+    const decisionIndex = Number.parseInt(value ?? "", 10);
+    const decision = availableDecisions?.[decisionIndex];
+    if (decision) {
+      return decision;
+    }
+  }
+
+  return normalizeCommandApprovalDecision(action ?? "cancel");
+}
+
+function normalizeCommandApprovalDecision(action: string): CommandExecutionApprovalDecision {
   switch (action) {
     case "accept":
       return "accept";
@@ -234,4 +246,42 @@ export function normalizeFileApprovalDecision(action: string): FileChangeApprova
     default:
       return "cancel";
   }
+}
+
+function buildCommandApprovalButton(
+  requestId: number,
+  decision: CommandExecutionApprovalDecision,
+  index: number
+): { text: string; callback_data: string } | null {
+  if (typeof decision === "string") {
+    switch (decision) {
+      case "accept":
+        return { text: "Allow once", callback_data: `req:${requestId}:decision:${index}` };
+      case "acceptForSession":
+        return { text: "Allow this session", callback_data: `req:${requestId}:decision:${index}` };
+      case "decline":
+        return { text: "Deny", callback_data: `req:${requestId}:decision:${index}` };
+      case "cancel":
+        return { text: "Interrupt turn", callback_data: `req:${requestId}:decision:${index}` };
+      default:
+        return null;
+    }
+  }
+
+  if ("acceptWithExecpolicyAmendment" in decision) {
+    return { text: "Allow similar commands", callback_data: `req:${requestId}:decision:${index}` };
+  }
+
+  if ("applyNetworkPolicyAmendment" in decision) {
+    return {
+      text: `Allow ${decision.applyNetworkPolicyAmendment.network_policy_amendment.host}`,
+      callback_data: `req:${requestId}:decision:${index}`
+    };
+  }
+
+  return null;
+}
+
+function isAllowApprovalButton(label: string): boolean {
+  return label.startsWith("Allow");
 }

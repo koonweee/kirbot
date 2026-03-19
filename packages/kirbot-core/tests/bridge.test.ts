@@ -860,7 +860,9 @@ describe("TelegramCodexBridge", () => {
 
     const pending = await database.getPendingRequestByTopic(-1001, 780);
     expect(pending?.method).toBe("item/commandExecution/requestApproval");
-    expect(telegram.sentMessages.at(-1)?.text).toContain("npm test");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("Command approval needed");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("CWD: /workspace");
+    expect(telegram.sentMessages.at(-1)?.options?.entities?.map((entity) => entity.type)).toEqual(["pre", "code"]);
   });
 
   it("rejects slash commands in a topic before creating a session", async () => {
@@ -3656,10 +3658,16 @@ describe("TelegramCodexBridge", () => {
 
     const pending = await database.getPendingRequest(JSON.stringify(88));
     expect(pending.method).toBe("item/commandExecution/requestApproval");
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text).toBe(
+      "Command approval needed\n\nnpm publish\n\nCWD: /workspace\nScope: this approval is for this command only"
+    );
+    expect(promptMessage?.options?.entities?.map((entity) => entity.type)).toEqual(["pre", "code"]);
+    expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow once", "Deny", "Interrupt turn"]);
 
     await bridge.handleCallbackQuery({
       callbackQueryId: "callback-1",
-      data: `req:${pending.id}:accept`,
+      data: getCallbackDataByButtonText(promptMessage, "Allow once")!,
       chatId: -1001,
       topicId: 101,
       userId: 42
@@ -3696,7 +3704,8 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     const promptMessage = telegram.sentMessages.at(-1);
-    expect(promptMessage?.text).toContain("Codex requested command approval.");
+    expect(promptMessage?.text).toContain("Command approval needed");
+    expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow once", "Deny", "Interrupt turn"]);
 
     codex.emitNotification({
       method: "serverRequest/resolved",
@@ -3716,6 +3725,42 @@ describe("TelegramCodexBridge", () => {
 
     const resolved = await database.getPendingRequest(JSON.stringify(89));
     expect(resolved.status).toBe("resolved");
+  });
+
+  it("shows explicit session-scope approval options when available", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "Run the deployment fix"
+    });
+
+    codex.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      id: 90,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text).toBe(
+      "Command approval needed\n\nnpm test\n\nCWD: /workspace\nScope: allow only this run, or all matching runs for this session"
+    );
+    expect(getInlineButtonTexts(promptMessage)).toEqual([
+      "Allow once",
+      "Allow this session",
+      "Deny",
+      "Interrupt turn"
+    ]);
   });
 
   it("surfaces thread compaction as a durable Telegram message", async () => {

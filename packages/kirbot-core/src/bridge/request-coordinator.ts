@@ -18,16 +18,15 @@ import {
   buildUserInputResponse,
   createInitialUserInputState,
   currentQuestionAcceptsFreeText,
-  formatCommandApprovalPrompt,
   formatFileChangeApprovalPrompt,
   getCurrentUserInputQuestion,
-  normalizeCommandApprovalDecision,
   normalizeFileApprovalDecision,
   parseRequestId,
   parseUserInputState,
+  resolveCommandApprovalDecision,
   stringifyUserInputState
 } from "./requests";
-import { buildStatusDraft } from "./presentation";
+import { buildRenderedCommandApprovalPrompt, buildStatusDraft } from "./presentation";
 
 type BridgeCodexRequestsApi = {
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
@@ -90,7 +89,7 @@ export class BridgeRequestCoordinator {
       return true;
     }
 
-    await this.resolveApprovalAction(request, actionParts[0] ?? "cancel");
+    await this.resolveApprovalAction(request, actionParts);
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
       text: "Request updated."
     });
@@ -193,10 +192,10 @@ export class BridgeRequestCoordinator {
       true
     );
 
-    const promptText =
+    const prompt =
       request.method === "item/commandExecution/requestApproval"
-        ? formatCommandApprovalPrompt(request.params)
-        : formatFileChangeApprovalPrompt(request.params);
+        ? buildRenderedCommandApprovalPrompt(request.params)
+        : { text: formatFileChangeApprovalPrompt(request.params), entities: undefined };
 
     const pending = await this.database.createPendingRequest({
       requestIdJson: JSON.stringify(request.id),
@@ -210,7 +209,10 @@ export class BridgeRequestCoordinator {
     const message = await this.#messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: session.telegramTopicId,
-      text: promptText,
+      text: prompt.text,
+      ...(request.method === "item/commandExecution/requestApproval" && prompt.entities
+        ? { entities: prompt.entities }
+        : {}),
       replyMarkup: buildApprovalKeyboard(
         pending.id,
         request.method === "item/commandExecution/requestApproval" ? request.params.availableDecisions ?? null : null
@@ -248,22 +250,31 @@ export class BridgeRequestCoordinator {
     );
   }
 
-  private async resolveApprovalAction(request: PendingServerRequest, action: string): Promise<void> {
+  private async resolveApprovalAction(request: PendingServerRequest, actionParts: string[]): Promise<void> {
     const requestId = parseRequestId(request.requestIdJson);
     const chatId = Number.parseInt(request.telegramChatId, 10);
 
+    let resolvedActionSummary = actionParts.join(":") || "cancel";
     if (request.method === "item/commandExecution/requestApproval") {
+      const payload = JSON.parse(request.payloadJson) as Extract<
+        ApprovalServerRequest,
+        { method: "item/commandExecution/requestApproval" }
+      >["params"];
+      const decision = resolveCommandApprovalDecision(payload.availableDecisions ?? null, actionParts);
       const response = {
-        decision: normalizeCommandApprovalDecision(action)
+        decision
       };
       await this.codex.respondToCommandApproval(requestId, response);
       await this.database.resolveRequest(request.requestIdJson);
+      resolvedActionSummary = describeCommandApprovalDecision(decision);
     } else if (request.method === "item/fileChange/requestApproval") {
+      const action = actionParts[0] ?? "cancel";
       const response = {
         decision: normalizeFileApprovalDecision(action)
       };
       await this.codex.respondToFileChangeApproval(requestId, response);
       await this.database.resolveRequest(request.requestIdJson);
+      resolvedActionSummary = action;
     } else {
       await this.codex.respondUnsupportedRequest(requestId, `Unsupported approval action for ${request.method}`);
       return;
@@ -273,7 +284,7 @@ export class BridgeRequestCoordinator {
       await this.telegram.editMessageText(
         chatId,
         request.telegramMessageId,
-        `Resolved ${request.method} with "${action}".`,
+        `Resolved ${request.method} with "${resolvedActionSummary}".`,
         {
           message_thread_id: request.telegramTopicId
         }
@@ -397,4 +408,20 @@ export class BridgeRequestCoordinator {
 
     return this.database.getSessionByCodexThreadId(threadId);
   }
+}
+
+function describeCommandApprovalDecision(decision: CommandExecutionApprovalDecision): string {
+  if (typeof decision === "string") {
+    return decision;
+  }
+
+  if ("acceptWithExecpolicyAmendment" in decision) {
+    return "acceptWithExecpolicyAmendment";
+  }
+
+  if ("applyNetworkPolicyAmendment" in decision) {
+    return "applyNetworkPolicyAmendment";
+  }
+
+  return "cancel";
 }

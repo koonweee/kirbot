@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommentaryArtifactButton,
   buildPlanArtifactMessage,
+  buildRenderedCommandApprovalPrompt,
+  buildRenderedCompletedItemMessage,
   buildRenderedCompletionFooter,
   buildStatusDraft,
   renderTelegramStatusDraft,
@@ -109,5 +111,83 @@ describe("commentary artifact presentation", () => {
       markdownText:
         "## Activity Log\n\n**Commentary**\n\nInspecting the renderer.\n\n- **Command**\n```\nnpm test\n```\n\n- **Web Search:** markdown\\-it details support"
     });
+  });
+
+  it("renders failed commands with structured metadata and error blocks", () => {
+    const entries: ActivityLogEntry[] = [
+      {
+        kind: "commandFailure",
+        title: "Command failed",
+        command: "npm test -- --runInBand",
+        cwd: "/workspace/packages/kirbot-core",
+        exitCode: 1,
+        durationMs: 12_000,
+        errorOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+      }
+    ];
+
+    const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
+    const url = "web_app" in button ? button.web_app.url : null;
+    expect(url).toBeTruthy();
+
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        '## Activity Log\n\n**Command failed**\n\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n\n```\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"\n```'
+    });
+  });
+});
+
+describe("command presentation", () => {
+  it("renders failed command completions with code blocks and inline metadata", () => {
+    const rendered = buildRenderedCompletedItemMessage({
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "npm test -- --runInBand",
+      cwd: "/workspace/packages/kirbot-core",
+      processId: null,
+      status: "failed",
+      commandActions: [],
+      aggregatedOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"',
+      exitCode: 1,
+      durationMs: 12_000
+    });
+
+    expect(rendered).toMatchObject({
+      text:
+        'Command failed\n\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\n\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+    });
+    expect(rendered?.entities?.map((entity) => entity.type)).toEqual(["pre", "code", "code", "code", "pre"]);
+  });
+
+  it("renders command approval cards with code-block commands and inline CWD", () => {
+    const rendered = buildRenderedCommandApprovalPrompt({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      command: "npm install",
+      cwd: "/workspace",
+      reason: "network access required",
+      commandActions: [{ type: "read", command: "npm", name: "package metadata", path: "package.json" }],
+      networkApprovalContext: { host: "registry.npmjs.org", protocol: "https" },
+      additionalPermissions: {
+        network: { enabled: true },
+        fileSystem: { read: ["/workspace/package.json"], write: ["/workspace/package-lock.json"] },
+        macos: null
+      },
+      skillMetadata: { pathToSkillsMd: "/skills/npm/SKILL.md" },
+      proposedExecpolicyAmendment: ["npm", "install"],
+      proposedNetworkPolicyAmendments: null,
+      availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+    });
+
+    expect(rendered).toMatchObject({
+      text:
+        "Command approval needed\n\nReason: network access required\n\nnpm install\n\nCWD: /workspace\nIntent: read package metadata from package.json\nNetwork: https://registry.npmjs.org\nPermissions: network, filesystem read (1), filesystem write (1)\nSkill: /skills/npm/SKILL.md\nScope: allow only this run, or all matching runs for this session"
+    });
+    expect(rendered.entities?.map((entity) => entity.type)).toEqual(["pre", "code", "code", "code"]);
   });
 });

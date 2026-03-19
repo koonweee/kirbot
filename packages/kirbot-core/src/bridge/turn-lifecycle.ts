@@ -5,7 +5,6 @@ import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/T
 import type { LoggerLike } from "../logging";
 import {
   buildActivityLogEntryForItemCompleted,
-  buildCompletedStatusDraftForItem,
   buildPlanArtifactMessage,
   buildRenderedCompletedItemMessage,
   buildOversizePlanArtifactMessage,
@@ -346,10 +345,6 @@ export class TurnLifecycleCoordinator {
     }
 
     if (!isDurableCompletedItem(item)) {
-      const statusDraft = buildCompletedStatusDraftForItem(item);
-      if (statusDraft) {
-        await this.setStatusDraft(context, statusDraft, Date.now(), true);
-      }
       return;
     }
 

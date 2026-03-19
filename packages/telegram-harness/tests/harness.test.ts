@@ -366,7 +366,7 @@ describe("Telegram harness", () => {
 
     await harness.pressButton({
       messageId: approvalMessage!.messageId,
-      buttonText: "Approve"
+      buttonText: "Allow once"
     });
     await harness.waitForIdle();
 
@@ -395,7 +395,7 @@ describe("Telegram harness", () => {
       const transcript = harness.getTranscript();
       return (
         transcript.topics[0]?.messages.some((message) => message.text === "Final answer") === true &&
-        transcript.topics[0]?.messages.some((message) => message.text.includes("Codex requested command approval.")) === true
+        transcript.topics[0]?.messages.some((message) => message.text.includes("Command approval needed")) === true
       );
     });
 

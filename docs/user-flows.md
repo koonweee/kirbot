@@ -57,8 +57,9 @@ User experience:
   commentary stay out of the draft itself.
 - Commentary, plan text, and final assistant output are treated differently so Telegram stays readable.
 - Commentary artifacts mix assistant prose with a compact activity log of
-  completed or failed work, and command entries render the command in a code
-  block.
+  completed or failed work. Failed commands now include the command in a code
+  block, inline `CWD`/exit metadata, and a bounded error block when output is
+  available.
 - Final assistant output is published as a single Telegram message with a `Response` Mini App button, and oversized messages are truncated with a note to continue in View.
 - When commentary also exists, the same assistant message gets a second `Commentary` button. If no assistant message follows, commentary is exposed through a compact stub instead.
 - In-progress planning stays in the status path; kirbot no longer streams partial plan text into Telegram bubbles.
@@ -141,6 +142,9 @@ Verified by:
 User experience:
 
 - When Codex asks for command approval, file approval, or structured user input, kirbot presents that request inside the same Telegram topic.
+- Command approvals render as structured cards with the command in a code block,
+  `CWD` in inline code, clearer scope wording, and explicit approval button
+  labels.
 - Button presses resolve approvals directly.
 - Structured user input can progress through multiple questions and can fall back to free text when the prompt allows an `Other` path.
 - Normal topic messages are interpreted as answers only when a pending question is currently waiting for free text.
