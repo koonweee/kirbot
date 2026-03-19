@@ -101,15 +101,15 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "model",
-            description: "Choose the model for this topic"
+            description: "Choose the global model"
           },
           {
             command: "fast",
-            description: "Toggle fast mode for this topic"
+            description: "Toggle global fast mode"
           },
           {
             command: "permissions",
-            description: "Set Codex permissions for this topic"
+            description: "Set global Codex permissions"
           }
         ],
         options: {
@@ -134,15 +134,15 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "model",
-            description: "Choose the model for this topic"
+            description: "Choose the global model"
           },
           {
             command: "fast",
-            description: "Toggle fast mode for this topic"
+            description: "Toggle global fast mode"
           },
           {
             command: "permissions",
-            description: "Set Codex permissions for this topic"
+            description: "Set global Codex permissions"
           }
         ],
         options: {

@@ -51,26 +51,26 @@ const SLASH_COMMAND_DEFINITIONS = [
   },
   {
     command: "model",
-    description: "Choose the model for this topic",
+    description: "Choose the global model",
     kind: "codex",
     visible: true,
-    allowInRoot: false,
+    allowInRoot: true,
     allowInTopic: true
   },
   {
     command: "fast",
-    description: "Toggle fast mode for this topic",
+    description: "Toggle global fast mode",
     kind: "codex",
     visible: true,
-    allowInRoot: false,
+    allowInRoot: true,
     allowInTopic: true
   },
   {
     command: "permissions",
-    description: "Set Codex permissions for this topic",
+    description: "Set global Codex permissions",
     kind: "codex",
     visible: true,
-    allowInRoot: false,
+    allowInRoot: true,
     allowInTopic: true
   },
   {
@@ -78,7 +78,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Alias for /permissions",
     kind: "codex",
     visible: false,
-    allowInRoot: false,
+    allowInRoot: true,
     allowInTopic: true
   }
 ] satisfies readonly SlashCommandDefinition[];

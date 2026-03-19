@@ -119,7 +119,27 @@ Verified by:
 
 - stop and stale-interrupt tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
-## 6. Switch Between Planning And Implementation
+## 6. Change Global Codex Settings
+
+User experience:
+
+- `/model`, `/fast`, and `/permissions` change global Codex defaults for all topics, whether the user runs them from the lobby or inside a topic.
+- The settings UI no longer requires an existing topic session.
+- Changes apply immediately to loaded threads and future topics instead of waiting for the next turn in one topic.
+- `/approvals` remains an alias for `/permissions`.
+
+Owned by:
+
+- global slash-command routing in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
+- command definitions in [`packages/kirbot-core/src/bridge/slash-commands.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/slash-commands.ts)
+- app-server config read/write in [`packages/codex-client/src/codex.ts`](/home/jtkw/kirbot/packages/codex-client/src/codex.ts) and [`packages/codex-client/src/rpc.ts`](/home/jtkw/kirbot/packages/codex-client/src/rpc.ts)
+
+Verified by:
+
+- global settings command and callback tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
+
+## 7. Switch Between Planning And Implementation
 
 User experience:
 
@@ -139,7 +159,7 @@ Verified by:
 - root and topic mode-command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
 
-## 7. Handle Approvals And Structured User Input
+## 8. Handle Approvals And Structured User Input
 
 User experience:
 
@@ -164,7 +184,7 @@ Verified by:
 - approval and user-input request tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - request persistence tests in [`packages/kirbot-core/tests/db.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/db.test.ts)
 
-## 8. Send Images
+## 9. Send Images
 
 User experience:
 
@@ -182,7 +202,7 @@ Verified by:
 
 - image retention and cleanup tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
-## 9. Recover Across Restarts And Topic Closure
+## 10. Recover Across Restarts And Topic Closure
 
 User experience:
 

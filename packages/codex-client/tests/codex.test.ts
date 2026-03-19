@@ -575,6 +575,196 @@ describe("CodexGateway", () => {
     });
   });
 
+  it("reads global settings through config/read", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const settingsPromise = gateway.readGlobalSettings();
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "config/read",
+      id: 2,
+      params: {
+        includeLayers: false
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        config: {
+          model: "gpt-5.3-codex",
+          approval_policy: "never",
+          sandbox_mode: "danger-full-access",
+          sandbox_workspace_write: null,
+          model_reasoning_effort: "high",
+          service_tier: "fast"
+        },
+        origins: {},
+        layers: null
+      }
+    });
+
+    await expect(settingsPromise).resolves.toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      cwd: "/workspace",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+  });
+
+  it("updates global settings through config/batchWrite and reloads user config", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const settingsPromise = gateway.updateGlobalSettings({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast"
+    });
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "config/batchWrite",
+      id: 2,
+      params: {
+        edits: [
+          {
+            keyPath: "model",
+            value: "gpt-5.3-codex",
+            mergeStrategy: "replace"
+          },
+          {
+            keyPath: "model_reasoning_effort",
+            value: "high",
+            mergeStrategy: "replace"
+          },
+          {
+            keyPath: "service_tier",
+            value: "fast",
+            mergeStrategy: "replace"
+          }
+        ],
+        reloadUserConfig: true
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        status: "ok",
+        version: "v2",
+        filePath: "/home/test/.codex/config.toml",
+        overriddenMetadata: null
+      }
+    });
+    for (let attempt = 0; attempt < 10 && transport.sent.length < 4; attempt += 1) {
+      await Promise.resolve();
+    }
+
+    expect(transport.sent[3]).toEqual({
+      jsonrpc: "2.0",
+      method: "config/read",
+      id: 3,
+      params: {
+        includeLayers: false
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        config: {
+          model: "gpt-5.3-codex",
+          approval_policy: "on-request",
+          sandbox_mode: "workspace-write",
+          sandbox_workspace_write: {
+            writable_roots: [],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false
+          },
+          model_reasoning_effort: "high",
+          service_tier: "fast"
+        },
+        origins: {},
+        layers: null
+      }
+    });
+
+    await expect(settingsPromise).resolves.toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      cwd: "/workspace",
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+  });
+
   it("responds to permissions approval requests with a JSON-RPC result", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);

@@ -24,6 +24,7 @@ import { createTelegramHarness, type TelegramHarness } from "../src/index";
 import type { AppServerEvent } from "@kirbot/codex-client";
 
 class ScriptedCodex implements BridgeCodexApi {
+  cwd = "/workspace";
   model = "gpt-5-codex";
   reasoningEffort: ReasoningEffort | null = null;
   serviceTier: ServiceTier | null = null;
@@ -60,6 +61,7 @@ class ScriptedCodex implements BridgeCodexApi {
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
+    cwd: string;
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
@@ -70,15 +72,17 @@ class ScriptedCodex implements BridgeCodexApi {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
       serviceTier: this.serviceTier,
+      cwd: this.cwd,
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
     };
   }
 
-  async ensureThreadLoaded(): Promise<{
+  async readGlobalSettings(): Promise<{
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
+    cwd: string;
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
@@ -86,6 +90,58 @@ class ScriptedCodex implements BridgeCodexApi {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
       serviceTier: this.serviceTier,
+      cwd: this.cwd,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy
+    };
+  }
+
+  async updateGlobalSettings(update: {
+    model?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    serviceTier?: ServiceTier | null;
+    approvalPolicy?: AskForApproval;
+    sandboxPolicy?: SandboxPolicy;
+  }): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    if (update.model) {
+      this.model = update.model;
+    }
+    if ("reasoningEffort" in update) {
+      this.reasoningEffort = update.reasoningEffort ?? null;
+    }
+    if ("serviceTier" in update) {
+      this.serviceTier = update.serviceTier ?? null;
+    }
+    if (update.approvalPolicy) {
+      this.approvalPolicy = update.approvalPolicy;
+    }
+    if (update.sandboxPolicy) {
+      this.sandboxPolicy = update.sandboxPolicy;
+    }
+
+    return this.readGlobalSettings();
+  }
+
+  async ensureThreadLoaded(): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    return {
+      model: this.model,
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      cwd: this.cwd,
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
     };

@@ -17,7 +17,11 @@ import type { FileChangeRequestApprovalResponse } from "./generated/codex/v2/Fil
 import type { Model } from "./generated/codex/v2/Model";
 import type { PermissionsRequestApprovalParams } from "./generated/codex/v2/PermissionsRequestApprovalParams";
 import type { PermissionsRequestApprovalResponse } from "./generated/codex/v2/PermissionsRequestApprovalResponse";
+import type { Config } from "./generated/codex/v2/Config";
+import type { ConfigEdit } from "./generated/codex/v2/ConfigEdit";
 import type { SandboxPolicy } from "./generated/codex/v2/SandboxPolicy";
+import type { SandboxMode } from "./generated/codex/v2/SandboxMode";
+import type { SandboxWorkspaceWrite } from "./generated/codex/v2/SandboxWorkspaceWrite";
 import type { ToolRequestUserInputParams } from "./generated/codex/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
 import type { Turn } from "./generated/codex/v2/Turn";
@@ -123,11 +127,11 @@ export class CodexGateway {
   async createThread(title: string): Promise<{ threadId: string } & ThreadStartSettings> {
     const response = await this.client.startThread({
       cwd: this.config.defaultCwd,
-      model: this.config.model ?? null,
+      model: null,
       modelProvider: this.config.modelProvider ?? null,
-      approvalPolicy: this.config.approvalPolicy ?? null,
-      sandbox: this.config.sandbox ?? null,
-      config: this.config.config ?? null,
+      approvalPolicy: null,
+      sandbox: null,
+      config: sanitizeThreadStartConfig(this.config.config),
       serviceName: this.config.serviceName,
       baseInstructions: this.config.baseInstructions ?? null,
       developerInstructions: this.config.developerInstructions ?? null,
@@ -160,6 +164,28 @@ export class CodexGateway {
       approvalPolicy: response.approvalPolicy,
       sandboxPolicy: response.sandbox
     };
+  }
+
+  async readGlobalSettings(): Promise<ThreadStartSettings> {
+    const response = await this.client.readConfig({
+      includeLayers: false
+    });
+
+    return threadSettingsFromConfig(response.config, this.config);
+  }
+
+  async updateGlobalSettings(update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
+    const edits = buildGlobalConfigEdits(update);
+    if (edits.length === 0) {
+      return this.readGlobalSettings();
+    }
+
+    await this.client.batchWriteConfig({
+      edits,
+      reloadUserConfig: true
+    });
+    this.invalidateThreadSettingsCache();
+    return this.readGlobalSettings();
   }
 
   async ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings> {
@@ -366,6 +392,11 @@ export class CodexGateway {
       });
     }
   }
+
+  private invalidateThreadSettingsCache(): void {
+    this.#loadedThreads.clear();
+    this.#threadSettings.clear();
+  }
 }
 
 function defaultWorkspaceWriteSandboxPolicy(): SandboxPolicy {
@@ -379,6 +410,151 @@ function defaultWorkspaceWriteSandboxPolicy(): SandboxPolicy {
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false
   };
+}
+
+function sanitizeThreadStartConfig(
+  config: AppConfig["codex"]["config"]
+): NonNullable<AppConfig["codex"]["config"]> | null {
+  if (!config) {
+    return null;
+  }
+
+  const nextConfig = { ...config };
+  delete nextConfig.model;
+  delete nextConfig.approval_policy;
+  delete nextConfig.sandbox_mode;
+  delete nextConfig.sandbox_workspace_write;
+  delete nextConfig.model_reasoning_effort;
+  delete nextConfig.service_tier;
+  return nextConfig;
+}
+
+function threadSettingsFromConfig(config: Config, defaults: AppConfig["codex"]): ThreadStartSettings {
+  return {
+    model: config.model ?? defaults.model ?? "unknown-model",
+    reasoningEffort: config.model_reasoning_effort ?? null,
+    serviceTier: config.service_tier ?? null,
+    cwd: defaults.defaultCwd,
+    approvalPolicy: config.approval_policy ?? defaults.approvalPolicy ?? "on-request",
+    sandboxPolicy: sandboxPolicyFromConfig(config, defaults)
+  };
+}
+
+function sandboxPolicyFromConfig(config: Config, defaults: AppConfig["codex"]): SandboxPolicy {
+  switch (config.sandbox_mode ?? defaults.sandbox ?? "workspace-write") {
+    case "danger-full-access":
+      return {
+        type: "dangerFullAccess"
+      };
+    case "read-only":
+      return {
+        type: "readOnly",
+        access: {
+          type: "fullAccess"
+        },
+        networkAccess: false
+      };
+    case "workspace-write": {
+      const workspaceWrite = config.sandbox_workspace_write;
+      return {
+        type: "workspaceWrite",
+        writableRoots: workspaceWrite?.writable_roots ?? [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: workspaceWrite?.network_access ?? false,
+        excludeTmpdirEnvVar: workspaceWrite?.exclude_tmpdir_env_var ?? false,
+        excludeSlashTmp: workspaceWrite?.exclude_slash_tmp ?? false
+      };
+    }
+  }
+}
+
+function buildGlobalConfigEdits(update: ThreadSettingsOverride): ConfigEdit[] {
+  const edits: ConfigEdit[] = [];
+
+  if ("model" in update) {
+    edits.push({
+      keyPath: "model",
+      value: update.model ?? null,
+      mergeStrategy: "replace"
+    });
+  }
+
+  if ("reasoningEffort" in update) {
+    edits.push({
+      keyPath: "model_reasoning_effort",
+      value: update.reasoningEffort ?? null,
+      mergeStrategy: "replace"
+    });
+  }
+
+  if ("serviceTier" in update) {
+    edits.push({
+      keyPath: "service_tier",
+      value: update.serviceTier ?? null,
+      mergeStrategy: "replace"
+    });
+  }
+
+  if ("approvalPolicy" in update) {
+    edits.push({
+      keyPath: "approval_policy",
+      value: update.approvalPolicy ?? null,
+      mergeStrategy: "replace"
+    });
+  }
+
+  if ("sandboxPolicy" in update && update.sandboxPolicy) {
+    const { mode, workspaceWrite } = sandboxConfigFromPolicy(update.sandboxPolicy);
+    edits.push({
+      keyPath: "sandbox_mode",
+      value: mode,
+      mergeStrategy: "replace"
+    });
+    edits.push({
+      keyPath: "sandbox_workspace_write",
+      value: workspaceWrite,
+      mergeStrategy: "replace"
+    });
+  }
+
+  return edits;
+}
+
+function sandboxConfigFromPolicy(
+  sandboxPolicy: SandboxPolicy
+): {
+  mode: SandboxMode;
+  workspaceWrite: SandboxWorkspaceWrite | null;
+} {
+  switch (sandboxPolicy.type) {
+    case "dangerFullAccess":
+      return {
+        mode: "danger-full-access",
+        workspaceWrite: null
+      };
+    case "readOnly":
+      return {
+        mode: "read-only",
+        workspaceWrite: null
+      };
+    case "workspaceWrite":
+      return {
+        mode: "workspace-write",
+        workspaceWrite: {
+          writable_roots: sandboxPolicy.writableRoots,
+          network_access: sandboxPolicy.networkAccess,
+          exclude_tmpdir_env_var: sandboxPolicy.excludeTmpdirEnvVar,
+          exclude_slash_tmp: sandboxPolicy.excludeSlashTmp
+        }
+      };
+    case "externalSandbox":
+      return {
+        mode: "read-only",
+        workspaceWrite: null
+      };
+  }
 }
 
 function countChangedFiles(items: ThreadItem[]): number {

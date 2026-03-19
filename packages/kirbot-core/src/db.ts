@@ -11,14 +11,9 @@ import type {
   SessionStatus,
   TopicSession
 } from "./domain";
-import {
-  createEmptyStoredCodexThreadSettings,
-  normalizeStoredCodexThreadSettings,
-  type StoredCodexThreadSettings
-} from "./bridge/codex-thread-settings";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 type TopicSessionsTable = {
   id: Generated<number>;
@@ -27,7 +22,6 @@ type TopicSessionsTable = {
   codex_thread_id: string | null;
   status: SessionStatus;
   preferred_mode: SessionMode;
-  codex_settings_json: string | null;
 };
 
 type ServerRequestsTable = {
@@ -64,10 +58,7 @@ function mapTopicSession(row: Selectable<TopicSessionsTable>): TopicSession {
     telegramTopicId: row.telegram_topic_id,
     codexThreadId: row.codex_thread_id,
     status: row.status,
-    preferredMode: row.preferred_mode,
-    codexSettings: row.codex_settings_json
-      ? normalizeStoredCodexThreadSettings(JSON.parse(row.codex_settings_json))
-      : createEmptyStoredCodexThreadSettings()
+    preferredMode: row.preferred_mode
   };
 }
 
@@ -114,7 +105,6 @@ export class BridgeDatabase {
       .addColumn("codex_thread_id", "text")
       .addColumn("status", "text", (column) => column.notNull())
       .addColumn("preferred_mode", "text", (column) => column.notNull().defaultTo("default"))
-      .addColumn("codex_settings_json", "text")
       .execute();
 
     await this.kysely.schema
@@ -192,8 +182,7 @@ export class BridgeDatabase {
         telegram_topic_id: input.telegramTopicId,
         codex_thread_id: null,
         status: "provisioning",
-        preferred_mode: "default",
-        codex_settings_json: JSON.stringify(createEmptyStoredCodexThreadSettings())
+        preferred_mode: "default"
       })
       .execute();
 
@@ -209,15 +198,13 @@ export class BridgeDatabase {
 
   async activateSession(
     id: number,
-    codexThreadId: string,
-    codexSettings?: StoredCodexThreadSettings
+    codexThreadId: string
   ): Promise<TopicSession> {
     await this.kysely
       .updateTable("topic_sessions")
       .set({
         codex_thread_id: codexThreadId,
-        status: "active",
-        ...(codexSettings ? { codex_settings_json: JSON.stringify(codexSettings) } : {})
+        status: "active"
       })
       .where("id", "=", id)
       .execute();
@@ -299,18 +286,6 @@ export class BridgeDatabase {
       .execute();
 
     return this.getSessionById(existing.id);
-  }
-
-  async updateSessionCodexSettings(id: number, codexSettings: StoredCodexThreadSettings): Promise<TopicSession> {
-    await this.kysely
-      .updateTable("topic_sessions")
-      .set({
-        codex_settings_json: JSON.stringify(codexSettings)
-      })
-      .where("id", "=", id)
-      .execute();
-
-    return this.getSessionById(id);
   }
 
   async createPendingRequest(input: {

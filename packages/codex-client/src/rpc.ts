@@ -21,6 +21,10 @@ import type { ThreadStartParams } from "./generated/codex/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "./generated/codex/v2/ThreadStartResponse";
 import type { ModelListParams } from "./generated/codex/v2/ModelListParams";
 import type { ModelListResponse } from "./generated/codex/v2/ModelListResponse";
+import type { ConfigBatchWriteParams } from "./generated/codex/v2/ConfigBatchWriteParams";
+import type { ConfigReadParams } from "./generated/codex/v2/ConfigReadParams";
+import type { ConfigReadResponse } from "./generated/codex/v2/ConfigReadResponse";
+import type { ConfigWriteResponse } from "./generated/codex/v2/ConfigWriteResponse";
 import type { TurnInterruptParams } from "./generated/codex/v2/TurnInterruptParams";
 import type { TurnInterruptResponse } from "./generated/codex/v2/TurnInterruptResponse";
 import type { TurnSteerParams } from "./generated/codex/v2/TurnSteerParams";
@@ -76,6 +80,14 @@ type SupportedMethodMap = {
   "model/list": {
     params: ModelListParams;
     result: ModelListResponse;
+  };
+  "config/read": {
+    params: ConfigReadParams;
+    result: ConfigReadResponse;
+  };
+  "config/batchWrite": {
+    params: ConfigBatchWriteParams;
+    result: ConfigWriteResponse;
   };
   "turn/start": {
     params: TurnStartParams;
@@ -370,6 +382,14 @@ export class CodexRpcClient extends EventEmitter {
 
   async listModels(params: ModelListParams): Promise<ModelListResponse> {
     return this.call("model/list", params);
+  }
+
+  async readConfig(params: ConfigReadParams): Promise<ConfigReadResponse> {
+    return this.call("config/read", params);
+  }
+
+  async batchWriteConfig(params: ConfigBatchWriteParams): Promise<ConfigWriteResponse> {
+    return this.call("config/batchWrite", params);
   }
 
   async startTurn(params: TurnStartParams): Promise<TurnStartResponse> {

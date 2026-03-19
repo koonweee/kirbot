@@ -13,11 +13,6 @@ export type CodexThreadSettings = {
 
 export type CodexThreadSettingsOverride = Partial<CodexThreadSettings>;
 
-export type StoredCodexThreadSettings = {
-  current: CodexThreadSettings | null;
-  pending: CodexThreadSettingsOverride | null;
-};
-
 export type CodexPermissionPresetId = "read-only" | "default" | "full-access";
 
 export type CodexPermissionPreset = {
@@ -72,84 +67,6 @@ export const CODEX_PERMISSION_PRESETS: readonly CodexPermissionPreset[] = [
   }
 ] as const;
 
-export function createEmptyStoredCodexThreadSettings(): StoredCodexThreadSettings {
-  return {
-    current: null,
-    pending: null
-  };
-}
-
-export function normalizeStoredCodexThreadSettings(value: unknown): StoredCodexThreadSettings {
-  if (!value || typeof value !== "object") {
-    return createEmptyStoredCodexThreadSettings();
-  }
-
-  const parsed = value as Partial<StoredCodexThreadSettings>;
-  return {
-    current: isCodexThreadSettings(parsed.current) ? parsed.current : null,
-    pending: isCodexThreadSettingsOverride(parsed.pending) ? parsed.pending : null
-  };
-}
-
-export function applyCodexThreadSettingsOverride(
-  current: CodexThreadSettings,
-  override: CodexThreadSettingsOverride | null | undefined
-): CodexThreadSettings {
-  if (!override) {
-    return current;
-  }
-
-  return {
-    ...current,
-    ...override
-  };
-}
-
-export function getEffectiveCodexThreadSettings(
-  stored: StoredCodexThreadSettings | null | undefined
-): CodexThreadSettings | null {
-  if (!stored?.current) {
-    return null;
-  }
-
-  return applyCodexThreadSettingsOverride(stored.current, stored.pending);
-}
-
-export function hasPendingCodexThreadSettings(
-  stored: StoredCodexThreadSettings | null | undefined
-): boolean {
-  return !!stored?.pending && Object.keys(stored.pending).length > 0;
-}
-
-export function withUpdatedCurrentCodexThreadSettings(
-  stored: StoredCodexThreadSettings | null | undefined,
-  current: CodexThreadSettings
-): StoredCodexThreadSettings {
-  return {
-    current,
-    pending: stored?.pending ?? null
-  };
-}
-
-export function withUpdatedPendingCodexThreadSettings(
-  stored: StoredCodexThreadSettings | null | undefined,
-  pending: CodexThreadSettingsOverride | null
-): StoredCodexThreadSettings {
-  return {
-    current: stored?.current ?? null,
-    pending: pending && Object.keys(pending).length > 0 ? pending : null
-  };
-}
-
-export function clearPendingCodexThreadSettings(
-  stored: StoredCodexThreadSettings | null | undefined
-): StoredCodexThreadSettings {
-  return {
-    current: stored?.current ?? null,
-    pending: null
-  };
-}
-
 export function getCodexPermissionPreset(
   presetId: CodexPermissionPresetId
 ): CodexPermissionPreset {
@@ -195,23 +112,4 @@ function sandboxPoliciesMatchPreset(left: SandboxPolicy, right: SandboxPolicy): 
     case "externalSandbox":
       return right.type === "externalSandbox" && left.networkAccess === right.networkAccess;
   }
-}
-
-function isCodexThreadSettings(value: unknown): value is CodexThreadSettings {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Partial<CodexThreadSettings>;
-  return (
-    typeof candidate.model === "string" &&
-    "reasoningEffort" in candidate &&
-    "serviceTier" in candidate &&
-    "approvalPolicy" in candidate &&
-    !!candidate.sandboxPolicy
-  );
-}
-
-function isCodexThreadSettingsOverride(value: unknown): value is CodexThreadSettingsOverride {
-  return !!value && typeof value === "object";
 }

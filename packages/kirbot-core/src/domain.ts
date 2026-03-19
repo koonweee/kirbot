@@ -1,5 +1,4 @@
 import type { UserInput } from "@kirbot/codex-client/generated/codex/v2/UserInput";
-import type { StoredCodexThreadSettings } from "./bridge/codex-thread-settings";
 
 export type SessionStatus = "provisioning" | "active" | "archived" | "errored";
 export type SessionMode = "default" | "plan";
@@ -20,7 +19,6 @@ export type TopicSession = {
   codexThreadId: string | null;
   status: SessionStatus;
   preferredMode: SessionMode;
-  codexSettings: StoredCodexThreadSettings;
 };
 
 export type PendingServerRequest = {
