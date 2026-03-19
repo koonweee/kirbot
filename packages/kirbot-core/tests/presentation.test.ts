@@ -99,12 +99,12 @@ describe("status presentation", () => {
         branch: "main"
       })
     ).toEqual({
-      text: "gpt-5 • 1m 0s • 0 files • 100% left • /workspace • main",
+      text: "gpt-5 • 1m 0s • 100% left • /workspace • main",
       entities: [
         {
           type: "pre",
           offset: 0,
-          length: "gpt-5 • 1m 0s • 0 files • 100% left • /workspace • main".length,
+          length: "gpt-5 • 1m 0s • 100% left • /workspace • main".length,
           language: "status"
         }
       ]

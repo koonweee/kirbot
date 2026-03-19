@@ -120,7 +120,7 @@ describe("CodexGateway", () => {
     await expect(initializePromise).resolves.toBeUndefined();
   });
 
-  it("passes null instruction fields to thread/start when config does not provide them", async () => {
+  it("passes null instruction fields and cwd overrides to thread/start", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
@@ -146,7 +146,9 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    void gateway.createThread("Test thread");
+    const createThreadPromise = gateway.createThread("Test thread", {
+      cwd: "/workspace/packages/kirbot-core"
+    });
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({
@@ -154,7 +156,7 @@ describe("CodexGateway", () => {
       method: "thread/start",
       id: 2,
       params: {
-        cwd: "/workspace",
+        cwd: "/workspace/packages/kirbot-core",
         model: null,
         modelProvider: null,
         approvalPolicy: null,
@@ -168,6 +170,90 @@ describe("CodexGateway", () => {
         ephemeral: false,
         personality: null,
         serviceTier: null
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1",
+          preview: "",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 1,
+          status: "idle",
+          path: null,
+          cwd: "/workspace/packages/kirbot-core",
+          cliVersion: "0.0.0",
+          source: "appServer",
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: {
+            sha: null,
+            branch: "main",
+            originUrl: null
+          },
+          name: null,
+          turns: []
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace/packages/kirbot-core",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/name/set",
+      id: 3,
+      params: {
+        threadId: "thread-1",
+        name: "Test thread"
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {}
+    });
+
+    await expect(createThreadPromise).resolves.toEqual({
+      threadId: "thread-1",
+      branch: "main",
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      cwd: "/workspace/packages/kirbot-core",
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
       }
     });
   });

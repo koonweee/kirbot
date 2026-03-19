@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -152,6 +152,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
 
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
+  createThreadCalls: Array<{ title: string; cwd?: string | null }> = [];
   ensuredThreads: string[] = [];
   globalSettingsUpdates: Array<{
     model?: string;
@@ -173,6 +174,7 @@ class FakeCodex implements BridgeCodexApi {
   readTurnMessagesResult = "";
   readTurnSnapshotResult: Partial<ResolvedTurnSnapshot> = {};
   cwd = "/workspace";
+  branch: string | null = "main";
   model = "gpt-5-codex";
   reasoningEffort: ReasoningEffort | null = null;
   serviceTier: ServiceTier | null = null;
@@ -218,8 +220,9 @@ class FakeCodex implements BridgeCodexApi {
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
 
-  async createThread(title: string): Promise<{
+  async createThread(title: string, options?: { cwd?: string | null }): Promise<{
     threadId: string;
+    branch: string | null;
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
@@ -228,12 +231,17 @@ class FakeCodex implements BridgeCodexApi {
     sandboxPolicy: SandboxPolicy;
   }> {
     this.createdThreads.push(title);
+    this.createThreadCalls.push({
+      title,
+      ...(options?.cwd !== undefined ? { cwd: options.cwd } : {})
+    });
     return {
       threadId: "thread-1",
+      branch: this.branch,
       model: this.model,
       reasoningEffort: this.reasoningEffort,
       serviceTier: this.serviceTier,
-      cwd: this.cwd,
+      cwd: options?.cwd ?? this.cwd,
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
     };
@@ -716,6 +724,14 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
+        text: "gpt-5-codex • <1s • 100% left • /workspace • main",
+        options: {
+          message_thread_id: 101,
+          entities: preformattedEntities("gpt-5-codex • <1s • 100% left • /workspace • main", "status")
+        }
+      },
+      {
+        chatId: -1001,
         text: "Fix the failing deployment tests",
         options: {
           message_thread_id: 101,
@@ -770,8 +786,8 @@ describe("TelegramCodexBridge", () => {
     );
   });
 
-  it("continues session startup when sending the initial prompt mirror fails", async () => {
-    telegram.nextSendMessageError = new Error("mirror failed");
+  it("continues session startup when sending the startup footer fails", async () => {
+    telegram.nextSendMessageError = new Error("footer failed");
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -782,7 +798,16 @@ describe("TelegramCodexBridge", () => {
       text: "Fix the failing deployment tests"
     });
 
-    expect(telegram.sentMessages).toEqual([]);
+    expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: "Fix the failing deployment tests",
+        options: {
+          message_thread_id: 101,
+          entities: preformattedEntities("Fix the failing deployment tests", "user prompt")
+        }
+      }
+    ]);
     expect(codex.turns).toEqual([
       {
         threadId: "thread-1",
@@ -805,6 +830,119 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.createdTopics).toHaveLength(0);
     expect(codex.createdThreads).toHaveLength(0);
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+  });
+
+  it("creates a new empty topic from root /start with a validated cwd override", async () => {
+    const sessionDir = join(tempDir, "project-root");
+    rmSync(sessionDir, { recursive: true, force: true });
+    mkdirSync(sessionDir, { recursive: true });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: `/start ${sessionDir}`
+    });
+
+    expect(telegram.createdTopics).toMatchObject([
+      {
+        chatId: -1001,
+        name: "project-root"
+      }
+    ]);
+    expect(codex.createdThreads).toEqual(["project-root"]);
+    expect(codex.createThreadCalls).toEqual([
+      {
+        title: "project-root",
+        cwd: sessionDir
+      }
+    ]);
+    expect(codex.turns).toHaveLength(0);
+    expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: `gpt-5-codex • <1s • 100% left • ${sessionDir} • main`,
+        options: {
+          message_thread_id: 101,
+          entities: preformattedEntities(
+            `gpt-5-codex • <1s • 100% left • ${sessionDir} • main`,
+            "status"
+          )
+        }
+      }
+    ]);
+  });
+
+  it("resolves root /start relative paths against the effective global cwd", async () => {
+    const relativeBase = join(tempDir, "workspace");
+    const sessionDir = join(relativeBase, "packages", "kirbot-core");
+    mkdirSync(sessionDir, { recursive: true });
+    codex.cwd = relativeBase;
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 24,
+      userId: 42,
+      text: "/start packages/kirbot-core"
+    });
+
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "kirbot-core",
+      cwd: sessionDir
+    });
+  });
+
+  it("rejects root /start when the path does not exist before creating a topic", async () => {
+    const missingDir = join(tempDir, "does-not-exist");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 25,
+      userId: 42,
+      text: `/start ${missingDir}`
+    });
+
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(`Directory not found: ${missingDir}`);
+  });
+
+  it("rejects root /start when the path is not a directory", async () => {
+    const filePath = join(tempDir, "not-a-directory.txt");
+    writeFileSync(filePath, "not a directory");
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 26,
+      userId: 42,
+      text: `/start ${filePath}`
+    });
+
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(`Not a directory: ${filePath}`);
+  });
+
+  it("rejects bare root /start before creating a topic", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 27,
+      userId: 42,
+      text: "/start"
+    });
+
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Usage: /start <path>");
   });
 
   it("creates a new plan-mode topic and immediate turn from root /plan with a prompt", async () => {
@@ -842,6 +980,17 @@ describe("TelegramCodexBridge", () => {
       }
     });
     expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: "gpt-5-codex high • <1s • 100% left • /workspace • main • planning",
+        options: {
+          message_thread_id: 101,
+          entities: preformattedEntities(
+            "gpt-5-codex high • <1s • 100% left • /workspace • main • planning",
+            "status"
+          )
+        }
+      },
       {
         chatId: -1001,
         text: "sketch the migration",
@@ -882,6 +1031,17 @@ describe("TelegramCodexBridge", () => {
     expect(codex.createdThreads).toEqual(["New Plan Session"]);
     expect(codex.turns).toHaveLength(0);
     expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: "gpt-5-codex • <1s • 100% left • /workspace • main • planning",
+        options: {
+          message_thread_id: 101,
+          entities: preformattedEntities(
+            "gpt-5-codex • <1s • 100% left • /workspace • main • planning",
+            "status"
+          )
+        }
+      },
       {
         chatId: -1001,
         text: "Plan mode enabled.",
@@ -947,6 +1107,7 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getSessionByTopic(-1001, 777);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+    expect(telegram.sentMessages.at(0)?.text).toBe("gpt-5-codex • <1s • 100% left • /workspace • main");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
@@ -1737,9 +1898,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
     expect(telegram.deletions).toEqual([]);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
-    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex high • <1s • 0 files • 100% left • /workspace • main");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex high • <1s • 100% left • /workspace • main");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
-      preformattedEntities("gpt-5-codex high • <1s • 0 files • 100% left • /workspace • main", "status")
+      preformattedEntities("gpt-5-codex high • <1s • 100% left • /workspace • main", "status")
     );
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
   });
@@ -3638,7 +3799,16 @@ describe("TelegramCodexBridge", () => {
       text: "Inspect the current failure"
     });
 
-    expect(telegram.sentMessages).toEqual([]);
+    expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: "gpt-5-codex • <1s • 100% left • /workspace • main",
+        options: {
+          message_thread_id: 777,
+          entities: preformattedEntities("gpt-5-codex • <1s • 100% left • /workspace • main", "status")
+        }
+      }
+    ]);
   });
 
   it("rejects unknown slash commands during an active turn instead of steering", async () => {

@@ -19,8 +19,10 @@ User experience:
 - The user sends a normal message in the root private chat or lobby.
 - kirbot creates a Telegram topic with a random icon for that request.
 - kirbot creates a new Codex thread for that topic.
+- kirbot posts a startup footer in the topic before any other topic message.
 - kirbot mirrors the initial prompt into the new topic in a labeled preformatted block when there is prompt text to show.
 - The first Codex turn starts immediately in the new topic.
+- The user can also run `/start <path>` from the lobby to create a new empty topic and Codex thread in that directory without sending an initial turn.
 
 Owned by:
 
@@ -37,6 +39,7 @@ Verified by:
 User experience:
 
 - If the user sends a normal message inside a topic that kirbot has not mapped yet, kirbot starts a session in that existing topic instead of creating a new one.
+- kirbot posts the startup footer before any other topic message for that new thread.
 - Later messages in that topic continue the same Codex thread.
 
 Owned by:

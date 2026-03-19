@@ -41,6 +41,10 @@ export type ThreadStartSettings = {
 };
 
 export type ThreadSettingsOverride = Partial<ThreadStartSettings>;
+export type CreatedThread = {
+  threadId: string;
+  branch: string | null;
+} & ThreadStartSettings;
 
 export type AppServerOptions = {
   logger?: LoggerLike;
@@ -123,9 +127,9 @@ export class CodexGateway {
     });
   }
 
-  async createThread(title: string): Promise<{ threadId: string } & ThreadStartSettings> {
+  async createThread(title: string, options?: { cwd?: string | null }): Promise<CreatedThread> {
     const response = await this.client.startThread({
-      cwd: this.config.defaultCwd,
+      cwd: options?.cwd ?? this.config.defaultCwd,
       model: null,
       modelProvider: this.config.modelProvider ?? null,
       approvalPolicy: null,
@@ -156,6 +160,7 @@ export class CodexGateway {
     });
     return {
       threadId: response.thread.id,
+      branch: response.thread.gitInfo?.branch ?? null,
       model: response.model,
       reasoningEffort: response.reasoningEffort,
       serviceTier: response.serviceTier,

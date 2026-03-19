@@ -381,6 +381,18 @@ export function buildRenderedCompletionFooter(details: CompletionFooterDetails):
   return renderPreformattedText(buildCompletionFooterText(details), "status");
 }
 
+export function buildRenderedThreadStartFooter(details: Pick<
+  CompletionFooterDetails,
+  "mode" | "model" | "reasoningEffort" | "serviceTier" | "cwd" | "branch"
+>): TelegramRenderedMessage {
+  return buildRenderedCompletionFooter({
+    ...details,
+    durationMs: 0,
+    changedFiles: 0,
+    contextLeftPercent: null
+  });
+}
+
 export function buildRenderedInitialPromptMessage(text: string): TelegramRenderedMessage {
   return renderPreformattedText(text, "user prompt");
 }
@@ -866,7 +878,6 @@ function buildRenderedStatusText(
 }
 
 function buildCompletionFooterText(details: CompletionFooterDetails): string {
-  const fileLabel = details.changedFiles === 1 ? "file" : "files";
   const contextLeft =
     typeof details.contextLeftPercent === "number" ? `${details.contextLeftPercent}% left` : "100% left";
   const cwd = shortenHomePath(details.cwd);
@@ -878,16 +889,20 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
       : details.reasoningEffort
         ? `${model} ${details.reasoningEffort}`
         : model;
+  const changedFilesLabel =
+    details.changedFiles > 0 ? `${details.changedFiles} ${details.changedFiles === 1 ? "file" : "files"}` : null;
 
   return [
     modelLabel,
     formatElapsedDuration(details.durationMs, true),
-    `${details.changedFiles} ${fileLabel}`,
+    changedFilesLabel,
     contextLeft,
     cwd,
     branch,
     ...(details.mode === "plan" ? ["planning"] : [])
-  ].join(" • ");
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" • ");
 }
 
 function summarizeRequestedPermissions(

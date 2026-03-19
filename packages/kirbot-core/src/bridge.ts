@@ -1,3 +1,7 @@
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, isAbsolute, resolve } from "node:path";
+
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
 import type { SessionMode, TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
@@ -38,6 +42,7 @@ import {
   type ParsedSlashCommand
 } from "./bridge/slash-commands";
 import {
+  buildRenderedThreadStartFooter,
   buildRenderedInitialPromptMessage,
   buildQueuePreviewKeyboard,
   deriveTopicTitle,
@@ -59,7 +64,7 @@ export type CallbackQueryEvent = {
 };
 
 export interface BridgeCodexApi {
-  createThread(title: string): Promise<{ threadId: string } & ThreadStartSettings>;
+  createThread(title: string, options?: { cwd?: string | null }): Promise<{ threadId: string; branch: string | null } & ThreadStartSettings>;
   readGlobalSettings(): Promise<ThreadStartSettings>;
   updateGlobalSettings(update: CodexThreadSettingsOverride): Promise<ThreadStartSettings>;
   ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings>;
@@ -89,7 +94,9 @@ type PreparedCodexInput = {
   images: PreparedImageFiles;
 };
 
-type ThreadStartSettings = CodexThreadSettings;
+type ThreadStartSettings = CodexThreadSettings & {
+  cwd: string;
+};
 
 const INVALID_COMMAND_TEXT = "This command is not valid here.";
 const NO_ACTIVE_RESPONSE_TO_STOP_TEXT = "There is no active response to stop right now.";
@@ -98,6 +105,7 @@ const RESPONSE_ALREADY_FINISHING_TEXT = "This response is already finishing.";
 const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing modes.";
 const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one.";
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
+const START_USAGE_TEXT = "Usage: /start <path>";
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled.";
 const PLAN_MODE_EXITED_TEXT = "Exited plan mode.";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
@@ -402,6 +410,11 @@ export class TelegramCodexBridge {
 
     if (command.command === "plan") {
       await this.startPlanSessionFromRootMessage(message, command.argsText);
+      return;
+    }
+
+    if (command.command === "start") {
+      await this.startSessionFromRootPath(message, command.argsText);
       return;
     }
 
@@ -917,6 +930,57 @@ export class TelegramCodexBridge {
     );
   }
 
+  private async startSessionFromRootPath(message: UserTurnMessage, pathText: string): Promise<void> {
+    const trimmedPath = pathText.trim();
+    if (!trimmedPath) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: START_USAGE_TEXT
+      });
+      return;
+    }
+
+    const effectiveSettings = await this.codex.readGlobalSettings();
+    const resolvedPath = resolveKirbotPath(trimmedPath, effectiveSettings.cwd);
+    let stats;
+    try {
+      stats = statSync(resolvedPath);
+    } catch {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: `Directory not found: ${resolvedPath}`
+      });
+      return;
+    }
+
+    if (!stats.isDirectory()) {
+      await this.#messenger.sendMessage({
+        chatId: message.chatId,
+        text: `Not a directory: ${resolvedPath}`
+      });
+      return;
+    }
+
+    const title = basename(resolvedPath) || resolvedPath;
+    const forumTopic = await this.telegram.createForumTopic(
+      message.chatId,
+      title,
+      await this.#topicIconPicker.pickCreateForumTopicOptions()
+    );
+
+    await this.startSessionInTopic(
+      {
+        ...message,
+        topicId: forumTopic.message_thread_id
+      },
+      title,
+      {
+        startInitialTurn: false,
+        threadCwd: resolvedPath
+      }
+    );
+  }
+
   private async startSessionInExistingTopic(message: UserTurnMessage): Promise<void> {
     if (message.topicId === null) {
       throw new Error("Cannot start an in-topic session without a Telegram topic id");
@@ -935,6 +999,7 @@ export class TelegramCodexBridge {
       startInitialTurn?: boolean;
       firstTurnMessage?: UserTurnMessage;
       postActivationTopicMessage?: string;
+      threadCwd?: string;
     }
   ): Promise<void> {
     if (message.topicId === null) {
@@ -947,7 +1012,10 @@ export class TelegramCodexBridge {
     });
 
     try {
-      const thread = await this.codex.createThread(title);
+      const thread = await this.codex.createThread(
+        title,
+        options?.threadCwd ? { cwd: options.threadCwd } : undefined
+      );
       let session = await this.database.activateSession(pending.id, thread.threadId);
 
       if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
@@ -958,6 +1026,7 @@ export class TelegramCodexBridge {
         ) ?? session;
       }
 
+      await this.maybeSendThreadStartFooterMessage(message.chatId, message.topicId, session.preferredMode, thread);
       await this.maybeSendInitialPromptMessage(message.chatId, message.topicId, options?.initialPromptText);
 
       if (options?.postActivationTopicMessage) {
@@ -978,6 +1047,38 @@ export class TelegramCodexBridge {
         topicId: message.topicId,
         text: `Failed to create Codex session for "${title}": ${formatError(error)}`
       });
+    }
+  }
+
+  private async maybeSendThreadStartFooterMessage(
+    chatId: number,
+    topicId: number,
+    mode: SessionMode,
+    thread: {
+      model: string;
+      reasoningEffort: ReasoningEffort | null;
+      serviceTier: ServiceTier | null;
+      cwd: string;
+      branch: string | null;
+    }
+  ): Promise<void> {
+    try {
+      const rendered = buildRenderedThreadStartFooter({
+        mode,
+        model: thread.model,
+        reasoningEffort: thread.reasoningEffort,
+        serviceTier: thread.serviceTier,
+        cwd: thread.cwd,
+        branch: thread.branch
+      });
+      await this.#messenger.sendMessage({
+        chatId,
+        topicId,
+        text: rendered.text,
+        ...(rendered.entities ? { entities: rendered.entities } : {})
+      });
+    } catch (error) {
+      this.logger.error("Failed to send startup footer into Telegram topic", error);
     }
   }
 
@@ -1593,6 +1694,23 @@ function buildFastStatusMessage(serviceTier: ServiceTier | null): string {
 
 function buildFastUpdatedMessage(serviceTier: ServiceTier | null): string {
   return `Global fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}.`;
+}
+
+function resolveKirbotPath(pathText: string, baseCwd: string): string {
+  const expandedPath = expandHomePath(pathText);
+  return isAbsolute(expandedPath) ? resolve(expandedPath) : resolve(baseCwd, expandedPath);
+}
+
+function expandHomePath(pathText: string): string {
+  if (pathText === "~") {
+    return homedir();
+  }
+
+  if (pathText.startsWith("~/")) {
+    return `${homedir()}${pathText.slice(1)}`;
+  }
+
+  return pathText;
 }
 
 function looksLikeSlashCommand(text: string): boolean {

@@ -25,6 +25,7 @@ import type { AppServerEvent } from "@kirbot/codex-client";
 
 class ScriptedCodex implements BridgeCodexApi {
   cwd = "/workspace";
+  branch: string | null = "main";
   model = "gpt-5-codex";
   reasoningEffort: ReasoningEffort | null = null;
   serviceTier: ServiceTier | null = null;
@@ -56,8 +57,9 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
-  async createThread(title: string): Promise<{
+  async createThread(title: string, options?: { cwd?: string | null }): Promise<{
     threadId: string;
+    branch: string | null;
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
@@ -69,10 +71,11 @@ class ScriptedCodex implements BridgeCodexApi {
     this.createdThreadIds.push(title);
     return {
       threadId,
+      branch: this.branch,
       model: this.model,
       reasoningEffort: this.reasoningEffort,
       serviceTier: this.serviceTier,
-      cwd: this.cwd,
+      cwd: options?.cwd ?? this.cwd,
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
     };
@@ -481,9 +484,10 @@ describe("Telegram harness", () => {
     expect(transcript.topics).toHaveLength(1);
     expect(transcript.topics[0]?.title).toBe("Inspect the repo");
     expect(transcript.topics[0]?.messages.map((message) => message.text)).toEqual([
+      "gpt-5-codex • <1s • 100% left • /workspace • main",
       "Inspect the repo",
       "Harness reply",
-      "gpt-5-codex • <1s • 0 files • 100% left • /workspace • main"
+      "gpt-5-codex • <1s • 100% left • /workspace • main"
     ]);
 
     const eventTypes = harness.getTelegramEvents().map((event) => event.type);
@@ -590,7 +594,7 @@ describe("Telegram harness", () => {
     await harness.waitForIdle();
 
     const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
-    expect(footer).toBe("gpt-5-codex • <1s • 0 files • 30% left • /workspace • main");
+    expect(footer).toBe("gpt-5-codex • <1s • 30% left • /workspace • main");
   });
 
   it("records Mini App buttons on plan artifact stubs", async () => {
