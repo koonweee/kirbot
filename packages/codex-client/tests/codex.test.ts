@@ -308,8 +308,7 @@ describe("CodexGateway", () => {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         config: {
-          model_reasoning_effort: "high",
-          sandbox_workspace_write: null
+          model_reasoning_effort: "high"
         },
         serviceName: "telegram-codex-bridge",
         baseInstructions: null,
@@ -833,8 +832,7 @@ describe("CodexGateway", () => {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         config: {
-          model_reasoning_effort: "high",
-          sandbox_workspace_write: null
+          model_reasoning_effort: "high"
         }
       }
     });

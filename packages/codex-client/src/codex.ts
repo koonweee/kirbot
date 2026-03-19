@@ -449,7 +449,9 @@ function buildThreadStartOverrides(
 
   if ("sandboxPolicy" in (update ?? {}) && update?.sandboxPolicy) {
     const { mode, workspaceWrite } = sandboxConfigFromPolicy(update.sandboxPolicy);
-    config.sandbox_workspace_write = workspaceWrite;
+    if (workspaceWrite !== null) {
+      config.sandbox_workspace_write = workspaceWrite;
+    }
     return {
       model: "model" in (update ?? {}) ? update?.model ?? null : undefined,
       serviceTier: "serviceTier" in (update ?? {}) ? update?.serviceTier ?? null : undefined,
