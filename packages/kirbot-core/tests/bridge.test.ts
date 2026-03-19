@@ -1151,7 +1151,7 @@ describe("TelegramCodexBridge", () => {
       text: "/fast on"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Fast mode enabled for the next turn in this topic.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Fast mode enabled.");
 
     codex.readTurnSnapshotResult = {
       text: "Fast answer",

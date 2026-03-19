@@ -710,9 +710,9 @@ export class TelegramCodexBridge {
       chatId: message.chatId,
       topicId: message.topicId!,
       text: [
-        "Choose Codex permissions for future turns in this topic.",
+        "Choose Codex permissions for this topic.",
         currentPreset ? `Current: ${currentPreset.label}` : "Current: Custom",
-        "Changes apply on the next turn."
+        "Your selection will be used when you send a message."
       ].join("\n"),
       replyMarkup: {
         inline_keyboard: CODEX_PERMISSION_PRESETS.map((preset) => [
@@ -752,7 +752,7 @@ export class TelegramCodexBridge {
       chatId: message.chatId,
       topicId: message.topicId,
       text: [
-        "Choose the model for future turns in this topic.",
+        "Choose the model for this topic.",
         currentModel ? `Current: ${currentModel}` : "Current: unknown-model",
         "Then choose a reasoning effort."
       ].join("\n"),
@@ -841,7 +841,7 @@ export class TelegramCodexBridge {
     await this.#messenger.sendMessage({
       chatId: message.chatId,
       topicId: message.topicId,
-      text: `Model set to ${model.model} ${reasoningEffort} for the next turn in this topic.`
+      text: `Model set to ${model.model} ${reasoningEffort}.`
     });
   }
 
@@ -858,7 +858,7 @@ export class TelegramCodexBridge {
     await this.#messenger.sendMessage({
       chatId: message.chatId,
       topicId: message.topicId,
-      text: `Permissions set to ${preset.label} for the next turn in this topic.`
+      text: `Permissions set to ${preset.label}.`
     });
   }
 
@@ -1751,7 +1751,7 @@ function buildFastStatusMessage(serviceTier: ServiceTier | null): string {
 }
 
 function buildFastUpdatedMessage(serviceTier: ServiceTier | null): string {
-  return `Fast mode ${serviceTier === "fast" ? "enabled" : "disabled"} for the next turn in this topic.`;
+  return `Fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}.`;
 }
 
 function looksLikeSlashCommand(text: string): boolean {
