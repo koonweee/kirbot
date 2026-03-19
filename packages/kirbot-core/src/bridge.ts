@@ -5,7 +5,7 @@ import type { MessageEntity } from "grammy/types";
 
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
-import type { PendingCustomCommandAdd, SessionMode, TopicLifecycleEvent, TopicSession, UserTurnMessage } from "./domain";
+import type { PendingCustomCommandAdd, SessionMode, TopicLifecycleEvent, TopicSession, UserTurnInput, UserTurnMessage } from "./domain";
 import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
 import type { CollaborationMode } from "@kirbot/codex-client/generated/codex/CollaborationMode";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
@@ -128,6 +128,11 @@ type ThreadStartSettings = CodexThreadSettings & {
   cwd: string;
 };
 
+export type TelegramCodexBridgeOptions = {
+  topicIconPicker?: TopicIconPicker;
+  restartKirbot?: () => Promise<void>;
+};
+
 const INVALID_COMMAND_TEXT = "This command is not valid here";
 const NO_ACTIVE_RESPONSE_TO_STOP_TEXT = "There is no active response to stop right now";
 const STOPPING_CURRENT_RESPONSE_TEXT = "Stopping the current response…";
@@ -137,6 +142,8 @@ const SETTINGS_CHANGE_REJECTED_TEXT = "Wait for the current response to finish o
 const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one";
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
 const START_USAGE_TEXT = "Usage: /start <path>";
+const RESTART_NOT_CONFIGURED_TEXT = "Restart is not configured for this kirbot deployment";
+const RESTARTING_KIRBOT_TEXT = "Rebuilding kirbot and restarting the production session…";
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled";
 const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
@@ -154,6 +161,7 @@ export class TelegramCodexBridge {
   readonly #lifecycle: TurnLifecycleCoordinator;
   readonly #requestCoordinator: BridgeRequestCoordinator;
   readonly #topicIconPicker: TopicIconPicker;
+  readonly #restartKirbot: (() => Promise<void>) | null;
 
   constructor(
     private readonly config: AppConfig,
@@ -162,12 +170,11 @@ export class TelegramCodexBridge {
     private readonly codex: BridgeCodexApi,
     private readonly mediaStore: TemporaryImageStore,
     private readonly logger: LoggerLike = console,
-    options?: {
-      topicIconPicker?: TopicIconPicker;
-    }
+    options?: TelegramCodexBridgeOptions
   ) {
     this.#messenger = new TelegramMessenger(telegram, logger);
     this.#topicIconPicker = options?.topicIconPicker ?? new RandomTopicIconPicker(telegram, logger);
+    this.#restartKirbot = options?.restartKirbot ?? null;
     this.#lifecycle = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
       messenger: this.#messenger,
@@ -464,6 +471,11 @@ export class TelegramCodexBridge {
 
     if (command.command === "start") {
       await this.startSessionFromRootPath(message, command.argsText);
+      return;
+    }
+
+    if (command.command === "restart") {
+      await this.restartKirbot(message);
       return;
     }
 
@@ -1854,6 +1866,31 @@ export class TelegramCodexBridge {
     return this.#requestCoordinator.tryResolveUserInput(message);
   }
 
+  private async restartKirbot(message: UserTurnMessage): Promise<void> {
+    if (!this.#restartKirbot) {
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        text: RESTART_NOT_CONFIGURED_TEXT
+      });
+      return;
+    }
+
+    await this.sendScopedBridgeMessage({
+      chatId: message.chatId,
+      text: RESTARTING_KIRBOT_TEXT
+    });
+
+    try {
+      await this.#restartKirbot();
+    } catch (error) {
+      this.logger.error("Failed to restart kirbot", error);
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        text: `Failed to rebuild or restart kirbot: ${formatError(error)}`
+      });
+    }
+  }
+
   private findActiveTurnByTopic(chatId: number, topicId: number): TurnContext | undefined {
     return this.#lifecycle.getActiveTurnByTopic(chatId, topicId);
   }
@@ -2128,16 +2165,21 @@ function buildTurnCollaborationMode(
 }
 
 function replaceMessageText(message: UserTurnMessage, text: string): UserTurnMessage {
+  const preservedInput = message.input.filter((item): item is Exclude<UserTurnInput, Extract<UserTurnInput, { type: "text" }>> => item.type !== "text");
+  const input: UserTurnInput[] = [];
+  if (text.length > 0) {
+    input.push({
+      type: "text",
+      text,
+      text_elements: []
+    });
+  }
+  input.push(...preservedInput);
+
   return {
     ...message,
     text,
-    input: [
-      {
-        type: "text",
-        text,
-        text_elements: []
-      }
-    ]
+    input
   };
 }
 

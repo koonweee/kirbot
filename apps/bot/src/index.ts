@@ -3,6 +3,8 @@ import type { Message } from "grammy/types";
 
 import { createKirbotRuntime, type TelegramApi, type TelegramCommandApi } from "@kirbot/core";
 import { loadConfig } from "./config";
+import { buildImageDocumentMessageInput, buildPhotoMessageInput } from "./message-input";
+import { restartKirbotProductionSession } from "./restart-kirbot";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -42,7 +44,8 @@ async function main(): Promise<void> {
   const runtime = await createKirbotRuntime({
     config,
     telegramApi,
-    telegramCommandApi
+    telegramCommandApi,
+    restartKirbot: restartKirbotProductionSession
   });
   const { bridge } = runtime;
   bot.catch((error) => {
@@ -79,25 +82,21 @@ async function main(): Promise<void> {
       return;
     }
 
-    const photo = pickLargestPhoto(context.message.photo);
     const topicId = getMessageTopicId(context.message);
+    const input = buildPhotoMessageInput(context.message.caption, context.message.photo);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
       topicId,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
-      text: context.message.caption ?? "",
-      input: buildImageMessageInput(context.message.caption ?? "", {
-        fileId: photo.file_id,
-        fileName: "telegram-photo.jpg",
-        mimeType: "image/jpeg"
-      })
+      text: input.text,
+      input: input.input
     });
   });
 
   bot.on("message:document", async (context) => {
-    if (!context.message.from || !isImageDocument(context.message.document)) {
+    if (!context.message.from) {
       return;
     }
 
@@ -105,6 +104,11 @@ async function main(): Promise<void> {
       return;
     }
 
+    const input = buildImageDocumentMessageInput(context.message.caption, context.message.document);
+    if (!input) {
+      return;
+    }
+
     const topicId = getMessageTopicId(context.message);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
@@ -112,12 +116,8 @@ async function main(): Promise<void> {
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
-      text: context.message.caption ?? "",
-      input: buildImageMessageInput(context.message.caption ?? "", {
-        fileId: context.message.document.file_id,
-        ...(context.message.document.file_name ? { fileName: context.message.document.file_name } : {}),
-        ...(context.message.document.mime_type ? { mimeType: context.message.document.mime_type } : {})
-      })
+      text: input.text,
+      input: input.input
     });
   });
 
@@ -168,46 +168,6 @@ async function main(): Promise<void> {
   });
 
   await bot.start();
-}
-
-function buildImageMessageInput(
-  text: string,
-  image: { fileId: string; fileName?: string | null; mimeType?: string | null }
-): Array<
-  | { type: "text"; text: string; text_elements: [] }
-  | { type: "telegramImage"; fileId: string; fileName?: string | null; mimeType?: string | null }
-> {
-  const input: Array<
-    | { type: "text"; text: string; text_elements: [] }
-    | { type: "telegramImage"; fileId: string; fileName?: string | null; mimeType?: string | null }
-  > = [];
-  if (text.trim().length > 0) {
-    input.push({
-      type: "text",
-      text,
-      text_elements: []
-    });
-  }
-  input.push({
-    type: "telegramImage",
-    fileId: image.fileId,
-    ...(image.fileName !== undefined ? { fileName: image.fileName } : {}),
-    ...(image.mimeType !== undefined ? { mimeType: image.mimeType } : {})
-  });
-  return input;
-}
-
-function pickLargestPhoto(photos: Message.PhotoMessage["photo"]): Message.PhotoMessage["photo"][number] {
-  const largest = photos.at(-1);
-  if (!largest) {
-    throw new Error("Telegram photo message did not include any photo sizes");
-  }
-
-  return largest;
-}
-
-function isImageDocument(document: Message.DocumentMessage["document"]): boolean {
-  return typeof document.mime_type === "string" && document.mime_type.startsWith("image/");
 }
 
 function getMessageTopicId(message: Message.ServiceMessage): number | null {

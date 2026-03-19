@@ -34,6 +34,7 @@ export type CreateKirbotRuntimeOptions = {
   logTarget?: AppLogTarget;
   fallbackLogger?: LoggerLike;
   codexApi?: BridgeCodexApi;
+  restartKirbot?: () => Promise<void>;
 };
 
 const CODEX_INITIALIZE_TIMEOUT_MS = 10_000;
@@ -69,7 +70,12 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
     options.telegramApi,
     codex,
     mediaStore,
-    appLogger
+    appLogger,
+    options.restartKirbot
+      ? {
+          restartKirbot: options.restartKirbot
+        }
+      : undefined
   );
 
   if (options.telegramCommandApi) {

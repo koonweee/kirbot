@@ -125,11 +125,12 @@ Verified by:
 
 - stop and stale-interrupt tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
-## 6. Change Global Codex Settings
+## 6. Change Global Codex Settings And Restart Kirbot
 
 User experience:
 
 - `/model`, `/fast`, and `/permissions` in the lobby change global Codex defaults for future topics.
+- `/restart` in the lobby rebuilds kirbot and restarts the detached production tmux session.
 - The same commands inside a topic change only that topic's existing Codex thread settings.
 - Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
 - Existing threads do not follow later root-level global changes automatically.
@@ -139,6 +140,7 @@ Owned by:
 
 - global slash-command routing in [`packages/kirbot-core/src/bridge.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge.ts)
 - command definitions in [`packages/kirbot-core/src/bridge/slash-commands.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/slash-commands.ts)
+- bot-side restart action wiring in [`apps/bot/src/index.ts`](/home/jtkw/kirbot/apps/bot/src/index.ts) and [`apps/bot/src/restart-kirbot.ts`](/home/jtkw/kirbot/apps/bot/src/restart-kirbot.ts)
 - app-server config read/write in [`packages/codex-client/src/codex.ts`](/home/jtkw/kirbot/packages/codex-client/src/codex.ts) and [`packages/codex-client/src/rpc.ts`](/home/jtkw/kirbot/packages/codex-client/src/rpc.ts)
 
 Verified by:
@@ -219,6 +221,9 @@ Verified by:
 User experience:
 
 - A Telegram photo or image document is forwarded to Codex as turn input.
+- If the image caption triggers a turn-producing slash flow such as `/plan`,
+  `/implement`, or a custom topic command, kirbot preserves the attached image
+  when it rewrites the submitted text for Codex.
 - kirbot stores a temporary local copy only for as long as the turn needs it.
 - If submission fails or the turn reaches a terminal state, those temporary files are cleaned up.
 
@@ -230,7 +235,7 @@ Owned by:
 
 Verified by:
 
-- image retention and cleanup tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- image retention, cleanup, and slash-caption image routing tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## 11. Recover Across Restarts And Topic Closure
 

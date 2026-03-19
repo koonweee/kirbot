@@ -100,6 +100,10 @@ describe("TelegramCommandSync", () => {
             description: "Start an empty session in a directory"
           },
           {
+            command: "restart",
+            description: "Rebuild and restart kirbot"
+          },
+          {
             command: "implement",
             description: "Implement the plan in this topic"
           },
@@ -139,6 +143,10 @@ describe("TelegramCommandSync", () => {
           {
             command: "start",
             description: "Start an empty session in a directory"
+          },
+          {
+            command: "restart",
+            description: "Rebuild and restart kirbot"
           },
           {
             command: "implement",

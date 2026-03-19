@@ -752,6 +752,7 @@ describe("TelegramCodexBridge", () => {
   let bridge: TelegramCodexBridge;
   let config: AppConfig;
   let mediaStore: TemporaryImageStore;
+  let restartKirbot: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), "telegram-codex-bridge-service-"));
@@ -787,7 +788,10 @@ describe("TelegramCodexBridge", () => {
 
     mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
     await mediaStore.cleanupStaleFiles();
-    bridge = new TelegramCodexBridge(config, database, telegram, codex, mediaStore);
+    restartKirbot = vi.fn(async () => undefined);
+    bridge = new TelegramCodexBridge(config, database, telegram, codex, mediaStore, console, {
+      restartKirbot
+    });
   });
 
   afterEach(async () => {
@@ -951,6 +955,41 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.createdTopics).toHaveLength(0);
     expect(codex.createdThreads).toHaveLength(0);
     expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
+  });
+
+  it("rebuilds and restarts kirbot from root /restart", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 12,
+      updateId: 122,
+      userId: 42,
+      text: "/restart"
+    });
+
+    expect(restartKirbot).toHaveBeenCalledTimes(1);
+    expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Rebuilding kirbot and restarting the production session…");
+  });
+
+  it("surfaces restart failures from root /restart", async () => {
+    restartKirbot.mockRejectedValueOnce(new Error("npm run build exited with code 1"));
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 12,
+      updateId: 123,
+      userId: 42,
+      text: "/restart"
+    });
+
+    expect(restartKirbot).toHaveBeenCalledTimes(1);
+    expect(telegram.sentMessages.slice(-2).map((message) => message.text)).toEqual([
+      "Rebuilding kirbot and restarting the production session…",
+      "Failed to rebuild or restart kirbot: npm run build exited with code 1"
+    ]);
   });
 
   it("creates a new empty topic from root /start with a validated cwd override", async () => {
@@ -1139,6 +1178,49 @@ describe("TelegramCodexBridge", () => {
 
     const session = await database.getSessionByTopic(-1001, 101);
     expect(session?.preferredMode).toBe("plan");
+  });
+
+  it("preserves image attachments for root /plan turns started from an image caption", async () => {
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "/plan sketch the migration",
+      input: [
+        {
+          type: "text",
+          text: "/plan sketch the migration",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-root-plan",
+          fileName: "plan.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(telegram.createdTopics).toMatchObject([
+      {
+        chatId: -1001,
+        name: "sketch the migration"
+      }
+    ]);
+    expect(telegram.downloads).toEqual([{ fileId: "photo-root-plan" }]);
+    expect(codex.turns.at(-1)).toMatchObject({
+      threadId: "thread-1",
+      text: "sketch the migration",
+      turnId: "turn-1"
+    });
+    expect(codex.turns.at(-1)?.input[0]).toEqual({
+      type: "text",
+      text: "sketch the migration",
+      text_elements: []
+    });
+    expect(codex.turns.at(-1)?.input[1]?.type).toBe("localImage");
   });
 
   it("creates a new empty plan-mode topic from bare root /plan", async () => {
@@ -2072,6 +2154,68 @@ describe("TelegramCodexBridge", () => {
       ["/implement", "/model"],
       ["/fast", "/permissions"]
     ]);
+  });
+
+  it("preserves image attachments for topic /plan turns started from an image caption", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 19,
+      updateId: 29,
+      userId: 42,
+      text: "Set up the topic"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 20,
+      updateId: 30,
+      userId: 42,
+      text: "/plan sketch the migration",
+      input: [
+        {
+          type: "text",
+          text: "/plan sketch the migration",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-topic-plan",
+          fileName: "topic-plan.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(telegram.downloads.at(-1)).toEqual({ fileId: "photo-topic-plan" });
+    expect(codex.turns.at(-1)).toMatchObject({
+      threadId: "thread-1",
+      text: "sketch the migration",
+      turnId: "turn-2"
+    });
+    expect(codex.turns.at(-1)?.input[0]).toEqual({
+      type: "text",
+      text: "sketch the migration",
+      text_elements: []
+    });
+    expect(codex.turns.at(-1)?.input[1]?.type).toBe("localImage");
+    const session = await database.getSessionByTopic(-1001, 783);
+    expect(session?.preferredMode).toBe("plan");
   });
 
   it("retains Telegram images until the turn completes", async () => {
@@ -4367,6 +4511,90 @@ describe("TelegramCodexBridge", () => {
     expect(await database.getSessionByTopic(-1001, 787)).toBeDefined();
   });
 
+  it("preserves image attachments when a custom command starts a turn from an unmapped topic", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 788,
+      messageId: 406,
+      updateId: 506,
+      userId: 42,
+      text: "/standup blockers from yesterday",
+      input: [
+        {
+          type: "text",
+          text: "/standup blockers from yesterday",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-custom-command-turn",
+          fileName: "standup.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(codex.turns.at(-1)?.text).toBe("Draft the daily update.\n\nblockers from yesterday");
+    expect(codex.turns.at(-1)?.input[0]).toEqual({
+      type: "text",
+      text: "Draft the daily update.\n\nblockers from yesterday",
+      text_elements: []
+    });
+    expect(codex.turns.at(-1)?.input[1]?.type).toBe("localImage");
+    expect(await database.getSessionByTopic(-1001, 788)).toBeDefined();
+  });
+
+  it("preserves image attachments when a custom command steers an active turn", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the daily update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 789,
+      messageId: 407,
+      updateId: 507,
+      userId: 42,
+      text: "Start the session"
+    });
+
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 789,
+      messageId: 408,
+      updateId: 508,
+      userId: 42,
+      text: "/standup blockers from yesterday",
+      input: [
+        {
+          type: "text",
+          text: "/standup blockers from yesterday",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-custom-command-steer",
+          fileName: "standup-steer.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(codex.steerCalls.at(-1)?.text).toBe("Draft the daily update.\n\nblockers from yesterday");
+    expect(codex.steerCalls.at(-1)?.input[0]).toEqual({
+      type: "text",
+      text: "Draft the daily update.\n\nblockers from yesterday",
+      text_elements: []
+    });
+    expect(codex.steerCalls.at(-1)?.input[1]?.type).toBe("localImage");
+  });
+
   it("rejects custom command invocation from root chat", async () => {
     await database.createCustomCommand({
       command: "standup",
@@ -4519,6 +4747,65 @@ describe("TelegramCodexBridge", () => {
     expect(codex.turns).toHaveLength(2);
     expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
+  });
+
+  it("preserves image attachments for /implement turns started from an image caption", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 790,
+      messageId: 416,
+      updateId: 516,
+      userId: 42,
+      text: "Plan the rollout"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await database.updateSessionPreferredMode(-1001, 790, "plan");
+
+    await bridge.handleUserMessage({
+      chatId: -1001,
+      topicId: 790,
+      messageId: 417,
+      updateId: 517,
+      userId: 42,
+      text: "/implement and keep the diff small",
+      input: [
+        {
+          type: "text",
+          text: "/implement and keep the diff small",
+          text_elements: []
+        },
+        {
+          type: "telegramImage",
+          fileId: "photo-implement",
+          fileName: "implement.png",
+          mimeType: "image/png"
+        }
+      ]
+    });
+
+    expect(codex.turns.at(-1)?.text).toBe(
+      ["Implement the plan.", "", "Additional instructions:", "and keep the diff small"].join("\n")
+    );
+    expect(codex.turns.at(-1)?.input[0]).toEqual({
+      type: "text",
+      text: ["Implement the plan.", "", "Additional instructions:", "and keep the diff small"].join("\n"),
+      text_elements: []
+    });
+    expect(codex.turns.at(-1)?.input[1]?.type).toBe("localImage");
   });
 
   it("starts a default-mode implementation turn from the plan stub button", async () => {

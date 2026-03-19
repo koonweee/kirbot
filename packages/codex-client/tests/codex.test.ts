@@ -714,6 +714,66 @@ describe("CodexGateway", () => {
     });
   });
 
+  it("passes local image inputs through on turn/start", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    void gateway.sendTurn("thread-1", [
+      {
+        type: "text",
+        text: "inspect this image",
+        text_elements: []
+      },
+      {
+        type: "localImage",
+        path: "/tmp/test-image.png"
+      }
+    ]);
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "turn/start",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "inspect this image",
+            text_elements: []
+          },
+          {
+            type: "localImage",
+            path: "/tmp/test-image.png"
+          }
+        ]
+      }
+    });
+  });
+
   it("passes native turn-start overrides through when provided", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
@@ -779,6 +839,57 @@ describe("CodexGateway", () => {
         sandboxPolicy: {
           type: "dangerFullAccess"
         }
+      }
+    });
+  });
+
+  it("passes local image inputs through on turn/steer", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    void gateway.steerTurn("thread-1", "turn-1", [
+      {
+        type: "localImage",
+        path: "/tmp/test-image.png"
+      }
+    ]);
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "turn/steer",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [
+          {
+            type: "localImage",
+            path: "/tmp/test-image.png"
+          }
+        ]
       }
     });
   });

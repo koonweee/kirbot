@@ -10,7 +10,9 @@ import {
   type AppLogEntry,
   type AppLogTarget,
   type BridgeCodexApi,
-  type KirbotRuntime
+  type KirbotRuntime,
+  type UserTurnInput,
+  type UserTurnMessage
 } from "@kirbot/core";
 import {
   RecordingTelegram,
@@ -37,11 +39,20 @@ export type PressButtonInput = {
   buttonText?: string;
 };
 
+export type HarnessImageInput = {
+  caption?: string;
+  bytes: Uint8Array;
+  fileName?: string;
+  mimeType?: string;
+};
+
 export type TelegramHarness = {
   start(): Promise<void>;
   stop(): Promise<void>;
   sendRootText(text: string): Promise<{ messageId: number; updateId: number }>;
+  sendRootImage(input: HarnessImageInput): Promise<{ messageId: number; updateId: number }>;
   sendTopicText(topicId: number, text: string): Promise<{ messageId: number; updateId: number }>;
+  sendTopicImage(topicId: number, input: HarnessImageInput): Promise<{ messageId: number; updateId: number }>;
   pressButton(input: PressButtonInput): Promise<void>;
   waitForIdle(options?: WaitForIdleOptions): Promise<void>;
   getTranscript(): HarnessTranscript;
@@ -61,6 +72,7 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
   let nextMessageId = 1;
   let nextUpdateId = 1;
   let nextCallbackQueryId = 1;
+  let nextFileId = 1;
 
   const ensureStarted = async (): Promise<KirbotRuntime> => {
     if (runtime) {
@@ -108,6 +120,34 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
         updateId: message.updateId
       };
     },
+    sendRootImage: async (input: HarnessImageInput) => {
+      const activeRuntime = await ensureStarted();
+      const fileId = `harness-image-${nextFileId++}`;
+      const message = buildUserImageMessage(
+        nextMessageId++,
+        nextUpdateId++,
+        config.telegram.userId,
+        input.caption ?? "",
+        fileId,
+        input,
+        null
+      );
+      telegram.recordUserImageMessage({
+        chatId: message.chatId,
+        topicId: null,
+        messageId: message.messageId,
+        text: message.text,
+        fileId,
+        bytes: input.bytes,
+        ...(input.fileName ? { fileName: input.fileName } : {})
+      });
+      harnessLogger.info(`Sending root image message ${message.messageId}`);
+      await activeRuntime.bridge.handleUserMessage(message);
+      return {
+        messageId: message.messageId,
+        updateId: message.updateId
+      };
+    },
     sendTopicText: async (topicId: number, text: string) => {
       const activeRuntime = await ensureStarted();
       const message = buildUserMessage(nextMessageId++, nextUpdateId++, config.telegram.userId, text, topicId);
@@ -119,6 +159,34 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       });
       harnessLogger.info(`Sending topic ${topicId} message ${message.messageId}`);
       await activeRuntime.bridge.handleUserTextMessage(message);
+      return {
+        messageId: message.messageId,
+        updateId: message.updateId
+      };
+    },
+    sendTopicImage: async (topicId: number, input: HarnessImageInput) => {
+      const activeRuntime = await ensureStarted();
+      const fileId = `harness-image-${nextFileId++}`;
+      const message = buildUserImageMessage(
+        nextMessageId++,
+        nextUpdateId++,
+        config.telegram.userId,
+        input.caption ?? "",
+        fileId,
+        input,
+        topicId
+      );
+      telegram.recordUserImageMessage({
+        chatId: message.chatId,
+        topicId,
+        messageId: message.messageId,
+        text: message.text,
+        fileId,
+        bytes: input.bytes,
+        ...(input.fileName ? { fileName: input.fileName } : {})
+      });
+      harnessLogger.info(`Sending topic ${topicId} image message ${message.messageId}`);
+      await activeRuntime.bridge.handleUserMessage(message);
       return {
         messageId: message.messageId,
         updateId: message.updateId
@@ -244,14 +312,7 @@ function buildUserMessage(
   userId: number,
   text: string,
   topicId: number | null = null
-): {
-  chatId: number;
-  topicId: number | null;
-  messageId: number;
-  updateId: number;
-  userId: number;
-  text: string;
-} {
+): Omit<UserTurnMessage, "input" | "submittedInputSignature"> {
   return {
     chatId: userId,
     topicId,
@@ -260,6 +321,39 @@ function buildUserMessage(
     userId,
     text
   };
+}
+
+function buildUserImageMessage(
+  messageId: number,
+  updateId: number,
+  userId: number,
+  text: string,
+  fileId: string,
+  image: HarnessImageInput,
+  topicId: number | null = null
+): UserTurnMessage {
+  return {
+    ...buildUserMessage(messageId, updateId, userId, text, topicId),
+    input: buildImageInput(text, fileId, image)
+  };
+}
+
+function buildImageInput(text: string, fileId: string, image: HarnessImageInput): UserTurnInput[] {
+  const input: UserTurnInput[] = [];
+  if (text.trim().length > 0) {
+    input.push({
+      type: "text",
+      text,
+      text_elements: []
+    });
+  }
+  input.push({
+    type: "telegramImage",
+    fileId,
+    ...(image.fileName !== undefined ? { fileName: image.fileName } : {}),
+    ...(image.mimeType !== undefined ? { mimeType: image.mimeType } : {})
+  });
+  return input;
 }
 
 function resolveCallbackData(transcript: HarnessTranscript, input: PressButtonInput): string {

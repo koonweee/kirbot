@@ -44,6 +44,8 @@ class ScriptedCodex implements BridgeCodexApi {
   finalText = "Harness reply";
   tokenUsage: ServerNotification | null = null;
   createdThreadIds: string[] = [];
+  turns: Array<{ threadId: string; turnId: string; input: UserInput[] }> = [];
+  steerCalls: Array<{ threadId: string; expectedTurnId: string; input: UserInput[] }> = [];
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
   permissionsApprovals: Array<{ id: RequestId; response: PermissionsRequestApprovalResponse }> = [];
   snapshotDelayMs = 0;
@@ -193,7 +195,7 @@ class ScriptedCodex implements BridgeCodexApi {
 
   async sendTurn(
     threadId: string,
-    _input: UserInput[],
+    input: UserInput[],
     options?: {
       collaborationMode?: unknown | null;
       overrides?: {
@@ -222,6 +224,7 @@ class ScriptedCodex implements BridgeCodexApi {
     }
 
     const turnId = `turn-${this.nextTurnId++}`;
+    this.turns.push({ threadId, turnId, input });
     if (this.behavior === "complete") {
       setTimeout(() => {
         if (this.tokenUsage) {
@@ -335,7 +338,8 @@ class ScriptedCodex implements BridgeCodexApi {
     return { id: turnId };
   }
 
-  async steerTurn(): Promise<{ turnId: string }> {
+  async steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }> {
+    this.steerCalls.push({ threadId, expectedTurnId, input });
     return { turnId: "turn-steer" };
   }
 
@@ -535,6 +539,84 @@ describe("Telegram harness", () => {
     expect(eventTypes).toContain("telegram.createForumTopic");
     expect(eventTypes).toContain("telegram.sendMessageDraft");
     expect(eventTypes).toContain("telegram.sendMessage");
+  });
+
+  it("supports root image sends and forwards them to Codex as local images", async () => {
+    const codex = new ScriptedCodex("complete");
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootImage({
+      caption: "Inspect this screenshot",
+      bytes: new TextEncoder().encode("root-image"),
+      fileName: "root.png",
+      mimeType: "image/png"
+    });
+    await harness.waitForIdle();
+
+    expect(harness.getTranscript().root.messages).toEqual([
+      {
+        actor: "user",
+        messageId: 1,
+        text: "Inspect this screenshot"
+      }
+    ]);
+    expect(codex.turns).toHaveLength(1);
+    expect(codex.turns[0]?.input[0]).toEqual({
+      type: "text",
+      text: "Inspect this screenshot",
+      text_elements: []
+    });
+    expect(codex.turns[0]?.input[1]?.type).toBe("localImage");
+  });
+
+  it("supports topic image sends and records captionless images in the transcript", async () => {
+    const codex = new ScriptedCodex("complete");
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Inspect the repo");
+    await harness.waitForIdle();
+    const topicId = harness.getTranscript().topics[0]?.topicId;
+    expect(topicId).toBeDefined();
+
+    await harness.sendTopicImage(topicId!, {
+      bytes: new TextEncoder().encode("topic-image"),
+      fileName: "topic.png",
+      mimeType: "image/png"
+    });
+    await harness.waitForIdle();
+
+    expect(codex.turns.at(-1)?.input).toEqual([
+      {
+        type: "localImage",
+        path: expect.any(String)
+      }
+    ]);
+    expect(harness.getTranscript().topics[0]?.messages.some((message) => message.actor === "user" && message.text === "[Image]")).toBe(true);
+  });
+
+  it("supports image follow-ups while a turn is active", async () => {
+    const codex = new ScriptedCodex("commandApproval");
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Run the tests");
+    const topicId = await waitForTopicId(harness);
+
+    await harness.sendTopicImage(topicId, {
+      bytes: new TextEncoder().encode("follow-up-image"),
+      fileName: "follow-up.png",
+      mimeType: "image/png"
+    });
+
+    await waitForCondition(() => codex.steerCalls.length === 1);
+    expect(codex.steerCalls[0]?.input).toEqual([
+      {
+        type: "localImage",
+        path: expect.any(String)
+      }
+    ]);
   });
 
   it("allows button presses to resolve Codex approval requests", async () => {
@@ -753,4 +835,18 @@ function getHarnessStartupLog(harness: TelegramHarness): string {
   const startupLog = harness.getLogs().find((entry) => entry.source === "harness" && entry.message.startsWith("Started harness"));
   expect(startupLog).toBeDefined();
   return startupLog!.message;
+}
+
+async function waitForTopicId(harness: TelegramHarness, timeoutMs = 2_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const topicId = harness.getTranscript().topics[0]?.topicId;
+    if (topicId !== undefined) {
+      return topicId;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error("Timed out waiting for topic id");
 }

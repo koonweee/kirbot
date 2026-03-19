@@ -71,6 +71,12 @@ const harness = await createTelegramHarness();
 await harness.start();
 
 await harness.sendRootText("Inspect the repo");
+await harness.sendRootImage({
+  caption: "Check this screenshot",
+  bytes: new Uint8Array([1, 2, 3]),
+  fileName: "screenshot.png",
+  mimeType: "image/png"
+});
 await harness.waitForIdle();
 
 console.log(harness.getTranscript());
@@ -84,7 +90,9 @@ Primary API:
 
 - `start()` / `stop()`
 - `sendRootText(text)`
+- `sendRootImage({ caption?, bytes, fileName?, mimeType? })`
 - `sendTopicText(topicId, text)`
+- `sendTopicImage(topicId, { caption?, bytes, fileName?, mimeType? })`
 - `pressButton({ messageId, callbackData | buttonText })`
 - `waitForIdle({ timeoutMs?, settleMs? })`
 - `getTranscript()`
@@ -110,6 +118,12 @@ Use the outputs for different questions:
 Drafts are intentionally not merged into durable transcript history. They stay
 visible in raw events and in the transcript draft section so streamed status can
 be inspected without pretending those drafts were permanent messages.
+
+Image sends are injected at the same bridge seam as text sends. The harness
+registers downloadable file bytes with the recording Telegram transport so the
+real kirbot media-store path can materialize `localImage` inputs during tests.
+In the transcript, user image messages show the caption when present, otherwise
+`[Image]`.
 
 ## Extending The Harness
 

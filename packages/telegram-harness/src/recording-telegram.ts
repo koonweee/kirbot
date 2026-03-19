@@ -104,6 +104,11 @@ type TranscriptStore = {
   drafts: Map<string, HarnessDraftState>;
 };
 
+type RegisteredTelegramFile = {
+  bytes: Uint8Array;
+  filePath?: string;
+};
+
 export class RecordingTelegram implements TelegramApi {
   readonly #events: HarnessTelegramEvent[] = [];
   readonly #transcript: TranscriptStore = {
@@ -111,6 +116,7 @@ export class RecordingTelegram implements TelegramApi {
     topics: new Map(),
     drafts: new Map()
   };
+  readonly #files = new Map<string, RegisteredTelegramFile>();
 
   #topicCounter = 100;
   #messageCounter = 500;
@@ -133,6 +139,27 @@ export class RecordingTelegram implements TelegramApi {
       actor: "user",
       messageId: message.messageId,
       text: message.text
+    });
+  }
+
+  recordUserImageMessage(message: {
+    chatId: number;
+    topicId: number | null;
+    messageId: number;
+    text: string;
+    fileId: string;
+    bytes: Uint8Array;
+    fileName?: string;
+  }): void {
+    this.#touch();
+    this.#files.set(message.fileId, {
+      bytes: new Uint8Array(message.bytes),
+      ...(message.fileName ? { filePath: message.fileName } : {})
+    });
+    this.#getMessageStore(message.topicId).push({
+      actor: "user",
+      messageId: message.messageId,
+      text: message.text.trim().length > 0 ? message.text : "[Image]"
     });
   }
 
@@ -353,7 +380,15 @@ export class RecordingTelegram implements TelegramApi {
   }
 
   async downloadFile(fileId: string): Promise<{ bytes: Uint8Array; filePath?: string }> {
-    throw new Error(`Harness does not support Telegram file downloads yet: ${fileId}`);
+    const file = this.#files.get(fileId);
+    if (!file) {
+      throw new Error(`Harness does not have a registered Telegram file for ${fileId}`);
+    }
+
+    return {
+      bytes: new Uint8Array(file.bytes),
+      ...(file.filePath ? { filePath: file.filePath } : {})
+    };
   }
 
   #recordEvent(event: HarnessTelegramEvent): void {
