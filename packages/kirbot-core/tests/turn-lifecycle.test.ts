@@ -5,7 +5,11 @@ import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import { TOPIC_IMPLEMENT_CALLBACK_DATA } from "../src/bridge/presentation";
-import { TelegramMessenger, type TelegramApi } from "../src/telegram-messenger";
+import {
+  TelegramMessenger,
+  type TelegramApi,
+  type TelegramCreateForumTopicOptions
+} from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
 
 function longText(paragraph: string, count: number): string {
@@ -79,7 +83,15 @@ class FakeTelegram implements TelegramApi {
   edits: Array<{ chatId: number; messageId: number; text: string }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
 
-  async createForumTopic(_chatId: number, _name: string): Promise<{ message_thread_id: number; name: string }> {
+  async getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>> {
+    return [];
+  }
+
+  async createForumTopic(
+    _chatId: number,
+    _name: string,
+    _options?: TelegramCreateForumTopicOptions
+  ): Promise<{ message_thread_id: number; name: string }> {
     throw new Error("Not implemented");
   }
 

@@ -17,7 +17,7 @@ Each flow has three lenses:
 User experience:
 
 - The user sends a normal message in the root private chat or lobby.
-- kirbot creates a Telegram topic for that request.
+- kirbot creates a Telegram topic with a random icon for that request.
 - kirbot creates a new Codex thread for that topic.
 - kirbot mirrors the initial prompt into the new topic in a labeled preformatted block when there is prompt text to show.
 - The first Codex turn starts immediately in the new topic.

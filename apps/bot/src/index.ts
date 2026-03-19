@@ -8,7 +8,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const bot = new Bot(config.telegram.botToken);
   const telegramApi: TelegramApi = {
-    createForumTopic: (chatId, name) => bot.api.createForumTopic(chatId, name),
+    getForumTopicIconStickers: () => bot.api.getForumTopicIconStickers(),
+    createForumTopic: (chatId, name, options) => bot.api.createForumTopic(chatId, name, options),
     sendMessage: (chatId, text, options) => bot.api.sendMessage(chatId, text, options),
     sendMessageDraft: (chatId, draftId, text, options) => bot.api.sendMessageDraft(chatId, draftId, text, options),
     sendChatAction: (chatId, action, options) => bot.api.sendChatAction(chatId, action, options),

@@ -31,8 +31,29 @@ export type TelegramDraftOptions = {
 
 export type TelegramChatAction = "typing" | "upload_document";
 
+export const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
+  0x6fb9f0,
+  0xffd67e,
+  0xcb86db,
+  0x8eee98,
+  0xff93b2,
+  0xfb6f5f
+] as const;
+
+export type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
+
+export type TelegramCreateForumTopicOptions = {
+  icon_color?: TelegramForumTopicIconColor;
+  icon_custom_emoji_id?: string;
+};
+
 export interface TelegramApi {
-  createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }>;
+  getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>>;
+  createForumTopic(
+    chatId: number,
+    name: string,
+    options?: TelegramCreateForumTopicOptions
+  ): Promise<{ message_thread_id: number; name: string }>;
   sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }>;
   sendMessageDraft(chatId: number, draftId: number, text: string, options?: TelegramDraftOptions): Promise<true>;
   sendChatAction(

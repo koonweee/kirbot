@@ -4,6 +4,7 @@ import type {
   InlineKeyboardMarkup,
   TelegramApi,
   TelegramChatAction,
+  TelegramCreateForumTopicOptions,
   TelegramDraftOptions,
   TelegramSendOptions
 } from "@kirbot/core";
@@ -15,6 +16,7 @@ export type HarnessTelegramEvent =
       chatId: number;
       topicId: number;
       name: string;
+      options?: TelegramCreateForumTopicOptions;
     }
   | {
       timestamp: string;
@@ -183,7 +185,15 @@ export class RecordingTelegram implements TelegramApi {
     return null;
   }
 
-  async createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }> {
+  async getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>> {
+    return [];
+  }
+
+  async createForumTopic(
+    chatId: number,
+    name: string,
+    options?: TelegramCreateForumTopicOptions
+  ): Promise<{ message_thread_id: number; name: string }> {
     this.#topicCounter += 1;
     const topicId = this.#topicCounter;
     this.#transcript.topics.set(topicId, {
@@ -197,7 +207,8 @@ export class RecordingTelegram implements TelegramApi {
       type: "telegram.createForumTopic",
       chatId,
       topicId,
-      name
+      name,
+      ...(options ? { options } : {})
     });
     return {
       message_thread_id: topicId,

@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
 import {
+  TELEGRAM_FORUM_TOPIC_ICON_COLORS,
   TelegramMessenger,
   type TelegramApi,
+  type TelegramCreateForumTopicOptions,
   type TelegramDraftOptions,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
@@ -24,7 +26,15 @@ class FakeTelegram implements TelegramApi {
   }> = [];
   nextChatActionError: Error | null = null;
 
-  async createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }> {
+  async getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>> {
+    return [{ custom_emoji_id: "emoji-1" }];
+  }
+
+  async createForumTopic(
+    chatId: number,
+    name: string,
+    _options?: TelegramCreateForumTopicOptions
+  ): Promise<{ message_thread_id: number; name: string }> {
     return { message_thread_id: 1, name };
   }
 
@@ -84,6 +94,10 @@ class FakeTelegram implements TelegramApi {
 }
 
 describe("TelegramMessenger", () => {
+  it("exports the supported forum topic icon colors", () => {
+    expect(TELEGRAM_FORUM_TOPIC_ICON_COLORS).toEqual([0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f]);
+  });
+
   it("sends messages with topic and entities", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);

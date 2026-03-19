@@ -15,6 +15,7 @@ import {
   classifySteerError,
   formatError
 } from "./bridge/error-handling";
+import { RandomTopicIconPicker, type TopicIconPicker } from "./bridge/topic-icons";
 import { TemporaryImageStore, type PreparedImageFiles } from "./media-store";
 import { buildUserInputSignature } from "./bridge/input-signature";
 import { getNotificationTurnId } from "./bridge/notifications";
@@ -92,6 +93,7 @@ export class TelegramCodexBridge {
   readonly #messenger: TelegramMessenger;
   readonly #lifecycle: TurnLifecycleCoordinator;
   readonly #requestCoordinator: BridgeRequestCoordinator;
+  readonly #topicIconPicker: TopicIconPicker;
 
   constructor(
     private readonly config: AppConfig,
@@ -99,9 +101,13 @@ export class TelegramCodexBridge {
     private readonly telegram: TelegramApi,
     private readonly codex: BridgeCodexApi,
     private readonly mediaStore: TemporaryImageStore,
-    private readonly logger: LoggerLike = console
+    private readonly logger: LoggerLike = console,
+    options?: {
+      topicIconPicker?: TopicIconPicker;
+    }
   ) {
     this.#messenger = new TelegramMessenger(telegram, logger);
+    this.#topicIconPicker = options?.topicIconPicker ?? new RandomTopicIconPicker(telegram, logger);
     this.#lifecycle = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
       messenger: this.#messenger,
@@ -551,7 +557,11 @@ export class TelegramCodexBridge {
 
   private async startSessionFromRootMessage(message: UserTurnMessage): Promise<void> {
     const title = deriveTopicTitle(message.text);
-    const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
+    const forumTopic = await this.telegram.createForumTopic(
+      message.chatId,
+      title,
+      await this.#topicIconPicker.pickCreateForumTopicOptions()
+    );
     await this.startSessionInTopic(
       {
         ...message,
@@ -567,7 +577,11 @@ export class TelegramCodexBridge {
   private async startPlanSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
     const trimmedPrompt = promptText.trim();
     const title = trimmedPrompt ? deriveTopicTitle(trimmedPrompt) : DEFAULT_NEW_PLAN_SESSION_TITLE;
-    const forumTopic = await this.telegram.createForumTopic(message.chatId, title);
+    const forumTopic = await this.telegram.createForumTopic(
+      message.chatId,
+      title,
+      await this.#topicIconPicker.pickCreateForumTopicOptions()
+    );
     const topicMessage = {
       ...message,
       topicId: forumTopic.message_thread_id

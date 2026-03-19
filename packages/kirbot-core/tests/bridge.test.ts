@@ -17,7 +17,12 @@ import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import { JsonRpcMethodError, type AppServerEvent } from "@kirbot/codex-client";
-import type { TelegramApi, TelegramSendOptions } from "../src/telegram-messenger";
+import {
+  TELEGRAM_FORUM_TOPIC_ICON_COLORS,
+  type TelegramApi,
+  type TelegramCreateForumTopicOptions,
+  type TelegramSendOptions
+} from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import { TOPIC_IMPLEMENT_CALLBACK_DATA } from "../src/bridge/presentation";
@@ -306,7 +311,9 @@ class FakeTelegram implements TelegramApi {
     action: "typing" | "upload_document";
     options?: { message_thread_id?: number };
   }> = [];
-  createdTopics: Array<{ chatId: number; name: string }> = [];
+  topicIconStickers: Array<{ custom_emoji_id?: string }> = [];
+  nextGetForumTopicIconStickersError: Error | null = null;
+  createdTopics: Array<{ chatId: number; name: string; options?: TelegramCreateForumTopicOptions }> = [];
   sentMessages: Array<{
     messageId: number;
     chatId: number;
@@ -334,8 +341,22 @@ class FakeTelegram implements TelegramApi {
   deletions: Array<{ chatId: number; messageId: number }> = [];
   downloads: Array<{ fileId: string }> = [];
 
-  async createForumTopic(chatId: number, name: string): Promise<{ message_thread_id: number; name: string }> {
-    this.createdTopics.push({ chatId, name });
+  async getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>> {
+    if (this.nextGetForumTopicIconStickersError) {
+      const error = this.nextGetForumTopicIconStickersError;
+      this.nextGetForumTopicIconStickersError = null;
+      throw error;
+    }
+
+    return this.topicIconStickers;
+  }
+
+  async createForumTopic(
+    chatId: number,
+    name: string,
+    options?: TelegramCreateForumTopicOptions
+  ): Promise<{ message_thread_id: number; name: string }> {
+    this.createdTopics.push(options ? { chatId, name, options } : { chatId, name });
     this.topicCounter += 1;
     return { message_thread_id: this.topicCounter, name };
   }
@@ -513,6 +534,47 @@ describe("TelegramCodexBridge", () => {
     expect(session?.codexThreadId).toBe("thread-1");
   });
 
+  it("assigns a random custom emoji topic icon when Telegram provides forum topic icons", async () => {
+    telegram.topicIconStickers = [{ custom_emoji_id: "emoji-1" }];
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(telegram.createdTopics).toMatchObject([
+      {
+        chatId: -1001,
+        name: "Fix the failing deployment tests",
+        options: {
+          icon_custom_emoji_id: "emoji-1"
+        }
+      }
+    ]);
+  });
+
+  it("falls back to a built-in topic icon color when forum topic icon lookup fails", async () => {
+    telegram.nextGetForumTopicIconStickersError = new Error("icon lookup failed");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(telegram.createdTopics).toHaveLength(1);
+    expect(TELEGRAM_FORUM_TOPIC_ICON_COLORS).toContain(
+      telegram.createdTopics[0]?.options?.icon_color ?? -1
+    );
+  });
+
   it("continues session startup when sending the initial prompt mirror fails", async () => {
     telegram.nextSendMessageError = new Error("mirror failed");
 
@@ -562,7 +624,7 @@ describe("TelegramCodexBridge", () => {
       text: "/plan sketch the migration"
     });
 
-    expect(telegram.createdTopics).toEqual([
+    expect(telegram.createdTopics).toMatchObject([
       {
         chatId: -1001,
         name: "sketch the migration"
@@ -616,7 +678,7 @@ describe("TelegramCodexBridge", () => {
       text: "/plan"
     });
 
-    expect(telegram.createdTopics).toEqual([
+    expect(telegram.createdTopics).toMatchObject([
       {
         chatId: -1001,
         name: "New Plan Session"
