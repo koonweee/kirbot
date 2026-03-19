@@ -31,6 +31,7 @@ const FILE_CHANGE_PATH_PREVIEW_LIMIT = 8;
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
 const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
 const COMMENTARY_LOGS_LABEL = "Logs";
+const MAX_MINI_APP_REPLY_MARKUP_JSON_BYTES = 9_500;
 export const TOPIC_IMPLEMENT_CALLBACK_DATA = "topic:implement";
 
 export type TurnStatusState =
@@ -60,6 +61,16 @@ export type CompletionFooterDetails = {
 };
 
 type StructuredFailureEntry = Extract<ActivityLogEntry, { kind: "structuredFailure" }>;
+
+export type ArtifactMessage = {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+};
+
+export type ArtifactPublication = {
+  attachedButton: TelegramInlineKeyboardButton | null;
+  standaloneMessages: ArtifactMessage[];
+};
 
 export function deriveTopicTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
@@ -324,9 +335,15 @@ export function buildResponseArtifactButton(publicUrl: string, markdownText: str
 }
 
 export function buildArtifactReplyMarkup(buttons: TelegramInlineKeyboardButton[]): InlineKeyboardMarkup {
-  return {
+  const replyMarkup = {
     inline_keyboard: [buttons]
   };
+
+  if (measureReplyMarkupJsonBytes(replyMarkup) > MAX_MINI_APP_REPLY_MARKUP_JSON_BYTES) {
+    throw new Error("mini_app_artifact_too_large");
+  }
+
+  return replyMarkup;
 }
 
 export function buildCommentaryArtifactStubMessage(replyMarkup: InlineKeyboardMarkup): {
@@ -348,6 +365,67 @@ export function buildOversizeCommentaryArtifactMessage(): { text: string } {
 export function buildOversizeResponseArtifactMessage(): { text: string } {
   return {
     text: "Response artifact was too large to encode."
+  };
+}
+
+export function buildCommentaryArtifactPublication(
+  publicUrl: string,
+  entries: ActivityLogEntry[],
+  options?: { attachToAssistant?: boolean }
+): ArtifactPublication {
+  if (entries.length === 0) {
+    return {
+      attachedButton: null,
+      standaloneMessages: []
+    };
+  }
+
+  const chunks = buildCommentaryArtifactChunks(publicUrl, entries);
+  if ((options?.attachToAssistant ?? false) && chunks.length === 1) {
+    return {
+      attachedButton: buildCommentaryArtifactButton(publicUrl, chunks[0] ?? []),
+      standaloneMessages: []
+    };
+  }
+
+  return {
+    attachedButton: null,
+    standaloneMessages: chunks.map((chunk, index) =>
+      buildArtifactAvailabilityMessage(
+        buildCommentaryArtifactButton(publicUrl, chunk),
+        buildArtifactAvailabilityText("Commentary", index, chunks.length, "available")
+      )
+    )
+  };
+}
+
+export function buildResponseArtifactPublication(
+  publicUrl: string,
+  markdownText: string
+): ArtifactPublication {
+  const chunks = buildMarkdownArtifactChunks({
+    publicUrl,
+    artifactType: MiniAppArtifactType.Response,
+    title: "Response",
+    buttonText: "Response",
+    markdownText,
+    splitKind: "paragraphs"
+  });
+  if (chunks.length === 1) {
+    return {
+      attachedButton: buildResponseArtifactButton(publicUrl, chunks[0] ?? ""),
+      standaloneMessages: []
+    };
+  }
+
+  return {
+    attachedButton: null,
+    standaloneMessages: chunks.map((chunk, index) =>
+      buildArtifactAvailabilityMessage(
+        buildResponseArtifactButton(publicUrl, chunk),
+        buildArtifactAvailabilityText("Response", index, chunks.length, "available")
+      )
+    )
   };
 }
 
@@ -399,6 +477,43 @@ export function buildOversizePlanArtifactMessage(): { text: string } {
   return {
     text: "Plan artifact was too large to encode."
   };
+}
+
+export function buildPlanArtifactMessages(publicUrl: string, markdownText: string): ArtifactMessage[] {
+  const implementButton: TelegramInlineKeyboardButton = {
+    text: "Implement",
+    callback_data: TOPIC_IMPLEMENT_CALLBACK_DATA
+  };
+  const chunks = buildMarkdownArtifactChunks({
+    publicUrl,
+    artifactType: MiniAppArtifactType.Plan,
+    title: "Plan",
+    buttonText: "Plan",
+    markdownText,
+    splitKind: "lines",
+    trailingButtons: [implementButton]
+  });
+
+  return chunks.map((chunk, index) => {
+    const planButton = buildMarkdownArtifactButton({
+      publicUrl,
+      artifact: {
+        v: 1,
+        type: MiniAppArtifactType.Plan,
+        title: "Plan",
+        markdownText: chunk
+      },
+      buttonText: "Plan"
+    });
+
+    return {
+      text: buildArtifactAvailabilityText("Plan", index, chunks.length, "ready"),
+      replyMarkup: buildArtifactReplyMarkup([
+        planButton,
+        ...(index === chunks.length - 1 ? [implementButton] : [])
+      ])
+    };
+  });
 }
 
 function buildMarkdownArtifactButton(input: {
@@ -475,6 +590,10 @@ export function buildActivityLogEntryForItemCompleted(item: ThreadItem): Activit
 }
 
 function buildCommentaryMarkdown(entries: ActivityLogEntry[]): string {
+  return buildCommentaryMarkdownSections(entries).join("\n\n");
+}
+
+function buildCommentaryMarkdownSections(entries: ActivityLogEntry[]): string[] {
   const sections: string[] = [];
   let activityBuffer: Array<Exclude<ActivityLogEntry, { kind: "commentary" }>> = [];
 
@@ -506,7 +625,7 @@ function buildCommentaryMarkdown(entries: ActivityLogEntry[]): string {
   }
 
   flushActivityBuffer();
-  return sections.join("\n\n");
+  return sections;
 }
 
 function renderCollapsibleActivityLog(entries: Array<Exclude<ActivityLogEntry, { kind: "commentary" }>>): string {
@@ -516,6 +635,206 @@ function renderCollapsibleActivityLog(entries: Array<Exclude<ActivityLogEntry, {
   }
 
   return [`:::details ${COMMENTARY_LOGS_LABEL} (${entries.length})`, renderedEntries.join("\n\n"), ":::"].join("\n");
+}
+
+function measureReplyMarkupJsonBytes(replyMarkup: InlineKeyboardMarkup): number {
+  return Buffer.byteLength(JSON.stringify(replyMarkup), "utf8");
+}
+
+function buildArtifactAvailabilityMessage(button: TelegramInlineKeyboardButton, text: string): ArtifactMessage {
+  return {
+    text,
+    replyMarkup: buildArtifactReplyMarkup([button])
+  };
+}
+
+function buildArtifactAvailabilityText(
+  label: "Commentary" | "Response" | "Plan",
+  index: number,
+  total: number,
+  state: "available" | "ready"
+): string {
+  if (total <= 1) {
+    return label === "Plan" ? "Plan is ready" : `${label} is available.`;
+  }
+
+  return `${label} part ${index + 1} of ${total} is ${state}.`;
+}
+
+function buildCommentaryArtifactChunks(publicUrl: string, entries: ActivityLogEntry[]): ActivityLogEntry[][] {
+  const normalizedEntries = entries.flatMap((entry) => splitOversizedCommentaryEntry(publicUrl, entry));
+  return packSequentialItems(normalizedEntries, (chunk) => {
+    buildArtifactReplyMarkup([buildCommentaryArtifactButton(publicUrl, chunk)]);
+  });
+}
+
+function splitOversizedCommentaryEntry(publicUrl: string, entry: ActivityLogEntry): ActivityLogEntry[] {
+  if (entry.kind !== "commentary") {
+    return [entry];
+  }
+
+  return splitOversizedCommentaryText(publicUrl, entry.text).map((text) => ({
+    kind: "commentary" as const,
+    text
+  }));
+}
+
+function splitOversizedCommentaryText(publicUrl: string, text: string): string[] {
+  return splitOversizedTextByBudget({
+    text,
+    splitKind: "paragraphs",
+    fits(candidate) {
+      buildArtifactReplyMarkup([
+        buildCommentaryArtifactButton(publicUrl, [
+          {
+            kind: "commentary",
+            text: candidate
+          }
+        ])
+      ]);
+    }
+  });
+}
+
+function buildMarkdownArtifactChunks(input: {
+  publicUrl: string;
+  artifactType: MiniAppArtifactType;
+  title: string;
+  buttonText: string;
+  markdownText: string;
+  splitKind: "paragraphs" | "lines";
+  trailingButtons?: TelegramInlineKeyboardButton[];
+}): string[] {
+  const normalizedSections = splitOversizedTextByBudget({
+    text: input.markdownText,
+    splitKind: input.splitKind,
+    fits: (candidate) => {
+      const button = buildMarkdownArtifactButton({
+        publicUrl: input.publicUrl,
+        artifact: {
+          v: 1,
+          type: input.artifactType,
+          title: input.title,
+          markdownText: candidate
+        },
+        buttonText: input.buttonText
+      });
+      buildArtifactReplyMarkup([button, ...(input.trailingButtons ?? [])]);
+    }
+  });
+
+  return packSequentialItems(normalizedSections, (chunk) => {
+    const markdownText = chunk.join(input.splitKind === "paragraphs" ? "\n\n" : "\n");
+    const button = buildMarkdownArtifactButton({
+      publicUrl: input.publicUrl,
+      artifact: {
+        v: 1,
+        type: input.artifactType,
+        title: input.title,
+        markdownText
+      },
+      buttonText: input.buttonText
+    });
+    buildArtifactReplyMarkup([button, ...(input.trailingButtons ?? [])]);
+  }).map((chunk) => chunk.join(input.splitKind === "paragraphs" ? "\n\n" : "\n"));
+}
+
+function splitOversizedTextByBudget(input: {
+  text: string;
+  splitKind: "paragraphs" | "lines";
+  fits(candidate: string): void;
+}): string[] {
+  const sections = splitTextSections(input.text, input.splitKind);
+  return sections.flatMap((section) => splitSectionUntilItFits(section, input.fits, input.splitKind));
+}
+
+function splitSectionUntilItFits(
+  section: string,
+  fits: (candidate: string) => void,
+  splitKind: "paragraphs" | "lines"
+): string[] {
+  const normalized = section.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  try {
+    fits(normalized);
+    return [normalized];
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "mini_app_artifact_too_large") {
+      throw error;
+    }
+  }
+
+  const fallbackSplitters = splitKind === "paragraphs" ? [splitParagraphs, splitLines] : [splitLines];
+
+  for (const split of fallbackSplitters) {
+    const parts = split(normalized);
+    if (parts.length <= 1) {
+      continue;
+    }
+
+    return parts.flatMap((part) => splitSectionUntilItFits(part, fits, splitKind));
+  }
+
+  if (normalized.length <= 1) {
+    throw new Error("mini_app_artifact_too_large");
+  }
+
+  const midpoint = Math.ceil(normalized.length / 2);
+  return [
+    ...splitSectionUntilItFits(normalized.slice(0, midpoint), fits, splitKind),
+    ...splitSectionUntilItFits(normalized.slice(midpoint), fits, splitKind)
+  ];
+}
+
+function packSequentialItems<T>(items: T[], assertFits: (items: T[]) => void): T[][] {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const chunks: T[][] = [];
+  let currentChunk: T[] = [];
+
+  for (const item of items) {
+    const candidate = [...currentChunk, item];
+    try {
+      assertFits(candidate);
+      currentChunk = candidate;
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "mini_app_artifact_too_large") {
+        throw error;
+      }
+
+      if (currentChunk.length === 0) {
+        throw error;
+      }
+
+      chunks.push(currentChunk);
+      currentChunk = [item];
+      assertFits(currentChunk);
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
+}
+
+function splitTextSections(text: string, splitKind: "paragraphs" | "lines"): string[] {
+  const sections = (splitKind === "paragraphs" ? splitParagraphs(text) : splitLines(text)).map((section) => section.trim());
+  return sections.filter((section) => section.length > 0);
+}
+
+function splitParagraphs(text: string): string[] {
+  return text.split(/\n{2,}/g);
+}
+
+function splitLines(text: string): string[] {
+  return text.split("\n");
 }
 
 function renderActivityLogEntry(entry: Exclude<ActivityLogEntry, { kind: "commentary" }>): string[] {

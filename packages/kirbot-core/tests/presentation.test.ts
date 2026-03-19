@@ -2,17 +2,57 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCommentaryArtifactButton,
+  buildCommentaryArtifactPublication,
   buildPlanArtifactMessage,
+  buildPlanArtifactMessages,
   buildRenderedCommandApprovalPrompt,
   buildRenderedFileChangeApprovalPrompt,
   buildRenderedCompletedItemMessage,
   buildRenderedCompletionFooter,
+  buildResponseArtifactPublication,
   buildStatusDraft,
   renderTelegramStatusDraft,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import type { ActivityLogEntry } from "../src/turn-runtime";
+
+function getWebAppUrl(entry: { replyMarkup: { inline_keyboard: Array<Array<{ web_app?: { url?: string } }>> } }): string {
+  const url = entry.replyMarkup.inline_keyboard.flatMap((row) => row).find((button) => button.web_app?.url)?.web_app?.url;
+  expect(url).toBeTruthy();
+  return url!;
+}
+
+function buildOversizedCommentaryEntries(): ActivityLogEntry[] {
+  for (let count = 240; count <= 1_200; count += 120) {
+    const entries: ActivityLogEntry[] = Array.from({ length: count }, (_, index) => ({
+      kind: "commentary",
+      text: `Section ${index + 1}\n\n${Array.from({ length: 12 }, (__unused, wordIndex) => `token-${index}-${wordIndex}`).join(" ")}`
+    }));
+    const publication = buildCommentaryArtifactPublication("https://example.com/mini-app", entries, {
+      attachToAssistant: true
+    });
+    if (publication.attachedButton === null && publication.standaloneMessages.length > 1) {
+      return entries;
+    }
+  }
+
+  throw new Error("Failed to build oversized commentary fixture");
+}
+
+function buildOversizedResponseMarkdown(): string {
+  for (let count = 220; count <= 1_400; count += 120) {
+    const markdownText = Array.from({ length: count }, (_, index) =>
+      `Paragraph ${index + 1}\n\n${Array.from({ length: 12 }, (__unused, wordIndex) => `token-${index}-${wordIndex}`).join(" ")}`
+    ).join("\n\n");
+    const publication = buildResponseArtifactPublication("https://example.com/mini-app", markdownText);
+    if (publication.attachedButton === null && publication.standaloneMessages.length > 1) {
+      return markdownText;
+    }
+  }
+
+  throw new Error("Failed to build oversized response fixture");
+}
 
 describe("status presentation", () => {
   it("renders status drafts as state plus elapsed time only", () => {
@@ -196,6 +236,68 @@ describe("commentary artifact presentation", () => {
       markdownText:
         ":::details Logs (1)\n**File changes failed**\n```\nsrc/app.ts\nsrc/server.ts\n```\n\nFiles: `2`\n:::"
     });
+  });
+
+  it("splits oversized commentary into multiple standalone messages", () => {
+    const entries = buildOversizedCommentaryEntries();
+
+    const publication = buildCommentaryArtifactPublication("https://example.com/mini-app", entries, {
+      attachToAssistant: true
+    });
+
+    expect(publication.attachedButton).toBeNull();
+    expect(publication.standaloneMessages.length).toBeGreaterThan(1);
+
+    const reassembled = publication.standaloneMessages
+      .map((message) => {
+        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getWebAppUrl(message)).hash);
+        return decodeMiniAppArtifact(encoded!).markdownText;
+      })
+      .join("\n\n");
+
+    expect(reassembled).toContain("Section 1");
+    expect(reassembled).toContain("Section 240");
+  });
+});
+
+describe("multipart artifact presentation", () => {
+  it("splits oversized responses into multiple standalone messages", () => {
+    const markdownText = buildOversizedResponseMarkdown();
+
+    const publication = buildResponseArtifactPublication("https://example.com/mini-app", markdownText);
+
+    expect(publication.attachedButton).toBeNull();
+    expect(publication.standaloneMessages.length).toBeGreaterThan(1);
+
+    const reassembled = publication.standaloneMessages
+      .map((message) => {
+        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getWebAppUrl(message)).hash);
+        return decodeMiniAppArtifact(encoded!).markdownText;
+      })
+      .join("\n\n");
+
+    expect(reassembled).toBe(markdownText);
+  });
+
+  it("splits oversized plans and keeps Implement on the last stub only", () => {
+    const markdownText = Array.from({ length: 320 }, (_, index) =>
+      `${index + 1}. ${Array.from({ length: 8 }, (__unused, wordIndex) => `step-${index}-${wordIndex}`).join(" ")}`
+    ).join("\n");
+
+    const messages = buildPlanArtifactMessages("https://example.com/mini-app", markdownText);
+
+    expect(messages.length).toBeGreaterThan(1);
+    expect(messages.at(-1)?.replyMarkup.inline_keyboard[0]?.some((button) => "callback_data" in button)).toBe(true);
+    expect(messages.slice(0, -1).every((message) => message.replyMarkup.inline_keyboard[0]?.every((button) => !("callback_data" in button)))).toBe(true);
+
+    const reassembled = messages
+      .map((message) => {
+        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getWebAppUrl(message)).hash);
+        return decodeMiniAppArtifact(encoded!).markdownText;
+      })
+      .join("\n");
+
+    expect(reassembled).toBe(markdownText);
   });
 });
 

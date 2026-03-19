@@ -1,19 +1,17 @@
 import type { UserTurnMessage } from "../domain";
 import {
   buildArtifactReplyMarkup,
-  buildCommentaryArtifactButton,
-  buildCommentaryArtifactStubMessage,
+  buildCommentaryArtifactPublication,
   buildOversizeResponseArtifactMessage,
   buildRenderedAssistantMessage,
-  buildResponseArtifactButton,
+  buildResponseArtifactPublication,
   buildOversizeCommentaryArtifactMessage,
   buildRenderedCompletionFooter,
+  type ArtifactPublication,
   type CompletionFooterDetails
 } from "./presentation";
 import type {
-  InlineKeyboardMarkup,
   TelegramApi,
-  TelegramInlineKeyboardButton,
   TelegramMessenger
 } from "../telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../turn-runtime";
@@ -49,6 +47,10 @@ type TurnFinalizerCallbacks = {
   publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number>;
 };
 
+type PlannedArtifactPublication = ArtifactPublication & {
+  oversizeNoticeText: string | null;
+};
+
 export type FinalizationPolicy = {
   terminalStatus: TerminalTurnStatus;
   threadId: string;
@@ -59,16 +61,6 @@ export type FinalizationPolicy = {
   publishFooter: boolean;
   buildFinalText(resolvedText: string): string;
 };
-
-type CommentaryPublication =
-  | { kind: "hidden" }
-  | { kind: "assistant_button"; button: TelegramInlineKeyboardButton }
-  | { kind: "standalone_stub"; text: string; replyMarkup: InlineKeyboardMarkup }
-  | { kind: "oversize_notice"; text: string };
-
-type ResponsePublication =
-  | { kind: "assistant_button"; button: TelegramInlineKeyboardButton }
-  | { kind: "oversize_notice"; text: string };
 
 export class TurnFinalizer {
   constructor(
@@ -116,8 +108,8 @@ export class TurnFinalizer {
           ? await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication)
           : null;
 
-    if (responsePublication?.kind === "oversize_notice") {
-      await this.publishArtifactOversizeNotice(context, responsePublication.text);
+    if (responsePublication?.oversizeNoticeText) {
+      await this.publishArtifactOversizeNotice(context, responsePublication.oversizeNoticeText);
     }
 
     if (policy.publishFooter) {
@@ -191,27 +183,30 @@ export class TurnFinalizer {
   private async publishFinalTurnText(
     context: TurnContext,
     text: string,
-    commentaryPublication: CommentaryPublication,
-    responsePublication: ResponsePublication | null
+    commentaryPublication: PlannedArtifactPublication,
+    responsePublication: PlannedArtifactPublication | null
   ): Promise<number> {
-    const buttons: TelegramInlineKeyboardButton[] = [];
-    if (responsePublication?.kind === "assistant_button") {
-      buttons.push(responsePublication.button);
-    }
-    if (commentaryPublication.kind === "assistant_button") {
-      buttons.push(commentaryPublication.button);
-    }
+    const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
 
     const messageId = await context.finalStream.finalize(
       buildRenderedAssistantMessage(text, {
-        includeContinueInViewNote: responsePublication?.kind === "assistant_button"
+        includeContinueInViewNote: attachment.includeContinueInViewNote
       }),
       {
-        ...(buttons.length > 0 ? { firstMessageReplyMarkup: buildArtifactReplyMarkup(buttons) } : {})
+        ...(attachment.replyMarkup ? { firstMessageReplyMarkup: attachment.replyMarkup } : {})
       }
     );
     if (messageId === null) {
       throw new Error("Failed to publish final assistant message");
+    }
+
+    for (const message of attachment.deferredMessages) {
+      await this.deps.messenger.sendMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        text: message.text,
+        replyMarkup: message.replyMarkup
+      });
     }
 
     return messageId;
@@ -220,29 +215,21 @@ export class TurnFinalizer {
   private buildCommentaryPublication(
     activityLogEntries: ReturnType<TurnLifecycleDependencies["runtime"]["renderActivityLogEntries"]>,
     attachToAssistant: boolean
-  ): CommentaryPublication {
-    if (activityLogEntries.length === 0) {
-      return { kind: "hidden" };
-    }
-
+  ): PlannedArtifactPublication {
     try {
-      const button = buildCommentaryArtifactButton(this.deps.planArtifactPublicUrl, activityLogEntries);
-      if (attachToAssistant) {
-        return {
-          kind: "assistant_button",
-          button
-        };
-      }
-
+      const publication = buildCommentaryArtifactPublication(this.deps.planArtifactPublicUrl, activityLogEntries, {
+        attachToAssistant
+      });
       return {
-        kind: "standalone_stub",
-        ...buildCommentaryArtifactStubMessage(buildArtifactReplyMarkup([button]))
+        ...publication,
+        oversizeNoticeText: null
       };
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
         return {
-          kind: "oversize_notice",
-          ...buildOversizeCommentaryArtifactMessage()
+          attachedButton: null,
+          standaloneMessages: [],
+          oversizeNoticeText: buildOversizeCommentaryArtifactMessage().text
         };
       }
 
@@ -250,17 +237,19 @@ export class TurnFinalizer {
     }
   }
 
-  private buildResponsePublication(text: string): ResponsePublication {
+  private buildResponsePublication(text: string): PlannedArtifactPublication {
     try {
+      const publication = buildResponseArtifactPublication(this.deps.planArtifactPublicUrl, text);
       return {
-        kind: "assistant_button",
-        button: buildResponseArtifactButton(this.deps.planArtifactPublicUrl, text)
+        ...publication,
+        oversizeNoticeText: null
       };
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
         return {
-          kind: "oversize_notice",
-          ...buildOversizeResponseArtifactMessage()
+          attachedButton: null,
+          standaloneMessages: [],
+          oversizeNoticeText: buildOversizeResponseArtifactMessage().text
         };
       }
 
@@ -268,22 +257,19 @@ export class TurnFinalizer {
     }
   }
 
-  private async publishStandaloneCommentary(context: TurnContext, publication: CommentaryPublication): Promise<void> {
-    if (publication.kind === "hidden" || publication.kind === "assistant_button") {
-      return;
-    }
-
-    if (publication.kind === "standalone_stub") {
+  private async publishStandaloneCommentary(context: TurnContext, publication: PlannedArtifactPublication): Promise<void> {
+    for (const message of publication.standaloneMessages) {
       await this.deps.messenger.sendMessage({
         chatId: context.chatId,
         topicId: context.topicId,
-        text: publication.text,
-        replyMarkup: publication.replyMarkup
+        text: message.text,
+        replyMarkup: message.replyMarkup
       });
-      return;
     }
 
-    await this.publishArtifactOversizeNotice(context, publication.text);
+    if (publication.oversizeNoticeText) {
+      await this.publishArtifactOversizeNotice(context, publication.oversizeNoticeText);
+    }
   }
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {
@@ -315,6 +301,67 @@ export class TurnFinalizer {
       topicId: context.topicId,
       text
     });
+  }
+
+  private resolveAssistantAttachment(
+    responsePublication: PlannedArtifactPublication | null,
+    commentaryPublication: PlannedArtifactPublication
+  ): {
+    replyMarkup?: ReturnType<typeof buildArtifactReplyMarkup>;
+    deferredMessages: ArtifactPublication["standaloneMessages"];
+    includeContinueInViewNote: boolean;
+  } {
+    const responseButton = responsePublication?.attachedButton ?? null;
+    const commentaryButton = commentaryPublication.attachedButton;
+
+    if (responseButton && commentaryButton) {
+      try {
+        return {
+          replyMarkup: buildArtifactReplyMarkup([responseButton, commentaryButton]),
+          deferredMessages: [],
+          includeContinueInViewNote: true
+        };
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "mini_app_artifact_too_large") {
+          throw error;
+        }
+
+        return {
+          replyMarkup: buildArtifactReplyMarkup([responseButton]),
+          deferredMessages:
+            commentaryPublication.standaloneMessages.length > 0
+              ? commentaryPublication.standaloneMessages
+              : [
+                  {
+                    text: "Commentary is available.",
+                    replyMarkup: buildArtifactReplyMarkup([commentaryButton])
+                  }
+                ],
+          includeContinueInViewNote: true
+        };
+      }
+    }
+
+    if (responseButton) {
+      return {
+        replyMarkup: buildArtifactReplyMarkup([responseButton]),
+        deferredMessages: [],
+        includeContinueInViewNote: true
+      };
+    }
+
+    if (commentaryButton) {
+      return {
+        replyMarkup: buildArtifactReplyMarkup([commentaryButton]),
+        deferredMessages: [],
+        includeContinueInViewNote: false
+      };
+    }
+
+    return {
+      deferredMessages: [],
+      includeContinueInViewNote: false
+    };
   }
 }
 

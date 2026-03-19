@@ -5,7 +5,7 @@ import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/T
 import type { LoggerLike } from "../logging";
 import {
   buildActivityLogEntryForItemCompleted,
-  buildPlanArtifactMessage,
+  buildPlanArtifactMessages,
   buildRenderedCompletedItemMessage,
   buildOversizePlanArtifactMessage,
   buildStableDraftId,
@@ -485,11 +485,25 @@ export class TurnLifecycleCoordinator {
 
   private async sendMiniAppPlanMessage(context: TurnContext, markdownText: string): Promise<number> {
     try {
-      return await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        ...buildPlanArtifactMessage(this.deps.planArtifactPublicUrl!, markdownText)
-      }).then((message) => message.messageId);
+      const publications = buildPlanArtifactMessages(this.deps.planArtifactPublicUrl!, markdownText);
+      let lastMessageId: number | null = null;
+
+      for (const publication of publications) {
+        lastMessageId = (
+          await this.deps.messenger.sendMessage({
+            chatId: context.chatId,
+            topicId: context.topicId,
+            text: publication.text,
+            replyMarkup: publication.replyMarkup
+          })
+        ).messageId;
+      }
+
+      if (lastMessageId === null) {
+        throw new Error("Failed to publish plan artifact");
+      }
+
+      return lastMessageId;
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
         return this.deps.messenger.sendMessage({

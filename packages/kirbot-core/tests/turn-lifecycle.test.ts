@@ -4,7 +4,12 @@ import type { MessageEntity } from "grammy/types";
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
-import { TOPIC_IMPLEMENT_CALLBACK_DATA } from "../src/bridge/presentation";
+import {
+  buildArtifactReplyMarkup,
+  buildCommentaryArtifactButton,
+  buildResponseArtifactButton,
+  TOPIC_IMPLEMENT_CALLBACK_DATA
+} from "../src/bridge/presentation";
 import {
   TelegramMessenger,
   type TelegramApi,
@@ -69,6 +74,31 @@ function getCallbackDataByButtonText(
       .find((button) => button.text === buttonText)
       ?.callback_data ?? null)
   );
+}
+
+function findSingleButtonSafeDualButtonUnsafeMiniAppUrl(): string {
+  for (let repeatCount = 300; repeatCount <= 1_500; repeatCount += 25) {
+    const publicUrl = `https://example.com/${"mini-app/".repeat(repeatCount)}`;
+    const responseButton = buildResponseArtifactButton(publicUrl, "Final answer");
+    const commentaryButton = buildCommentaryArtifactButton(publicUrl, [{ kind: "commentary", text: "Inspecting files" }]);
+
+    try {
+      buildArtifactReplyMarkup([responseButton]);
+      buildArtifactReplyMarkup([commentaryButton]);
+    } catch {
+      continue;
+    }
+
+    try {
+      buildArtifactReplyMarkup([responseButton, commentaryButton]);
+    } catch (error) {
+      if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
+        return publicUrl;
+      }
+    }
+  }
+
+  throw new Error("Failed to find a Mini App URL that fits single buttons but not combined buttons");
 }
 
 class FakeTelegram implements TelegramApi {
@@ -505,6 +535,53 @@ describe("TurnLifecycleCoordinator", () => {
     expect(
       telegram.sentMessages.findIndex((entry) => entry.text === "Commentary artifact was too large to encode.")
     ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Final answer"));
+  });
+
+  it("falls back to a standalone commentary stub when response and commentary buttons exceed the combined markup budget", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: findSingleButtonSafeDualButtonUnsafeMiniAppUrl(),
+      releaseTurnFiles: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "Final answer",
+        assistantText: "Final answer",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting files");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting files",
+      phase: "commentary"
+    });
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response"]);
+
+    const commentaryStub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available.");
+    expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
+    expect(
+      telegram.sentMessages.findIndex((entry) => entry.text === "Final answer")
+    ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available."));
   });
 
   it("interleaves commentary with chronological activity events in the artifact", async () => {

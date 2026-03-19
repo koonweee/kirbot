@@ -25,7 +25,12 @@ import {
 } from "../src/telegram-messenger";
 import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
-import { TOPIC_IMPLEMENT_CALLBACK_DATA } from "../src/bridge/presentation";
+import {
+  buildArtifactReplyMarkup,
+  buildCommentaryArtifactButton,
+  buildResponseArtifactButton,
+  TOPIC_IMPLEMENT_CALLBACK_DATA
+} from "../src/bridge/presentation";
 
 const EMPTY_DRAFT_TEXT = "";
 
@@ -98,6 +103,31 @@ function getFinalAnswerMessage(telegram: FakeTelegram) {
   }
 
   return last;
+}
+
+function findSingleButtonSafeDualButtonUnsafeMiniAppUrl(): string {
+  for (let repeatCount = 300; repeatCount <= 1_500; repeatCount += 25) {
+    const publicUrl = `https://example.com/${"mini-app/".repeat(repeatCount)}`;
+    const responseButton = buildResponseArtifactButton(publicUrl, "Final answer");
+    const commentaryButton = buildCommentaryArtifactButton(publicUrl, [{ kind: "commentary", text: "Inspecting files" }]);
+
+    try {
+      buildArtifactReplyMarkup([responseButton]);
+      buildArtifactReplyMarkup([commentaryButton]);
+    } catch {
+      continue;
+    }
+
+    try {
+      buildArtifactReplyMarkup([responseButton, commentaryButton]);
+    } catch (error) {
+      if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
+        return publicUrl;
+      }
+    }
+  }
+
+  throw new Error("Failed to find a Mini App URL that fits single buttons but not combined buttons");
 }
 
 async function waitForAsyncNotifications(): Promise<void> {
@@ -1583,6 +1613,99 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("falls back to a standalone commentary stub when combined response and commentary buttons exceed the markup budget", async () => {
+    const miniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: findSingleButtonSafeDualButtonUnsafeMiniAppUrl()
+        }
+      }
+    };
+    const miniAppCodex = new FakeCodex();
+    miniAppCodex.readTurnMessagesResult = "Here is the answer.";
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 72,
+      updateId: 82,
+      userId: 42,
+      text: "Summarize the change"
+    });
+
+    miniAppCodex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "",
+          phase: "commentary"
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Inspecting the files"
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-2",
+          text: "",
+          phase: "final_answer"
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-2",
+        delta: "Here is the answer."
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const answerMessage = miniAppTelegram.sentMessages.find((message) => message.text === "Here is the answer.");
+    expect(answerMessage?.text).toBe("Here is the answer.");
+    expect(getInlineButtonTexts(answerMessage)).toEqual(["Response"]);
+
+    const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available.");
+    expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
+    expect(
+      miniAppTelegram.sentMessages.findIndex((message) => message.text === "Here is the answer.")
+    ).toBeLessThan(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available."));
+  });
+
   it("truncates long final assistant output into one Telegram message with a response button", async () => {
     codex.readTurnMessagesResult = longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90);
 
@@ -2035,7 +2158,7 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
-  it("publishes an oversize stub instead of Telegram plan bubbles when the Mini App payload is too large", async () => {
+  it("splits large plan artifacts into multiple Mini App stubs instead of Telegram plan bubbles", async () => {
     const oversizeMiniAppConfig: AppConfig = {
       ...config,
       telegram: {
@@ -2093,15 +2216,14 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(
-      oversizeMiniAppTelegram.sentMessages.filter((message) => message.text === "Plan artifact was too large to encode.")
-    ).toHaveLength(1);
-    expect(
-      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Plan is ready")
-    ).toBe(false);
+    const planMessages = oversizeMiniAppTelegram.sentMessages.filter((message) => message.text.startsWith("Plan"));
+    expect(planMessages.length).toBeGreaterThan(1);
+    expect(planMessages.some((message) => message.text === "Plan artifact was too large to encode.")).toBe(false);
     expect(
       oversizeMiniAppTelegram.sentMessages.some((message) => message.text.startsWith("Plan\n\n"))
     ).toBe(false);
+    expect(getCallbackDataByButtonText(planMessages.at(-1), "Implement")).toBe(TOPIC_IMPLEMENT_CALLBACK_DATA);
+    expect(planMessages.slice(0, -1).every((message) => getCallbackDataByButtonText(message, "Implement") === null)).toBe(true);
   });
 
   it("publishes a standalone commentary stub before completed plan artifacts when no assistant answer follows", async () => {
