@@ -1,12 +1,14 @@
 import { basename } from "node:path";
 
 import type { CommandExecutionRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionRequestApprovalParams";
+import type { FileChangeRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/FileChangeRequestApprovalParams";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import {
   renderCodeText,
   renderMarkdownToFormattedText,
   renderPreformattedText,
+  renderQuotedText,
   TelegramEntityBuilder,
   truncateFormattedText
 } from "@kirbot/telegram-format";
@@ -25,8 +27,10 @@ import {
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
 const COMMAND_FAILURE_OUTPUT_CHAR_LIMIT = 1200;
+const FILE_CHANGE_PATH_PREVIEW_LIMIT = 8;
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
 const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
+const COMMENTARY_LOGS_LABEL = "Logs";
 export const TOPIC_IMPLEMENT_CALLBACK_DATA = "topic:implement";
 
 export type TurnStatusState =
@@ -54,6 +58,8 @@ export type CompletionFooterDetails = {
   cwd: string | null;
   branch: string | null;
 };
+
+type StructuredFailureEntry = Extract<ActivityLogEntry, { kind: "structuredFailure" }>;
 
 export function deriveTopicTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
@@ -120,19 +126,25 @@ export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRen
     case "commandExecution":
       return buildRenderedCommandExecutionCompletionMessage(item);
     case "fileChange":
-      return buildRenderedFileChangeCompletionMessage(item.status, item.changes);
+      return buildRenderedFileChangeCompletionMessage(item);
     case "mcpToolCall":
-      return {
-        text: `${item.status === "failed" ? "Tool failed" : "Tool completed"}: ${item.server}.${item.tool}`
-      };
+      return item.status === "failed"
+        ? buildRenderedStructuredFailureMessage(buildStructuredFailureForMcpToolCall(item))
+        : {
+            text: `Tool completed: ${item.server}.${item.tool}`
+          };
     case "dynamicToolCall":
-      return {
-        text: `${item.status === "failed" ? "Tool failed" : "Tool completed"}: ${item.tool}`
-      };
+      return item.status === "failed"
+        ? buildRenderedStructuredFailureMessage(buildStructuredFailureForDynamicToolCall(item))
+        : {
+            text: `Tool completed: ${item.tool}`
+          };
     case "collabAgentToolCall":
-      return {
-        text: `${item.status === "failed" ? "Agent task failed" : "Agent task updated"}: ${item.tool}`
-      };
+      return item.status === "failed"
+        ? buildRenderedStructuredFailureMessage(buildStructuredFailureForCollabAgentToolCall(item))
+        : {
+            text: `Agent task updated: ${item.tool}`
+          };
     case "webSearch": {
       const query = item.query.trim();
       return { text: query ? `Web search completed: ${query}` : "Web search completed." };
@@ -140,7 +152,9 @@ export function buildRenderedCompletedItemMessage(item: ThreadItem): TelegramRen
     case "imageView":
       return buildLabeledCodeMessage("Viewed image: ", basename(item.path) || item.path);
     case "imageGeneration":
-      return { text: isImageGenerationSuccess(item) ? "Image generated." : "Image generation failed." };
+      return isImageGenerationSuccess(item)
+        ? { text: "Image generated." }
+        : buildRenderedStructuredFailureMessage(buildStructuredFailureForImageGeneration(item));
     case "enteredReviewMode": {
       const review = item.review.trim();
       return { text: review ? `Entered review mode: ${review}` : "Entered review mode." };
@@ -194,6 +208,28 @@ export function buildRenderedCommandApprovalPrompt(
   if (scope) {
     builder.appendText("\nScope: ");
     builder.appendText(scope);
+  }
+
+  return builder.build();
+}
+
+export function buildRenderedFileChangeApprovalPrompt(
+  params: FileChangeRequestApprovalParams
+): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText("File change approval needed");
+
+  if (params.reason?.trim()) {
+    builder.appendText("\n\nReason: ");
+    builder.appendText(params.reason.trim());
+  }
+
+  if (params.grantRoot?.trim()) {
+    builder.appendText("\nRequested root: ");
+    builder.appendFormatted(renderCodeText(params.grantRoot.trim()));
+    builder.appendText("\nScope: this approval is for this change; accepting also proposes this write root for the session");
+  } else {
+    builder.appendText("\nScope: this approval is for this file change only");
   }
 
   return builder.build();
@@ -414,37 +450,77 @@ export function buildActivityLogEntryForItemCompleted(item: ThreadItem): Activit
     case "commandExecution":
       return buildActivityLogEntryForCommandCompletion(item);
     case "fileChange":
-      return buildActivityEventEntry(getFileChangeCompletionLabel(item.status), summarizeFileChanges(item.changes), "inlineCode");
+      return item.status === "completed"
+        ? buildActivityEventEntry("File Edit", summarizeFileChanges(item.changes), "inlineCode")
+        : buildStructuredFailureForFileChange(item);
     case "mcpToolCall":
-      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool", `${item.server}.${item.tool}`, "inlineCode");
+      return item.status === "failed"
+        ? buildStructuredFailureForMcpToolCall(item)
+        : buildActivityEventEntry("Tool", `${item.server}.${item.tool}`, "inlineCode");
     case "dynamicToolCall":
-      return buildActivityEventEntry(item.status === "failed" ? "Tool Failed" : "Tool", item.tool, "inlineCode");
+      return item.status === "failed"
+        ? buildStructuredFailureForDynamicToolCall(item)
+        : buildActivityEventEntry("Tool", item.tool, "inlineCode");
     case "collabAgentToolCall":
-      return buildActivityEventEntry(
-        item.status === "failed" ? "Agent Task Failed" : "Agent Task",
-        item.tool,
-        "inlineCode"
-      );
+      return item.status === "failed"
+        ? buildStructuredFailureForCollabAgentToolCall(item)
+        : buildActivityEventEntry("Agent Task", item.tool, "inlineCode");
     case "webSearch":
       return buildActivityEventEntry("Web Search", item.query, "text");
+    case "imageGeneration":
+      return isImageGenerationSuccess(item) ? null : buildStructuredFailureForImageGeneration(item);
     default:
       return null;
   }
 }
 
 function buildCommentaryMarkdown(entries: ActivityLogEntry[]): string {
-  const renderedEntries = entries.flatMap((entry) => renderActivityLogEntry(entry));
-  return renderedEntries.length > 0 ? `## Activity Log\n\n${renderedEntries.join("\n\n")}` : "";
-}
+  const sections: string[] = [];
+  let activityBuffer: Array<Exclude<ActivityLogEntry, { kind: "commentary" }>> = [];
 
-function renderActivityLogEntry(entry: ActivityLogEntry): string[] {
-  if (entry.kind === "commentary") {
-    const text = entry.text.trim();
-    return text.length > 0 ? [`**Commentary**\n\n${text}`] : [];
+  const flushActivityBuffer = (): void => {
+    if (activityBuffer.length === 0) {
+      return;
+    }
+
+    const rendered = renderCollapsibleActivityLog(activityBuffer);
+    if (rendered) {
+      sections.push(rendered);
+    }
+    activityBuffer = [];
+  };
+
+  for (const entry of entries) {
+    if (entry.kind === "commentary") {
+      const text = entry.text.trim();
+      if (!text) {
+        continue;
+      }
+
+      flushActivityBuffer();
+      sections.push(text);
+      continue;
+    }
+
+    activityBuffer.push(entry);
   }
 
-  if (entry.kind === "commandFailure") {
-    return [buildCommandFailureMarkdown(entry)];
+  flushActivityBuffer();
+  return sections.join("\n\n");
+}
+
+function renderCollapsibleActivityLog(entries: Array<Exclude<ActivityLogEntry, { kind: "commentary" }>>): string {
+  const renderedEntries = entries.flatMap((entry) => renderActivityLogEntry(entry));
+  if (renderedEntries.length === 0) {
+    return "";
+  }
+
+  return [`:::details ${COMMENTARY_LOGS_LABEL} (${entries.length})`, renderedEntries.join("\n\n"), ":::"].join("\n");
+}
+
+function renderActivityLogEntry(entry: Exclude<ActivityLogEntry, { kind: "commentary" }>): string[] {
+  if (entry.kind === "structuredFailure") {
+    return [buildStructuredFailureMarkdown(entry)];
   }
 
   const detail = formatActivityDetail(entry.detail, entry.detailStyle);
@@ -462,31 +538,9 @@ function renderActivityLogEntry(entry: ActivityLogEntry): string[] {
 function buildActivityLogEntryForCommandCompletion(
   item: Extract<ThreadItem, { type: "commandExecution" }>
 ): ActivityLogEntry {
-  if (item.status === "declined") {
-    return {
-      kind: "commandFailure",
-      title: "Command declined",
-      command: item.command,
-      cwd: item.cwd,
-      exitCode: null,
-      durationMs: item.durationMs,
-      errorOutput: null
-    };
-  }
-
-  if (isCommandExecutionFailed(item)) {
-    return {
-      kind: "commandFailure",
-      title: "Command failed",
-      command: item.command,
-      cwd: item.cwd,
-      exitCode: item.exitCode,
-      durationMs: item.durationMs,
-      errorOutput: item.aggregatedOutput
-    };
-  }
-
-  return buildActivityEventEntry("Command", item.command, "codeBlock");
+  return item.status === "declined" || isCommandExecutionFailed(item)
+    ? buildStructuredFailureForCommandExecution(item)
+    : buildActivityEventEntry("Command", item.command, "codeBlock");
 }
 
 function buildActivityEventEntry(
@@ -501,19 +555,6 @@ function buildActivityEventEntry(
     detail: normalizedDetail.length > 0 ? normalizedDetail : null,
     detailStyle
   };
-}
-
-function getFileChangeCompletionLabel(
-  status: Extract<ThreadItem, { type: "fileChange" }>["status"]
-): "File Edit" | "File Edit Failed" | "File Edit Declined" {
-  switch (status) {
-    case "declined":
-      return "File Edit Declined";
-    case "failed":
-      return "File Edit Failed";
-    default:
-      return "File Edit";
-  }
 }
 
 function formatActivityDetail(detail: string | null, style: "codeBlock" | "inlineCode" | "text"): string | null {
@@ -604,86 +645,9 @@ function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = fals
 function buildRenderedCommandExecutionCompletionMessage(
   item: Extract<ThreadItem, { type: "commandExecution" }>
 ): TelegramRenderedMessage {
-  if (item.status === "declined") {
-    return buildRenderedCommandFailureMessage({
-      title: "Command declined",
-      command: item.command,
-      cwd: item.cwd,
-      exitCode: null,
-      durationMs: item.durationMs,
-      errorOutput: null
-    });
-  }
-
-  if (isCommandExecutionFailed(item)) {
-    return buildRenderedCommandFailureMessage({
-      title: "Command failed",
-      command: item.command,
-      cwd: item.cwd,
-      exitCode: item.exitCode,
-      durationMs: item.durationMs,
-      errorOutput: item.aggregatedOutput
-    });
-  }
-
-  return buildLabeledCodeMessage("Command completed: ", item.command);
-}
-
-function buildRenderedCommandFailureMessage(input: {
-  title: "Command failed" | "Command declined";
-  command: string;
-  cwd: string | null;
-  exitCode: number | null;
-  durationMs: number | null;
-  errorOutput: string | null;
-}): TelegramRenderedMessage {
-  const builder = new TelegramEntityBuilder();
-  builder.appendText(input.title);
-  builder.appendText("\n\n");
-  builder.appendFormatted(renderPreformattedText(input.command.trim() || "(unknown command)"));
-  builder.appendText("\n\nCWD: ");
-  builder.appendFormatted(renderCodeText(input.cwd?.trim() || "(unknown cwd)"));
-
-  if (input.exitCode !== null) {
-    builder.appendText("\nExit code: ");
-    builder.appendFormatted(renderCodeText(String(input.exitCode)));
-  }
-
-  if (input.durationMs !== null) {
-    builder.appendText("\nDuration: ");
-    builder.appendFormatted(renderCodeText(formatElapsedDuration(input.durationMs, true)));
-  }
-
-  const errorOutput = truncateCommandFailureOutput(input.errorOutput);
-  if (errorOutput) {
-    builder.appendText("\n\nError\n\n");
-    builder.appendFormatted(renderPreformattedText(errorOutput));
-  }
-
-  return builder.build();
-}
-
-function buildCommandFailureMarkdown(entry: Extract<ActivityLogEntry, { kind: "commandFailure" }>): string {
-  const sections = [
-    `**${escapeMarkdownText(entry.title)}**`,
-    buildFencedCodeBlock(entry.command.trim() || "(unknown command)")
-  ];
-
-  const metadataLines = [
-    `CWD: ${renderInlineCodeMarkdown(entry.cwd?.trim() || "(unknown cwd)")}`,
-    ...(entry.exitCode !== null ? [`Exit code: ${renderInlineCodeMarkdown(String(entry.exitCode))}`] : []),
-    ...(entry.durationMs !== null
-      ? [`Duration: ${renderInlineCodeMarkdown(formatElapsedDuration(entry.durationMs, true))}`]
-      : [])
-  ];
-  sections.push(metadataLines.join("  \n"));
-
-  const errorOutput = truncateCommandFailureOutput(entry.errorOutput);
-  if (errorOutput) {
-    sections.push(`Error\n\n${buildFencedCodeBlock(errorOutput)}`);
-  }
-
-  return sections.join("\n\n");
+  return item.status === "declined" || isCommandExecutionFailed(item)
+    ? buildRenderedStructuredFailureMessage(buildStructuredFailureForCommandExecution(item))
+    : buildLabeledCodeMessage("Command completed: ", item.command);
 }
 
 function truncateCommandFailureOutput(output: string | null): string | null {
@@ -693,6 +657,261 @@ function truncateCommandFailureOutput(output: string | null): string | null {
   }
 
   return buildTruncatedPreview(normalized, COMMAND_FAILURE_OUTPUT_CHAR_LIMIT, "...\n", "");
+}
+
+function buildRenderedFileChangeCompletionMessage(
+  item: Extract<ThreadItem, { type: "fileChange" }>
+): TelegramRenderedMessage {
+  return item.status === "completed"
+    ? buildLabeledCodeMessage("Applied file changes: ", summarizeFileChanges(item.changes) ?? "(unknown files)")
+    : buildRenderedStructuredFailureMessage(buildStructuredFailureForFileChange(item));
+}
+
+function buildRenderedStructuredFailureMessage(entry: StructuredFailureEntry): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText(entry.title);
+
+  if (entry.subject) {
+    builder.appendText("\n");
+    appendStructuredFailureBlock(builder, entry.subject);
+  }
+
+  if (entry.metadata.length > 0) {
+    builder.appendText(entry.subject ? "\n\n" : "\n");
+    entry.metadata.forEach((line, index) => {
+      if (index > 0) {
+        builder.appendText("\n");
+      }
+      builder.appendText(`${line.label}: `);
+      if (line.code) {
+        builder.appendFormatted(renderCodeText(line.value));
+      } else {
+        builder.appendText(line.value);
+      }
+    });
+  }
+
+  if (entry.detail) {
+    builder.appendText(`\n\n${entry.detail.title}\n`);
+    appendStructuredFailureBlock(builder, entry.detail);
+  }
+
+  return builder.build();
+}
+
+function buildStructuredFailureMarkdown(entry: StructuredFailureEntry): string {
+  let markdown = `**${escapeMarkdownText(entry.title)}**`;
+
+  if (entry.subject) {
+    markdown += `\n${renderStructuredFailureBlockMarkdown(entry.subject)}`;
+  }
+
+  if (entry.metadata.length > 0) {
+    markdown += `\n\n${entry.metadata
+      .map((line) => `${escapeMarkdownText(line.label)}: ${line.code ? renderInlineCodeMarkdown(line.value) : escapeMarkdownText(line.value)}`)
+      .join("  \n")}`;
+  }
+
+  if (entry.detail) {
+    markdown += `\n\n${escapeMarkdownText(entry.detail.title)}\n${renderStructuredFailureBlockMarkdown(entry.detail)}`;
+  }
+
+  return markdown;
+}
+
+function appendStructuredFailureBlock(
+  builder: TelegramEntityBuilder,
+  block: StructuredFailureEntry["subject"] | NonNullable<StructuredFailureEntry["detail"]>
+): void {
+  if (!block) {
+    return;
+  }
+
+  switch (block.style) {
+    case "codeBlock":
+      builder.appendFormatted(renderPreformattedText(block.value));
+      return;
+    case "quoteBlock":
+      builder.appendFormatted(renderQuotedText(block.value));
+      return;
+    case "inlineCode":
+      builder.appendFormatted(renderCodeText(block.value));
+      return;
+    case "text":
+      builder.appendText(block.value);
+      return;
+  }
+}
+
+function renderStructuredFailureBlockMarkdown(
+  block: NonNullable<StructuredFailureEntry["subject"]> | NonNullable<StructuredFailureEntry["detail"]>
+): string {
+  switch (block.style) {
+    case "codeBlock":
+      return buildFencedCodeBlock(block.value);
+    case "quoteBlock":
+      return buildMarkdownQuoteBlock(block.value);
+    case "inlineCode":
+      return renderInlineCodeMarkdown(block.value);
+    case "text":
+      return escapeMarkdownText(block.value);
+  }
+}
+
+function buildStructuredFailureForCommandExecution(
+  item: Extract<ThreadItem, { type: "commandExecution" }>
+): StructuredFailureEntry {
+  const errorOutput = truncateCommandFailureOutput(item.aggregatedOutput);
+  return {
+    kind: "structuredFailure",
+    title: item.status === "declined" ? "Command declined" : "Command failed",
+    subject: {
+      value: item.command.trim() || "(unknown command)",
+      style: "codeBlock"
+    },
+    metadata: [
+      { label: "CWD", value: item.cwd?.trim() || "(unknown cwd)", code: true },
+      ...(item.exitCode !== null ? [{ label: "Exit code", value: String(item.exitCode), code: true }] : []),
+      ...(item.durationMs !== null
+        ? [{ label: "Duration", value: formatElapsedDuration(item.durationMs, true), code: true }]
+        : [])
+    ],
+    detail: errorOutput
+      ? {
+          title: "Error",
+          value: errorOutput,
+          style: "quoteBlock"
+        }
+      : null
+  };
+}
+
+function buildStructuredFailureForFileChange(
+  item: Extract<ThreadItem, { type: "fileChange" }>
+): StructuredFailureEntry {
+  return {
+    kind: "structuredFailure",
+    title: item.status === "declined" ? "File changes declined" : "File changes failed",
+    subject: {
+      value: buildFileChangePathPreview(item.changes),
+      style: "codeBlock"
+    },
+    metadata: item.changes.length > 0 ? [{ label: "Files", value: String(item.changes.length), code: true }] : [],
+    detail: null
+  };
+}
+
+function buildStructuredFailureForMcpToolCall(
+  item: Extract<ThreadItem, { type: "mcpToolCall" }>
+): StructuredFailureEntry {
+  return {
+    kind: "structuredFailure",
+    title: "Tool failed",
+    subject: {
+      value: `${item.server}.${item.tool}`,
+      style: "inlineCode"
+    },
+    metadata: item.durationMs !== null
+      ? [{ label: "Duration", value: formatElapsedDuration(item.durationMs, true), code: true }]
+      : [],
+    detail: item.error?.message?.trim()
+      ? {
+          title: "Error",
+          value: item.error.message.trim(),
+          style: "quoteBlock"
+        }
+      : null
+  };
+}
+
+function buildStructuredFailureForDynamicToolCall(
+  item: Extract<ThreadItem, { type: "dynamicToolCall" }>
+): StructuredFailureEntry {
+  return {
+    kind: "structuredFailure",
+    title: "Tool failed",
+    subject: {
+      value: item.tool,
+      style: "inlineCode"
+    },
+    metadata: item.durationMs !== null
+      ? [{ label: "Duration", value: formatElapsedDuration(item.durationMs, true), code: true }]
+      : [],
+    detail: null
+  };
+}
+
+function buildStructuredFailureForCollabAgentToolCall(
+  item: Extract<ThreadItem, { type: "collabAgentToolCall" }>
+): StructuredFailureEntry {
+  const agentStateSummary = summarizeCollabAgentStates(item.agentsStates);
+  return {
+    kind: "structuredFailure",
+    title: "Agent task failed",
+    subject: {
+      value: item.tool,
+      style: "inlineCode"
+    },
+    metadata: [
+      ...(item.receiverThreadIds.length > 0 ? [{ label: "Agents", value: String(item.receiverThreadIds.length), code: true }] : []),
+      ...(item.model?.trim() ? [{ label: "Model", value: item.model.trim(), code: true }] : []),
+      ...(item.reasoningEffort ? [{ label: "Reasoning", value: item.reasoningEffort, code: true }] : [])
+    ],
+    detail: agentStateSummary
+      ? {
+          title: "Agents",
+          value: agentStateSummary,
+          style: "codeBlock"
+        }
+      : null
+  };
+}
+
+function buildStructuredFailureForImageGeneration(
+  item: Extract<ThreadItem, { type: "imageGeneration" }>
+): StructuredFailureEntry {
+  const result = item.result.trim();
+  return {
+    kind: "structuredFailure",
+    title: "Image generation failed",
+    subject: null,
+    metadata: item.status.trim() ? [{ label: "Status", value: item.status.trim(), code: true }] : [],
+    detail: result
+      ? {
+          title: "Result",
+          value: truncateCommandFailureOutput(result) ?? result,
+          style: "quoteBlock"
+        }
+      : null
+  };
+}
+
+function buildFileChangePathPreview(changes: Array<{ path: string }>): string {
+  const paths = changes.map((change) => change.path.trim()).filter((path) => path.length > 0);
+  if (paths.length === 0) {
+    return "(unknown files)";
+  }
+
+  const preview = paths.slice(0, FILE_CHANGE_PATH_PREVIEW_LIMIT);
+  if (paths.length > preview.length) {
+    preview.push(`... (+${paths.length - preview.length} more)`);
+  }
+
+  return preview.join("\n");
+}
+
+function summarizeCollabAgentStates(states: Extract<ThreadItem, { type: "collabAgentToolCall" }>["agentsStates"]): string | null {
+  const lines = Object.entries(states)
+    .map(([threadId, state]) => {
+      if (!state) {
+        return null;
+      }
+      const message = state.message?.trim();
+      return `${threadId}: ${state.status}${message ? ` - ${message}` : ""}`;
+    })
+    .filter((value): value is string => Boolean(value));
+
+  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 function buildCommandApprovalReason(params: CommandExecutionRequestApprovalParams): string | null {
@@ -836,6 +1055,14 @@ function buildFencedCodeBlock(text: string): string {
   return `${fence}\n${normalized}\n${fence}`;
 }
 
+function buildMarkdownQuoteBlock(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
 function getLongestBacktickRun(text: string): number {
   let longest = 0;
   let current = 0;
@@ -889,35 +1116,6 @@ function summarizeFileChangePaths(changes: Array<{ path: string }>): { paths: st
     paths: first?.path ? [first.path] : [],
     additionalCount: changes.length - 1
   };
-}
-
-function buildRenderedFileChangeCompletionMessage(
-  status: "inProgress" | "completed" | "failed" | "declined",
-  changes: Array<{ path: string }>
-): TelegramRenderedMessage {
-  const builder = new TelegramEntityBuilder();
-  builder.appendText(status === "completed" ? "Applied file changes: " : "File changes failed: ");
-  appendInlineCodeFileSummary(builder, changes);
-  return builder.build();
-}
-
-function appendInlineCodeFileSummary(builder: TelegramEntityBuilder, changes: Array<{ path: string }>): void {
-  const summary = summarizeFileChangePaths(changes);
-  if (!summary || summary.paths.length === 0) {
-    builder.appendText("(unknown files)");
-    return;
-  }
-
-  summary.paths.forEach((path, index) => {
-    if (index > 0) {
-      builder.appendText(", ");
-    }
-    builder.appendFormatted(renderCodeText(path));
-  });
-
-  if (summary.additionalCount > 0) {
-    builder.appendText(` (+${summary.additionalCount} more)`);
-  }
 }
 
 function buildLabeledCodeMessage(prefix: string, value: string): TelegramRenderedMessage {

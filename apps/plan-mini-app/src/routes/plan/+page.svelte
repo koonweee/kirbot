@@ -48,7 +48,9 @@
         kind: "ready",
         title: artifact.title || artifactLabel,
         status: `Completed ${artifactLabel.toLowerCase()} artifact`,
-        artifactHtml: renderMarkdownToHtml(artifact.markdownText)
+        artifactHtml: renderMarkdownToHtml(artifact.markdownText, {
+          allowDetailsDirective: artifact.type === MiniAppArtifactType.Commentary
+        })
       };
     } catch (error: unknown) {
       state = {

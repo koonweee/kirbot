@@ -238,6 +238,61 @@ body::after {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.plan-document .artifact-details {
+  margin: 0 0 1rem;
+  border: 1px solid rgba(147, 161, 188, 0.2);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
+    var(--bg-panel-soft);
+  overflow: hidden;
+}
+
+.plan-document .artifact-details summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.95rem 1.05rem;
+  color: #d6def2;
+  cursor: pointer;
+  list-style: none;
+  font: 600 0.9rem/1.4 "Azeret Mono", "SFMono-Regular", monospace;
+}
+
+.plan-document .artifact-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-document .artifact-details summary::before {
+  content: "+";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 1px solid rgba(255, 143, 196, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 143, 196, 0.08);
+  color: #ffd0e5;
+  flex: 0 0 auto;
+}
+
+.plan-document .artifact-details[open] summary {
+  border-bottom: 1px solid rgba(147, 161, 188, 0.16);
+}
+
+.plan-document .artifact-details[open] summary::before {
+  content: "−";
+}
+
+.plan-document .artifact-details-body {
+  padding: 1rem 1.05rem 1.1rem;
+}
+
+.plan-document .artifact-details-body > :last-child {
+  margin-bottom: 0;
+}
+
 .plan-text pre {
   white-space: pre-wrap;
   word-break: break-word;

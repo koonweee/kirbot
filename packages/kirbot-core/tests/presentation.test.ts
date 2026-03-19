@@ -4,6 +4,7 @@ import {
   buildCommentaryArtifactButton,
   buildPlanArtifactMessage,
   buildRenderedCommandApprovalPrompt,
+  buildRenderedFileChangeApprovalPrompt,
   buildRenderedCompletedItemMessage,
   buildRenderedCompletionFooter,
   buildStatusDraft,
@@ -109,20 +110,50 @@ describe("commentary artifact presentation", () => {
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
       markdownText:
-        "## Activity Log\n\n**Commentary**\n\nInspecting the renderer.\n\n- **Command**\n```\nnpm test\n```\n\n- **Web Search:** markdown\\-it details support"
+        "Inspecting the renderer.\n\n:::details Logs (2)\n- **Command**\n```\nnpm test\n```\n\n- **Web Search:** markdown\\-it details support\n:::"
+    });
+  });
+
+  it("preserves chronology by interleaving prose with collapsible log sections", () => {
+    const entries: ActivityLogEntry[] = [
+      { kind: "commentary", text: "Inspecting the renderer." },
+      { kind: "activity", label: "Web Search", detail: "markdown-it details support", detailStyle: "text" },
+      { kind: "commentary", text: "Applying the patch." },
+      { kind: "activity", label: "Command", detail: "npm test", detailStyle: "codeBlock" }
+    ];
+
+    const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
+    const url = "web_app" in button ? button.web_app.url : null;
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        "Inspecting the renderer.\n\n:::details Logs (1)\n- **Web Search:** markdown\\-it details support\n:::\n\nApplying the patch.\n\n:::details Logs (1)\n- **Command**\n```\nnpm test\n```\n:::"
     });
   });
 
   it("renders failed commands with structured metadata and error blocks", () => {
     const entries: ActivityLogEntry[] = [
       {
-        kind: "commandFailure",
+        kind: "structuredFailure",
         title: "Command failed",
-        command: "npm test -- --runInBand",
-        cwd: "/workspace/packages/kirbot-core",
-        exitCode: 1,
-        durationMs: 12_000,
-        errorOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+        subject: {
+          value: "npm test -- --runInBand",
+          style: "codeBlock"
+        },
+        metadata: [
+          { label: "CWD", value: "/workspace/packages/kirbot-core", code: true },
+          { label: "Exit code", value: "1", code: true },
+          { label: "Duration", value: "12s", code: true }
+        ],
+        detail: {
+          title: "Error",
+          value: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"',
+          style: "quoteBlock"
+        }
       }
     ];
 
@@ -136,7 +167,34 @@ describe("commentary artifact presentation", () => {
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
       markdownText:
-        '## Activity Log\n\n**Command failed**\n\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n\n```\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"\n```'
+        ':::details Logs (1)\n**Command failed**\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n> FAIL bridge.test.ts\n> Error: expected "waiting · 6s" to equal "waiting · 5s"\n:::'
+    });
+  });
+
+  it("renders failed file changes with a file list preview", () => {
+    const entries: ActivityLogEntry[] = [
+      {
+        kind: "structuredFailure",
+        title: "File changes failed",
+        subject: {
+          value: "src/app.ts\nsrc/server.ts",
+          style: "codeBlock"
+        },
+        metadata: [{ label: "Files", value: "2", code: true }],
+        detail: null
+      }
+    ];
+
+    const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
+    const url = "web_app" in button ? button.web_app.url : null;
+    const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
+
+    expect(decodeMiniAppArtifact(encoded!)).toEqual({
+      v: 1,
+      type: MiniAppArtifactType.Commentary,
+      title: "Commentary",
+      markdownText:
+        ":::details Logs (1)\n**File changes failed**\n```\nsrc/app.ts\nsrc/server.ts\n```\n\nFiles: `2`\n:::"
     });
   });
 });
@@ -158,9 +216,51 @@ describe("command presentation", () => {
 
     expect(rendered).toMatchObject({
       text:
-        'Command failed\n\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\n\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+        'Command failed\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
     });
-    expect(rendered?.entities?.map((entity) => entity.type)).toEqual(["pre", "code", "code", "code", "pre"]);
+    expect(rendered?.entities?.map((entity) => entity.type)).toEqual([
+      "pre",
+      "code",
+      "code",
+      "code",
+      "expandable_blockquote"
+    ]);
+  });
+
+  it("renders failed file changes with a code-block file list", () => {
+    const rendered = buildRenderedCompletedItemMessage({
+      type: "fileChange",
+      id: "patch-1",
+      status: "failed",
+      changes: [
+        { path: "src/app.ts", kind: { type: "update", move_path: null }, diff: "" },
+        { path: "src/server.ts", kind: { type: "update", move_path: null }, diff: "" }
+      ]
+    });
+
+    expect(rendered).toMatchObject({
+      text: "File changes failed\nsrc/app.ts\nsrc/server.ts\n\nFiles: 2"
+    });
+    expect(rendered?.entities?.map((entity) => entity.type)).toEqual(["pre", "code"]);
+  });
+
+  it("renders failed tool calls with metadata and error output when available", () => {
+    const rendered = buildRenderedCompletedItemMessage({
+      type: "mcpToolCall",
+      id: "tool-1",
+      server: "github",
+      tool: "search_code",
+      status: "failed",
+      arguments: {},
+      result: null,
+      error: { message: "rate limited by upstream" },
+      durationMs: 10_000
+    });
+
+    expect(rendered).toMatchObject({
+      text: "Tool failed\ngithub.search_code\n\nDuration: 10s\n\nError\nrate limited by upstream"
+    });
+    expect(rendered?.entities?.map((entity) => entity.type)).toEqual(["code", "code", "expandable_blockquote"]);
   });
 
   it("renders command approval cards with code-block commands and inline CWD", () => {
@@ -189,5 +289,21 @@ describe("command presentation", () => {
         "Command approval needed\n\nReason: network access required\n\nnpm install\n\nCWD: /workspace\nIntent: read package metadata from package.json\nNetwork: https://registry.npmjs.org\nPermissions: network, filesystem read (1), filesystem write (1)\nSkill: /skills/npm/SKILL.md\nScope: allow only this run, or all matching runs for this session"
     });
     expect(rendered.entities?.map((entity) => entity.type)).toEqual(["pre", "code", "code", "code"]);
+  });
+
+  it("renders file approval cards with reason, requested root, and scope", () => {
+    const rendered = buildRenderedFileChangeApprovalPrompt({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      reason: "needs write access outside the current sandbox root",
+      grantRoot: "/workspace/packages/kirbot-core"
+    });
+
+    expect(rendered).toMatchObject({
+      text:
+        "File change approval needed\n\nReason: needs write access outside the current sandbox root\nRequested root: /workspace/packages/kirbot-core\nScope: this approval is for this change; accepting also proposes this write root for the session"
+    });
+    expect(rendered.entities?.map((entity) => entity.type)).toEqual(["code"]);
   });
 });

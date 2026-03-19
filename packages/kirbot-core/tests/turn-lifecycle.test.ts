@@ -383,7 +383,7 @@ describe("TurnLifecycleCoordinator", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan"
+      markdownText: "Inspecting the rollout plan"
     });
   });
 
@@ -442,7 +442,7 @@ describe("TurnLifecycleCoordinator", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan"
+      markdownText: "Inspecting the rollout plan"
     });
     expect(
       telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available.")
@@ -564,7 +564,7 @@ describe("TurnLifecycleCoordinator", () => {
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
       markdownText:
-        "## Activity Log\n\n**Commentary**\n\nInspecting the rollout plan.\n\n- **Command**\n```\nnpm test\n```"
+        "Inspecting the rollout plan.\n\n:::details Logs (1)\n- **Command**\n```\nnpm test\n```\n:::"
     });
   });
 
@@ -876,7 +876,7 @@ describe("TurnLifecycleCoordinator", () => {
       id: "compact-2"
     });
 
-    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed: lookup_docs"]);
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed\n\nlookup_docs\n\nDuration: <1s"]);
     expect(harness.telegram.drafts).toEqual([]);
   });
 
@@ -900,13 +900,13 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.sentMessages).toHaveLength(1);
     expect(harness.telegram.sentMessages[0]).toMatchObject({
       text:
-        'Command failed\n\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\n\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
+        'Command failed\nnpm test -- --runInBand\n\nCWD: /workspace/packages/kirbot-core\nExit code: 1\nDuration: 12s\n\nError\nFAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"'
     });
     expect(
       ((harness.telegram.sentMessages[0]?.options as { entities?: MessageEntity[] } | undefined)?.entities ?? []).map(
         (entity) => entity.type
       )
-    ).toEqual(["pre", "code", "code", "code", "pre"]);
+    ).toEqual(["pre", "code", "code", "code", "expandable_blockquote"]);
     expect(harness.telegram.drafts).toEqual([]);
   });
 

@@ -1517,7 +1517,7 @@ describe("TelegramCodexBridge", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting the files"
+      markdownText: "Inspecting the files"
     });
   });
 
@@ -1877,8 +1877,7 @@ describe("TelegramCodexBridge", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText:
-        "## Activity Log\n\n**Commentary**\n\nInspecting files\n\n**Commentary**\n\nPlanning edits"
+      markdownText: "Inspecting files\n\nPlanning edits"
     });
   });
 
@@ -2157,7 +2156,7 @@ describe("TelegramCodexBridge", () => {
       v: 1,
       type: MiniAppArtifactType.Commentary,
       title: "Commentary",
-      markdownText: "## Activity Log\n\n**Commentary**\n\nInspecting files"
+      markdownText: "Inspecting files"
     });
     const planIndex = miniAppTelegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
     expect(planIndex).toBeGreaterThanOrEqual(0);
@@ -3675,6 +3674,52 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.commandApprovals).toEqual([{ id: 88, decision: "accept" }]);
     const resolved = await database.getPendingRequest(JSON.stringify(88));
+    expect(resolved.status).toBe("resolved");
+    expect(telegram.edits.at(-1)?.text).toContain("accept");
+  });
+
+  it("stores file approval requests and resolves them via callback queries", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Apply the workspace fix"
+    });
+
+    codex.emitRequest({
+      method: "item/fileChange/requestApproval",
+      id: 188,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-file-1",
+        reason: "needs write access outside the current sandbox root",
+        grantRoot: "/workspace/packages/kirbot-core"
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pending = await database.getPendingRequest(JSON.stringify(188));
+    expect(pending.method).toBe("item/fileChange/requestApproval");
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text).toBe(
+      "File change approval needed\n\nReason: needs write access outside the current sandbox root\nRequested root: /workspace/packages/kirbot-core\nScope: this approval is for this change; accepting also proposes this write root for the session"
+    );
+    expect(promptMessage?.options?.entities?.map((entity) => entity.type)).toEqual(["code"]);
+    expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow once", "Deny", "Interrupt turn"]);
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-file-1",
+      data: getCallbackDataByButtonText(promptMessage, "Allow once")!,
+      chatId: -1001,
+      topicId: 101,
+      userId: 42
+    });
+
+    expect(codex.fileApprovals).toEqual([{ id: 188, decision: "accept" }]);
+    const resolved = await database.getPendingRequest(JSON.stringify(188));
     expect(resolved.status).toBe("resolved");
     expect(telegram.edits.at(-1)?.text).toContain("accept");
   });
