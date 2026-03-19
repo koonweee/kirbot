@@ -258,6 +258,131 @@ describe("CodexGateway", () => {
     });
   });
 
+  it("passes explicit initial settings through on thread/start", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const createThreadPromise = gateway.createThread("Test thread", {
+      settings: {
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+        serviceTier: "fast",
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "dangerFullAccess"
+        }
+      }
+    });
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/start",
+      id: 2,
+      params: {
+        cwd: "/workspace",
+        model: "gpt-5.3-codex",
+        modelProvider: null,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        config: {
+          model_reasoning_effort: "high",
+          sandbox_workspace_write: null
+        },
+        serviceName: "telegram-codex-bridge",
+        baseInstructions: null,
+        developerInstructions: null,
+        experimentalRawEvents: false,
+        persistExtendedHistory: false,
+        ephemeral: false,
+        personality: null,
+        serviceTier: "fast"
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1",
+          preview: "",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 1,
+          status: "idle",
+          path: null,
+          cwd: "/workspace",
+          cliVersion: "0.0.0",
+          source: "appServer",
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: {
+            sha: null,
+            branch: "main",
+            originUrl: null
+          },
+          name: null,
+          turns: []
+        },
+        model: "gpt-5.3-codex",
+        modelProvider: "openai",
+        serviceTier: "fast",
+        cwd: "/workspace",
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "dangerFullAccess"
+        },
+        reasoningEffort: "high"
+      }
+    });
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {}
+    });
+
+    await expect(createThreadPromise).resolves.toEqual({
+      threadId: "thread-1",
+      branch: "main",
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      cwd: "/workspace",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+  });
+
   it("prefers final-answer agent messages when reading a completed turn snapshot", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
@@ -659,6 +784,93 @@ describe("CodexGateway", () => {
     });
   });
 
+  it("updates thread settings through thread/resume overrides", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const settingsPromise = gateway.updateThreadSettings("thread-1", {
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/resume",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        persistExtendedHistory: false,
+        model: "gpt-5.3-codex",
+        serviceTier: "fast",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        config: {
+          model_reasoning_effort: "high",
+          sandbox_workspace_write: null
+        }
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5.3-codex",
+        modelProvider: "openai",
+        serviceTier: "fast",
+        cwd: "/workspace",
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "dangerFullAccess"
+        },
+        reasoningEffort: "high"
+      }
+    });
+
+    await expect(settingsPromise).resolves.toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      cwd: "/workspace",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+  });
+
   it("reads global settings through config/read", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
@@ -726,7 +938,7 @@ describe("CodexGateway", () => {
     });
   });
 
-  it("updates global settings through config/batchWrite and reloads user config", async () => {
+  it("updates global settings through config/batchWrite without reloading loaded threads", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
@@ -780,8 +992,7 @@ describe("CodexGateway", () => {
             value: "fast",
             mergeStrategy: "replace"
           }
-        ],
-        reloadUserConfig: true
+        ]
       }
     });
 

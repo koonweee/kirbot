@@ -152,9 +152,27 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
 
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
-  createThreadCalls: Array<{ title: string; cwd?: string | null }> = [];
+  createThreadCalls: Array<{
+    title: string;
+    cwd?: string | null;
+    settings?: {
+      model?: string;
+      reasoningEffort?: ReasoningEffort | null;
+      serviceTier?: ServiceTier | null;
+      approvalPolicy?: AskForApproval;
+      sandboxPolicy?: SandboxPolicy;
+    } | null;
+  }> = [];
   ensuredThreads: string[] = [];
   globalSettingsUpdates: Array<{
+    model?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    serviceTier?: ServiceTier | null;
+    approvalPolicy?: AskForApproval;
+    sandboxPolicy?: SandboxPolicy;
+  }> = [];
+  threadSettingsUpdates: Array<{
+    threadId: string;
     model?: string;
     reasoningEffort?: ReasoningEffort | null;
     serviceTier?: ServiceTier | null;
@@ -178,7 +196,6 @@ class FakeCodex implements BridgeCodexApi {
   model = "gpt-5-codex";
   reasoningEffort: ReasoningEffort | null = null;
   serviceTier: ServiceTier | null = null;
-  threadServiceTier: ServiceTier | null = null;
   approvalPolicy: AskForApproval = "on-request";
   sandboxPolicy: SandboxPolicy = {
     type: "workspaceWrite",
@@ -190,6 +207,12 @@ class FakeCodex implements BridgeCodexApi {
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false
   };
+  threadModel: string | undefined = undefined;
+  threadReasoningEffort: ReasoningEffort | null | undefined = undefined;
+  threadServiceTier: ServiceTier | null | undefined = undefined;
+  threadApprovalPolicy: AskForApproval | undefined = undefined;
+  threadSandboxPolicy: SandboxPolicy | undefined = undefined;
+  threadCwd: string | undefined = undefined;
   models: Model[] = [
     {
       id: "model-1",
@@ -221,7 +244,16 @@ class FakeCodex implements BridgeCodexApi {
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
 
-  async createThread(title: string, options?: { cwd?: string | null }): Promise<{
+  async createThread(optionsTitle: string, options?: {
+    cwd?: string | null;
+    settings?: {
+      model?: string;
+      reasoningEffort?: ReasoningEffort | null;
+      serviceTier?: ServiceTier | null;
+      approvalPolicy?: AskForApproval;
+      sandboxPolicy?: SandboxPolicy;
+    } | null;
+  }): Promise<{
     threadId: string;
     branch: string | null;
     model: string;
@@ -231,21 +263,34 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    this.createdThreads.push(title);
+    this.createdThreads.push(optionsTitle);
     this.createThreadCalls.push({
-      title,
-      ...(options?.cwd !== undefined ? { cwd: options.cwd } : {})
+      title: optionsTitle,
+      ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
+      ...(options?.settings !== undefined ? { settings: options.settings } : {})
     });
-    this.threadServiceTier = null;
+    const initialSettings = options?.settings ?? {
+      model: this.model,
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy
+    };
+    this.threadModel = initialSettings.model;
+    this.threadReasoningEffort = initialSettings.reasoningEffort ?? null;
+    this.threadServiceTier = initialSettings.serviceTier ?? null;
+    this.threadApprovalPolicy = initialSettings.approvalPolicy;
+    this.threadSandboxPolicy = initialSettings.sandboxPolicy;
+    this.threadCwd = options?.cwd ?? this.cwd;
     return {
       threadId: "thread-1",
       branch: this.branch,
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
-      serviceTier: this.threadServiceTier,
-      cwd: options?.cwd ?? this.cwd,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy
+      model: this.threadModel ?? this.model,
+      reasoningEffort: this.threadReasoningEffort === undefined ? this.reasoningEffort : this.threadReasoningEffort,
+      serviceTier: this.threadServiceTier === undefined ? this.serviceTier : this.threadServiceTier,
+      cwd: this.threadCwd,
+      approvalPolicy: this.threadApprovalPolicy ?? this.approvalPolicy,
+      sandboxPolicy: this.threadSandboxPolicy ?? this.sandboxPolicy
     };
   }
 
@@ -311,13 +356,50 @@ class FakeCodex implements BridgeCodexApi {
   }> {
     this.ensuredThreads.push(threadId);
     return {
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
-      serviceTier: this.threadServiceTier,
-      cwd: this.cwd,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy
+      model: this.threadModel ?? this.model,
+      reasoningEffort: this.threadReasoningEffort === undefined ? this.reasoningEffort : this.threadReasoningEffort,
+      serviceTier: this.threadServiceTier === undefined ? this.serviceTier : this.threadServiceTier,
+      cwd: this.threadCwd ?? this.cwd,
+      approvalPolicy: this.threadApprovalPolicy ?? this.approvalPolicy,
+      sandboxPolicy: this.threadSandboxPolicy ?? this.sandboxPolicy
     };
+  }
+
+  async updateThreadSettings(threadId: string, update: {
+    model?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    serviceTier?: ServiceTier | null;
+    approvalPolicy?: AskForApproval;
+    sandboxPolicy?: SandboxPolicy;
+  }): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    this.threadSettingsUpdates.push({
+      threadId,
+      ...update
+    });
+    if (update.model) {
+      this.threadModel = update.model;
+    }
+    if ("reasoningEffort" in update) {
+      this.threadReasoningEffort = update.reasoningEffort ?? null;
+    }
+    if ("serviceTier" in update) {
+      this.threadServiceTier = update.serviceTier ?? null;
+    }
+    if (update.approvalPolicy) {
+      this.threadApprovalPolicy = update.approvalPolicy;
+    }
+    if (update.sandboxPolicy) {
+      this.threadSandboxPolicy = update.sandboxPolicy;
+    }
+
+    return this.ensureThreadLoaded(threadId);
   }
 
   async sendTurn(
@@ -363,19 +445,19 @@ class FakeCodex implements BridgeCodexApi {
       overrides: options?.overrides ?? null
     });
     if (options?.overrides?.model) {
-      this.model = options.overrides.model;
+      this.threadModel = options.overrides.model;
     }
     if ("reasoningEffort" in (options?.overrides ?? {})) {
-      this.reasoningEffort = options?.overrides?.reasoningEffort ?? null;
+      this.threadReasoningEffort = options?.overrides?.reasoningEffort ?? null;
     }
     if ("serviceTier" in (options?.overrides ?? {})) {
       this.threadServiceTier = options?.overrides?.serviceTier ?? null;
     }
     if (options?.overrides?.approvalPolicy) {
-      this.approvalPolicy = options.overrides.approvalPolicy;
+      this.threadApprovalPolicy = options.overrides.approvalPolicy;
     }
     if (options?.overrides?.sandboxPolicy) {
-      this.sandboxPolicy = options.overrides.sandboxPolicy;
+      this.threadSandboxPolicy = options.overrides.sandboxPolicy;
     }
     await this.beforeSendTurnResolve?.({
       threadId,
@@ -860,7 +942,11 @@ describe("TelegramCodexBridge", () => {
     expect(codex.createThreadCalls).toEqual([
       {
         title: "project-root",
-        cwd: sessionDir
+        cwd: sessionDir,
+        settings: expect.objectContaining({
+          model: "gpt-5-codex",
+          serviceTier: null
+        })
       }
     ]);
     expect(codex.turns).toHaveLength(0);
@@ -896,7 +982,11 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.createThreadCalls.at(-1)).toEqual({
       title: "kirbot-core",
-      cwd: sessionDir
+      cwd: sessionDir,
+      settings: expect.objectContaining({
+        cwd: relativeBase,
+        model: "gpt-5-codex"
+      })
     });
   });
 
@@ -1516,7 +1606,22 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.options?.disable_notification).toBe(true);
   });
 
-  it("applies native Codex slash commands globally while a turn is active", async () => {
+  it("requires an existing session before changing thread-local Codex settings", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 781,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "/fast status"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This topic does not have a Codex session yet. Send a normal message first to start one."
+    );
+  });
+
+  it("rejects thread-local Codex setting changes while a turn is active", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 781,
@@ -1535,13 +1640,14 @@ describe("TelegramCodexBridge", () => {
       text: "/fast"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global fast mode enabled.");
-    expect(codex.globalSettingsUpdates.at(-1)).toEqual({
-      serviceTier: "fast"
-    });
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing settings."
+    );
+    expect(codex.globalSettingsUpdates).toHaveLength(0);
+    expect(codex.threadSettingsUpdates).toHaveLength(0);
   });
 
-  it("applies /fast globally and shows fast in later turn footers", async () => {
+  it("applies root /fast only to future threads", async () => {
     codex.readTurnSnapshotResult = {
       text: "Initial answer",
       assistantText: "Initial answer"
@@ -1571,14 +1677,14 @@ describe("TelegramCodexBridge", () => {
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
-      topicId: 782,
+      topicId: null,
       messageId: 11,
       updateId: 27,
       userId: 42,
       text: "/fast on"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global fast mode enabled.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default fast mode enabled.");
     expect(codex.globalSettingsUpdates.at(-1)).toEqual({
       serviceTier: "fast"
     });
@@ -1596,9 +1702,83 @@ describe("TelegramCodexBridge", () => {
       text: "Use fast mode"
     });
 
-    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+    expect(codex.turnOverrides.at(-1)?.overrides).toBeNull();
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-2",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.at(-1)?.text).not.toContain("gpt-5-codex fast");
+  });
+
+  it("applies topic /fast only to that thread", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 10,
+      updateId: 29,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 11,
+      updateId: 30,
+      userId: 42,
+      text: "/fast on"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode enabled.");
+    expect(codex.threadSettingsUpdates.at(-1)).toEqual({
+      threadId: "thread-1",
       serviceTier: "fast"
     });
+    expect(codex.globalSettingsUpdates).toHaveLength(0);
+
+    codex.readTurnSnapshotResult = {
+      text: "Fast answer",
+      assistantText: "Fast answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 12,
+      updateId: 31,
+      userId: 42,
+      text: "Use fast mode"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toBeNull();
 
     codex.emitNotification({
       method: "turn/completed",
@@ -1642,7 +1822,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "Global fast mode enabled."
+        text: "Global default fast mode enabled."
       },
       {
         chatId: -1001,
@@ -1718,7 +1898,7 @@ describe("TelegramCodexBridge", () => {
       model: "gpt-5.3-codex",
       reasoningEffort: "high"
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global model set to gpt-5.3-codex high.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default model set to gpt-5.3-codex high.");
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1729,9 +1909,7 @@ describe("TelegramCodexBridge", () => {
       text: "Use the new model"
     });
 
-    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
-      serviceTier: null
-    });
+    expect(codex.turnOverrides.at(-1)?.overrides).toBeNull();
     expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toBeNull();
     expect(codex.model).toBe("gpt-5.3-codex");
     expect(codex.reasoningEffort).toBe("high");
@@ -1764,7 +1942,7 @@ describe("TelegramCodexBridge", () => {
         type: "dangerFullAccess"
       }
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global permissions set to Full Access.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default permissions set to Full Access.");
   });
 
   it("enables plan mode without starting a turn when /plan has no prompt", async () => {
@@ -1849,7 +2027,7 @@ describe("TelegramCodexBridge", () => {
       mode: "plan",
       settings: {
         model: "gpt-5-codex",
-        reasoning_effort: "high",
+        reasoning_effort: null,
         developer_instructions: null
       }
     });

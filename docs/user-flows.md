@@ -127,9 +127,10 @@ Verified by:
 
 User experience:
 
-- `/model`, `/fast`, and `/permissions` change global Codex defaults for all topics, whether the user runs them from the lobby or inside a topic.
-- The settings UI no longer requires an existing topic session.
-- Changes apply immediately to loaded threads and future topics instead of waiting for the next turn in one topic.
+- `/model`, `/fast`, and `/permissions` in the lobby change global Codex defaults for future topics.
+- The same commands inside a topic change only that topic's existing Codex thread settings.
+- Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
+- Existing threads do not follow later root-level global changes automatically.
 - `/approvals` remains an alias for `/permissions`.
 
 Owned by:

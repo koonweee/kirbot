@@ -18,6 +18,7 @@ import type { PermissionsRequestApprovalParams } from "./generated/codex/v2/Perm
 import type { PermissionsRequestApprovalResponse } from "./generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { Config } from "./generated/codex/v2/Config";
 import type { ConfigEdit } from "./generated/codex/v2/ConfigEdit";
+import type { JsonValue } from "./generated/codex/serde_json/JsonValue";
 import type { SandboxPolicy } from "./generated/codex/v2/SandboxPolicy";
 import type { SandboxMode } from "./generated/codex/v2/SandboxMode";
 import type { SandboxWorkspaceWrite } from "./generated/codex/v2/SandboxWorkspaceWrite";
@@ -127,14 +128,24 @@ export class CodexGateway {
     });
   }
 
-  async createThread(title: string, options?: { cwd?: string | null }): Promise<CreatedThread> {
+  async createThread(
+    title: string,
+    options?: {
+      cwd?: string | null;
+      settings?: ThreadSettingsOverride | null;
+    }
+  ): Promise<CreatedThread> {
+    const threadStartOverrides = buildThreadStartOverrides(
+      options?.settings ?? null,
+      sanitizeThreadStartConfig(this.config.config)
+    );
     const response = await this.client.startThread({
       cwd: options?.cwd ?? this.config.defaultCwd,
-      model: null,
+      model: threadStartOverrides.model ?? null,
       modelProvider: this.config.modelProvider ?? null,
-      approvalPolicy: null,
-      sandbox: null,
-      config: sanitizeThreadStartConfig(this.config.config),
+      approvalPolicy: threadStartOverrides.approvalPolicy ?? null,
+      sandbox: threadStartOverrides.sandbox ?? null,
+      config: threadStartOverrides.config ?? null,
       serviceName: this.config.serviceName,
       baseInstructions: this.config.baseInstructions ?? null,
       developerInstructions: this.config.developerInstructions ?? null,
@@ -142,18 +153,11 @@ export class CodexGateway {
       persistExtendedHistory: false,
       ephemeral: false,
       personality: null,
-      serviceTier: null
+      serviceTier: threadStartOverrides.serviceTier ?? null
     });
 
     this.#loadedThreads.add(response.thread.id);
-    this.#threadSettings.set(response.thread.id, {
-      model: response.model,
-      reasoningEffort: response.reasoningEffort,
-      serviceTier: response.serviceTier,
-      cwd: response.cwd,
-      approvalPolicy: response.approvalPolicy,
-      sandboxPolicy: response.sandbox
-    });
+    this.#threadSettings.set(response.thread.id, threadSettingsFromResponse(response));
     await this.client.setThreadName({
       threadId: response.thread.id,
       name: title
@@ -161,12 +165,7 @@ export class CodexGateway {
     return {
       threadId: response.thread.id,
       branch: response.thread.gitInfo?.branch ?? null,
-      model: response.model,
-      reasoningEffort: response.reasoningEffort,
-      serviceTier: response.serviceTier,
-      cwd: response.cwd,
-      approvalPolicy: response.approvalPolicy,
-      sandboxPolicy: response.sandbox
+      ...threadSettingsFromResponse(response)
     };
   }
 
@@ -185,10 +184,8 @@ export class CodexGateway {
     }
 
     await this.client.batchWriteConfig({
-      edits,
-      reloadUserConfig: true
+      edits
     });
-    this.invalidateThreadSettingsCache();
     return this.readGlobalSettings();
   }
 
@@ -210,22 +207,26 @@ export class CodexGateway {
       persistExtendedHistory: false
     });
     this.#loadedThreads.add(threadId);
-    this.#threadSettings.set(threadId, {
-      model: response.model,
-      reasoningEffort: response.reasoningEffort,
-      serviceTier: response.serviceTier,
-      cwd: response.cwd,
-      approvalPolicy: response.approvalPolicy,
-      sandboxPolicy: response.sandbox
+    const settings = threadSettingsFromResponse(response);
+    this.#threadSettings.set(threadId, settings);
+    return settings;
+  }
+
+  async updateThreadSettings(threadId: string, update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
+    const resumeOverrides = buildThreadStartOverrides(update);
+    const response = await this.client.resumeThread({
+      threadId,
+      persistExtendedHistory: false,
+      ...(resumeOverrides.model !== undefined ? { model: resumeOverrides.model } : {}),
+      ...(resumeOverrides.serviceTier !== undefined ? { serviceTier: resumeOverrides.serviceTier } : {}),
+      ...(resumeOverrides.approvalPolicy !== undefined ? { approvalPolicy: resumeOverrides.approvalPolicy } : {}),
+      ...(resumeOverrides.sandbox !== undefined ? { sandbox: resumeOverrides.sandbox } : {}),
+      ...(resumeOverrides.config !== undefined ? { config: resumeOverrides.config } : {})
     });
-    return {
-      model: response.model,
-      reasoningEffort: response.reasoningEffort,
-      serviceTier: response.serviceTier,
-      cwd: response.cwd,
-      approvalPolicy: response.approvalPolicy,
-      sandboxPolicy: response.sandbox
-    };
+    const settings = threadSettingsFromResponse(response);
+    this.#loadedThreads.add(threadId);
+    this.#threadSettings.set(threadId, settings);
+    return settings;
   }
 
   async sendTurn(
@@ -396,11 +397,6 @@ export class CodexGateway {
       });
     }
   }
-
-  private invalidateThreadSettingsCache(): void {
-    this.#loadedThreads.clear();
-    this.#threadSettings.clear();
-  }
 }
 
 function defaultWorkspaceWriteSandboxPolicy(): SandboxPolicy {
@@ -431,6 +427,60 @@ function sanitizeThreadStartConfig(
   delete nextConfig.model_reasoning_effort;
   delete nextConfig.service_tier;
   return nextConfig;
+}
+
+function buildThreadStartOverrides(
+  update: ThreadSettingsOverride | null | undefined,
+  baseConfig?: NonNullable<AppConfig["codex"]["config"]> | null
+): {
+  model: string | null | undefined;
+  serviceTier: ServiceTier | null | undefined;
+  approvalPolicy: AskForApproval | null | undefined;
+  sandbox: SandboxMode | null | undefined;
+  config: Record<string, JsonValue | undefined> | null | undefined;
+} {
+  const config = {
+    ...(baseConfig ?? {})
+  } as Record<string, JsonValue | undefined>;
+
+  if ("reasoningEffort" in (update ?? {})) {
+    config.model_reasoning_effort = update?.reasoningEffort ?? null;
+  }
+
+  if ("sandboxPolicy" in (update ?? {}) && update?.sandboxPolicy) {
+    const { mode, workspaceWrite } = sandboxConfigFromPolicy(update.sandboxPolicy);
+    config.sandbox_workspace_write = workspaceWrite;
+    return {
+      model: "model" in (update ?? {}) ? update?.model ?? null : undefined,
+      serviceTier: "serviceTier" in (update ?? {}) ? update?.serviceTier ?? null : undefined,
+      approvalPolicy: "approvalPolicy" in (update ?? {}) ? update?.approvalPolicy ?? null : undefined,
+      sandbox: mode,
+      config: Object.keys(config).length > 0 ? config : null
+    };
+  }
+
+  return {
+    model: "model" in (update ?? {}) ? update?.model ?? null : baseConfig ? null : undefined,
+    serviceTier: "serviceTier" in (update ?? {}) ? update?.serviceTier ?? null : baseConfig ? null : undefined,
+    approvalPolicy: "approvalPolicy" in (update ?? {}) ? update?.approvalPolicy ?? null : baseConfig ? null : undefined,
+    sandbox: baseConfig ? null : undefined,
+    config: Object.keys(config).length > 0 ? config : baseConfig ? null : undefined
+  };
+}
+
+function threadSettingsFromResponse(
+  response:
+    | Awaited<ReturnType<CodexRpcClient["startThread"]>>
+    | Awaited<ReturnType<CodexRpcClient["resumeThread"]>>
+): ThreadStartSettings {
+  return {
+    model: response.model,
+    reasoningEffort: response.reasoningEffort,
+    serviceTier: response.serviceTier,
+    cwd: response.cwd,
+    approvalPolicy: response.approvalPolicy,
+    sandboxPolicy: response.sandbox
+  };
 }
 
 function threadSettingsFromConfig(config: Config, defaults: AppConfig["codex"]): ThreadStartSettings {

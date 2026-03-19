@@ -57,7 +57,16 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
-  async createThread(title: string, options?: { cwd?: string | null }): Promise<{
+  async createThread(title: string, options?: {
+    cwd?: string | null;
+    settings?: {
+      model?: string;
+      reasoningEffort?: ReasoningEffort | null;
+      serviceTier?: ServiceTier | null;
+      approvalPolicy?: AskForApproval;
+      sandboxPolicy?: SandboxPolicy;
+    } | null;
+  }): Promise<{
     threadId: string;
     branch: string | null;
     model: string;
@@ -69,6 +78,21 @@ class ScriptedCodex implements BridgeCodexApi {
   }> {
     const threadId = `thread-${this.createdThreadIds.length + 1}`;
     this.createdThreadIds.push(title);
+    if (options?.settings?.model) {
+      this.model = options.settings.model;
+    }
+    if ("reasoningEffort" in (options?.settings ?? {})) {
+      this.reasoningEffort = options?.settings?.reasoningEffort ?? null;
+    }
+    if ("serviceTier" in (options?.settings ?? {})) {
+      this.serviceTier = options?.settings?.serviceTier ?? null;
+    }
+    if (options?.settings?.approvalPolicy) {
+      this.approvalPolicy = options.settings.approvalPolicy;
+    }
+    if (options?.settings?.sandboxPolicy) {
+      this.sandboxPolicy = options.settings.sandboxPolicy;
+    }
     return {
       threadId,
       branch: this.branch,
@@ -130,6 +154,23 @@ class ScriptedCodex implements BridgeCodexApi {
     }
 
     return this.readGlobalSettings();
+  }
+
+  async updateThreadSettings(_threadId: string, update: {
+    model?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    serviceTier?: ServiceTier | null;
+    approvalPolicy?: AskForApproval;
+    sandboxPolicy?: SandboxPolicy;
+  }): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    return this.updateGlobalSettings(update);
   }
 
   async ensureThreadLoaded(): Promise<{

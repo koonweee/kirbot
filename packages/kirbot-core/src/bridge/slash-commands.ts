@@ -72,7 +72,7 @@ const SLASH_COMMAND_DEFINITIONS = [
   },
   {
     command: "model",
-    description: "Choose the global model",
+    description: "Choose the default or thread model",
     kind: "codex",
     visible: true,
     allowInRoot: true,
@@ -80,7 +80,7 @@ const SLASH_COMMAND_DEFINITIONS = [
   },
   {
     command: "fast",
-    description: "Toggle global fast mode",
+    description: "Toggle default or thread fast mode",
     kind: "codex",
     visible: true,
     allowInRoot: true,
@@ -88,7 +88,7 @@ const SLASH_COMMAND_DEFINITIONS = [
   },
   {
     command: "permissions",
-    description: "Set global Codex permissions",
+    description: "Set default or thread permissions",
     kind: "codex",
     visible: true,
     allowInRoot: true,

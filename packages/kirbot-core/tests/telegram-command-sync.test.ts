@@ -109,15 +109,15 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "model",
-            description: "Choose the global model"
+            description: "Choose the default or thread model"
           },
           {
             command: "fast",
-            description: "Toggle global fast mode"
+            description: "Toggle default or thread fast mode"
           },
           {
             command: "permissions",
-            description: "Set global Codex permissions"
+            description: "Set default or thread permissions"
           }
         ],
         options: {
@@ -150,15 +150,15 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "model",
-            description: "Choose the global model"
+            description: "Choose the default or thread model"
           },
           {
             command: "fast",
-            description: "Toggle global fast mode"
+            description: "Toggle default or thread fast mode"
           },
           {
             command: "permissions",
-            description: "Set global Codex permissions"
+            description: "Set default or thread permissions"
           }
         ],
         options: {
