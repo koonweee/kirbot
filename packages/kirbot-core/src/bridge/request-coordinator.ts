@@ -18,15 +18,18 @@ import {
   buildUserInputResponse,
   createInitialUserInputState,
   currentQuestionAcceptsFreeText,
-  formatFileChangeApprovalPrompt,
   getCurrentUserInputQuestion,
-  normalizeFileApprovalDecision,
   parseRequestId,
   parseUserInputState,
   resolveCommandApprovalDecision,
+  resolveFileApprovalDecision,
   stringifyUserInputState
 } from "./requests";
-import { buildRenderedCommandApprovalPrompt, buildStatusDraft } from "./presentation";
+import {
+  buildRenderedCommandApprovalPrompt,
+  buildRenderedFileChangeApprovalPrompt,
+  buildStatusDraft
+} from "./presentation";
 
 type BridgeCodexRequestsApi = {
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
@@ -195,7 +198,7 @@ export class BridgeRequestCoordinator {
     const prompt =
       request.method === "item/commandExecution/requestApproval"
         ? buildRenderedCommandApprovalPrompt(request.params)
-        : { text: formatFileChangeApprovalPrompt(request.params), entities: undefined };
+        : buildRenderedFileChangeApprovalPrompt(request.params);
 
     const pending = await this.database.createPendingRequest({
       requestIdJson: JSON.stringify(request.id),
@@ -210,9 +213,7 @@ export class BridgeRequestCoordinator {
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: session.telegramTopicId,
       text: prompt.text,
-      ...(request.method === "item/commandExecution/requestApproval" && prompt.entities
-        ? { entities: prompt.entities }
-        : {}),
+      ...(prompt.entities ? { entities: prompt.entities } : {}),
       replyMarkup: buildApprovalKeyboard(
         pending.id,
         request.method === "item/commandExecution/requestApproval" ? request.params.availableDecisions ?? null : null
@@ -268,13 +269,13 @@ export class BridgeRequestCoordinator {
       await this.database.resolveRequest(request.requestIdJson);
       resolvedActionSummary = describeCommandApprovalDecision(decision);
     } else if (request.method === "item/fileChange/requestApproval") {
-      const action = actionParts[0] ?? "cancel";
+      const decision = resolveFileApprovalDecision(actionParts);
       const response = {
-        decision: normalizeFileApprovalDecision(action)
+        decision
       };
       await this.codex.respondToFileChangeApproval(requestId, response);
       await this.database.resolveRequest(request.requestIdJson);
-      resolvedActionSummary = action;
+      resolvedActionSummary = decision;
     } else {
       await this.codex.respondUnsupportedRequest(requestId, `Unsupported approval action for ${request.method}`);
       return;

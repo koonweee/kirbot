@@ -1,7 +1,6 @@
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
-import type { FileChangeRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/FileChangeRequestApprovalParams";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { UserInputServerRequest } from "@kirbot/codex-client";
 import type { InlineKeyboardMarkup } from "../telegram-messenger";
@@ -41,10 +40,6 @@ export function buildApprovalKeyboard(
   return {
     inline_keyboard: [allowRow, denyRow].filter((row) => row.length > 0)
   };
-}
-
-export function formatFileChangeApprovalPrompt(params: FileChangeRequestApprovalParams): string {
-  return ["Codex requested file-change approval.", `Turn: ${params.turnId}`, `Item: ${params.itemId}`].join("\n");
 }
 
 export function createInitialUserInputState(): UserInputRequestState {
@@ -218,6 +213,17 @@ export function resolveCommandApprovalDecision(
   }
 
   return normalizeCommandApprovalDecision(action ?? "cancel");
+}
+
+export function resolveFileApprovalDecision(actionParts: string[]): FileChangeApprovalDecision {
+  const [action, value] = actionParts;
+  if (action === "decision") {
+    const decisionIndex = Number.parseInt(value ?? "", 10);
+    const decision = ["accept", "decline", "cancel"] satisfies FileChangeApprovalDecision[];
+    return decision[decisionIndex] ?? "cancel";
+  }
+
+  return normalizeFileApprovalDecision(action ?? "cancel");
 }
 
 function normalizeCommandApprovalDecision(action: string): CommandExecutionApprovalDecision {

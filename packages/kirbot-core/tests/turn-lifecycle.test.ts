@@ -876,7 +876,7 @@ describe("TurnLifecycleCoordinator", () => {
       id: "compact-2"
     });
 
-    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed\n\nlookup_docs\n\nDuration: <1s"]);
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual(["Tool failed\nlookup_docs\n\nDuration: <1s"]);
     expect(harness.telegram.drafts).toEqual([]);
   });
 

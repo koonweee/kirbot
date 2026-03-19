@@ -19,13 +19,26 @@ export type ActivityLogEntry =
       text: string;
     }
   | {
-      kind: "commandFailure";
-      title: "Command failed" | "Command declined";
-      command: string;
-      cwd: string | null;
-      exitCode: number | null;
-      durationMs: number | null;
-      errorOutput: string | null;
+      kind: "structuredFailure";
+      title: string;
+      subject:
+        | {
+            value: string;
+            style: "codeBlock" | "inlineCode" | "text";
+          }
+        | null;
+      metadata: Array<{
+        label: string;
+        value: string;
+        code: boolean;
+      }>;
+      detail:
+        | {
+            title: string;
+            value: string;
+            style: "codeBlock" | "quoteBlock" | "text";
+          }
+        | null;
     }
   | {
       kind: "activity";
@@ -37,15 +50,9 @@ export type ActivityLogEntry =
 export type ActivityLogLabel =
   | "Web Search"
   | "Command"
-  | "Command Failed"
-  | "Command Declined"
   | "Tool"
-  | "Tool Failed"
   | "Agent Task"
-  | "Agent Task Failed"
-  | "File Edit"
-  | "File Edit Failed"
-  | "File Edit Declined";
+  | "File Edit";
 
 export type RuntimeTurn = {
   chatId: number;
