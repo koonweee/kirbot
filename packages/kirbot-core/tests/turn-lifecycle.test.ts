@@ -1035,6 +1035,24 @@ describe("TurnLifecycleCoordinator", () => {
     );
   });
 
+  it("adds a plan-mode label to the completion footer for plan turns", async () => {
+    const harness = createHarness({
+      text: "Plan ready",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex", null, "plan");
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Plan ready");
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 0 files • 100% left • /workspace • main • planning"
+    );
+  });
+
   it("includes reasoning output tokens in the completion footer context-left calculation", async () => {
     const harness = createHarness({
       text: "Final answer",

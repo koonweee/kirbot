@@ -725,7 +725,8 @@ export class TelegramCodexBridge {
         session.codexThreadId,
         turn.id,
         thread.model,
-        thread.reasoningEffort
+        thread.reasoningEffort,
+        options?.forceMode ?? session.preferredMode
       );
       await this.flushStagedTurnEvents(turn.id);
       if (activeTurn.statusDraft) {

@@ -4,6 +4,7 @@ import type { CommandExecutionRequestApprovalParams } from "@kirbot/codex-client
 import type { FileChangeRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/FileChangeRequestApprovalParams";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
+import type { SessionMode } from "../domain";
 import {
   renderCodeText,
   renderMarkdownToFormattedText,
@@ -51,6 +52,7 @@ export type TurnStatusDraft = {
 };
 
 export type CompletionFooterDetails = {
+  mode: SessionMode;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
   durationMs: number;
@@ -941,7 +943,8 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
     `${details.changedFiles} ${fileLabel}`,
     contextLeft,
     cwd,
-    branch
+    branch,
+    ...(details.mode === "plan" ? ["planning"] : [])
   ].join(" • ");
 }
 
