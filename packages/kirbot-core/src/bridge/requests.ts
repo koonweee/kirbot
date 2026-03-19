@@ -6,6 +6,8 @@ import type { PermissionsRequestApprovalParams } from "@kirbot/codex-client/gene
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { UserInputServerRequest } from "@kirbot/codex-client";
+import type { FormattedText } from "@kirbot/telegram-format";
+import { TelegramEntityBuilder, renderCodeText } from "@kirbot/telegram-format";
 import type { InlineKeyboardMarkup } from "../telegram-messenger";
 
 export type UserInputRequestState = {
@@ -15,6 +17,10 @@ export type UserInputRequestState = {
 };
 
 type UserInputQuestion = UserInputServerRequest["params"]["questions"][number];
+
+type RenderedUserInputPrompt = FormattedText & {
+  replyMarkup?: InlineKeyboardMarkup;
+};
 
 export function buildApprovalKeyboard(
   requestId: number,
@@ -93,11 +99,11 @@ export function buildUserInputPrompt(
   requestId: number,
   questions: UserInputServerRequest["params"]["questions"],
   state: UserInputRequestState
-): { text: string; replyMarkup?: InlineKeyboardMarkup } {
+): RenderedUserInputPrompt {
   const question = getCurrentUserInputQuestion(questions, state);
   if (!question) {
     return {
-      text: "Sent your answers to Codex."
+      text: "User answered"
     };
   }
 
@@ -124,10 +130,10 @@ export function buildUserInputPrompt(
     }
 
     lines.push("");
-    lines.push(awaitingFreeText ? "Reply with your own answer in this topic." : "Use the buttons below to answer.");
+    lines.push(awaitingFreeText ? "Reply with your own answer in this topic" : "Use the buttons below to answer");
   } else {
     lines.push("");
-    lines.push("Reply with your answer in this topic.");
+    lines.push("Reply with your answer in this topic");
   }
 
   const replyMarkup =
@@ -146,6 +152,13 @@ export function buildUserInputPrompt(
     text: lines.join("\n"),
     ...(replyMarkup ? { replyMarkup } : {})
   };
+}
+
+export function buildCompletedUserInputPrompt(answer: string): FormattedText {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText("User answered: ");
+  builder.appendFormatted(renderCodeText(answer));
+  return builder.build();
 }
 
 export function currentQuestionAcceptsFreeText(question: UserInputQuestion, state: UserInputRequestState): boolean {

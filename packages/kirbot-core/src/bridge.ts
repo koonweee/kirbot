@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
+import type { MessageEntity } from "grammy/types";
 
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
@@ -54,6 +55,7 @@ import {
   validateCustomCommandPrompt
 } from "./bridge/custom-commands";
 import {
+  getSurfaceableTopicSlashCommands,
   isAllowedSlashCommandInScope,
   isBuiltInSlashCommand,
   isCodexSlashCommand,
@@ -62,6 +64,7 @@ import {
   type ParsedSlashCommand
 } from "./bridge/slash-commands";
 import {
+  buildTopicCommandKeyboard,
   buildRenderedThreadStartFooter,
   buildRenderedInitialPromptMessage,
   buildQueuePreviewKeyboard,
@@ -72,7 +75,7 @@ import {
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
 import type { LoggerLike } from "./logging";
-import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
+import { TelegramMessenger, type ReplyKeyboardMarkup, type TelegramApi, type TelegramReplyMarkup } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
 
 export type CallbackQueryEvent = {
@@ -125,21 +128,21 @@ type ThreadStartSettings = CodexThreadSettings & {
   cwd: string;
 };
 
-const INVALID_COMMAND_TEXT = "This command is not valid here.";
-const NO_ACTIVE_RESPONSE_TO_STOP_TEXT = "There is no active response to stop right now.";
+const INVALID_COMMAND_TEXT = "This command is not valid here";
+const NO_ACTIVE_RESPONSE_TO_STOP_TEXT = "There is no active response to stop right now";
 const STOPPING_CURRENT_RESPONSE_TEXT = "Stopping the current response…";
-const RESPONSE_ALREADY_FINISHING_TEXT = "This response is already finishing.";
-const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing modes.";
-const SETTINGS_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing settings.";
-const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one.";
+const RESPONSE_ALREADY_FINISHING_TEXT = "This response is already finishing";
+const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing modes";
+const SETTINGS_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing settings";
+const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one";
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
 const START_USAGE_TEXT = "Usage: /start <path>";
-const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled.";
-const PLAN_MODE_EXITED_TEXT = "Exited plan mode.";
+const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled";
+const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
-const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending.";
+const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -170,6 +173,7 @@ export class TelegramCodexBridge {
       messenger: this.#messenger,
       telegram,
       planArtifactPublicUrl: config.telegram.miniApp.publicUrl,
+      buildTopicCommandReplyMarkup: this.buildTopicCommandReplyMarkup.bind(this),
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       resolveTurnSnapshot: this.resolveTurnSnapshot.bind(this),
       syncQueuePreview: this.syncQueuePreview.bind(this),
@@ -275,14 +279,14 @@ export class TelegramCodexBridge {
     }
 
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-      text: "Unsupported callback."
+      text: "Unsupported callback"
     });
   }
 
   private async handleTopicImplementCallbackQuery(event: CallbackQueryEvent): Promise<void> {
     if (event.topicId === null) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "This action requires a topic."
+        text: "This action requires a topic"
       });
       return;
     }
@@ -295,14 +299,14 @@ export class TelegramCodexBridge {
     const [, turnId, action] = event.data.split(":");
     if (action !== "sendNow" || !turnId) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Unsupported callback."
+        text: "Unsupported callback"
       });
       return;
     }
 
     if (event.topicId === null) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "This action requires a topic."
+        text: "This action requires a topic"
       });
       return;
     }
@@ -310,14 +314,14 @@ export class TelegramCodexBridge {
     const activeTurn = this.findActiveTurnByTopic(event.chatId, event.topicId);
     if (!activeTurn || activeTurn.turnId !== turnId) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "This turn is no longer active."
+        text: "This turn is no longer active"
       });
       return;
     }
 
     if (activeTurn.stopRequested) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Interrupt already requested."
+        text: "Interrupt already requested"
       });
       return;
     }
@@ -325,7 +329,7 @@ export class TelegramCodexBridge {
     const queueState = this.#lifecycle.getQueueState(event.chatId, event.topicId);
     if (queueState.pendingSteers.length === 0) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "No pending steer instructions to send."
+        text: "No pending steer instructions to send"
       });
       return;
     }
@@ -335,7 +339,7 @@ export class TelegramCodexBridge {
     try {
       await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Submitting queued steer instructions."
+        text: "Submitting queued steer instructions"
       });
     } catch (error) {
       const classification = classifyInterruptError(error);
@@ -343,7 +347,7 @@ export class TelegramCodexBridge {
         this.#lifecycle.requestPendingSteerSubmissionAfterInterrupt(turnId);
         await this.#lifecycle.finalizeInterruptedTurnById(activeTurn.threadId, activeTurn.turnId);
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-          text: "Previous turn already ended. Submitting queued steer instructions."
+          text: "Previous turn already ended. Submitting queued steer instructions"
         });
         return;
       }
@@ -351,13 +355,13 @@ export class TelegramCodexBridge {
       this.#lifecycle.clearPendingSteerSubmissionAfterInterrupt(turnId);
 
       this.logger.error("Failed to interrupt turn", error);
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: event.chatId,
         topicId: event.topicId,
         text: `Failed to interrupt the current turn: ${formatError(error)}`
       });
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Failed to interrupt turn."
+        text: "Failed to interrupt turn"
       });
     }
   }
@@ -418,7 +422,7 @@ export class TelegramCodexBridge {
     if (message.topicId === null) {
       await this.#messenger.sendMessage({
         chatId: message.chatId,
-        text: "Could not determine a Telegram topic for this message, so no Codex session was started."
+        text: "Could not determine a Telegram topic for this message, so no Codex session was started"
       });
       return;
     }
@@ -430,10 +434,10 @@ export class TelegramCodexBridge {
     }
 
     if (!session.codexThreadId) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        text: "This topic is still provisioning a Codex session. Try again in a moment."
+        text: "This topic is still provisioning a Codex session. Try again in a moment"
       });
       return;
     }
@@ -664,10 +668,10 @@ export class TelegramCodexBridge {
     }
 
     if (!session.codexThreadId) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        text: "This topic is still provisioning a Codex session. Try again in a moment."
+        text: "This topic is still provisioning a Codex session. Try again in a moment"
       });
       return true;
     }
@@ -686,7 +690,7 @@ export class TelegramCodexBridge {
     const parsed = parsePendingCustomCommandCallbackData(event.data);
     if (!parsed) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Unsupported callback."
+        text: "Unsupported callback"
       });
       return;
     }
@@ -703,7 +707,7 @@ export class TelegramCodexBridge {
       await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
       await this.maybeEditPendingCustomCommandMessage(pending, buildCustomCommandCanceledText(pending.command));
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Canceled."
+        text: "Canceled"
       });
       return;
     }
@@ -713,7 +717,7 @@ export class TelegramCodexBridge {
       await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
       await this.maybeEditPendingCustomCommandMessage(pending, conflict);
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Could not add command."
+        text: "Could not add command"
       });
       return;
     }
@@ -729,14 +733,14 @@ export class TelegramCodexBridge {
         await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
         await this.maybeEditPendingCustomCommandMessage(pending, duplicateConflict);
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-          text: "Could not add command."
+          text: "Could not add command"
         });
         return;
       }
 
       this.logger.error("Failed to add custom command", error);
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Failed to add command."
+        text: "Failed to add command"
       });
       return;
     }
@@ -744,7 +748,7 @@ export class TelegramCodexBridge {
     await this.database.updatePendingCustomCommandAddStatus(pending.id, "confirmed");
     await this.maybeEditPendingCustomCommandMessage(pending, buildCustomCommandAddedText(pending.command));
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-      text: "Command added."
+      text: "Command added"
     });
   }
 
@@ -785,7 +789,7 @@ export class TelegramCodexBridge {
     }
 
     if (this.findActiveTurnByTopic(message.chatId, message.topicId!)) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: MODE_CHANGE_REJECTED_TEXT
@@ -795,7 +799,7 @@ export class TelegramCodexBridge {
 
     const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "plan");
     if (!updatedSession) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: MODE_COMMAND_REQUIRES_SESSION_TEXT
@@ -804,7 +808,7 @@ export class TelegramCodexBridge {
     }
 
     if (!promptText.trim()) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: PLAN_MODE_ENABLED_TEXT
@@ -812,7 +816,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       topicId: message.topicId,
       text: PLAN_MODE_ENABLED_TEXT
@@ -827,7 +831,7 @@ export class TelegramCodexBridge {
     }
 
     if (this.findActiveTurnByTopic(message.chatId, message.topicId!)) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: MODE_CHANGE_REJECTED_TEXT
@@ -837,7 +841,7 @@ export class TelegramCodexBridge {
 
     const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "default");
     if (!updatedSession) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: MODE_COMMAND_REQUIRES_SESSION_TEXT
@@ -845,7 +849,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       topicId: message.topicId,
       text: PLAN_MODE_EXITED_TEXT
@@ -867,7 +871,7 @@ export class TelegramCodexBridge {
 
     const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
     if (!session) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: MODE_COMMAND_REQUIRES_SESSION_TEXT
@@ -876,10 +880,10 @@ export class TelegramCodexBridge {
     }
 
     if (!session.codexThreadId) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        text: "This topic is still provisioning a Codex session. Try again in a moment."
+        text: "This topic is still provisioning a Codex session. Try again in a moment"
       });
       return null;
     }
@@ -894,7 +898,7 @@ export class TelegramCodexBridge {
 
     const activeTurn = this.findActiveTurnByTopic(message.chatId, message.topicId);
     if (!activeTurn) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: NO_ACTIVE_RESPONSE_TO_STOP_TEXT
@@ -903,10 +907,10 @@ export class TelegramCodexBridge {
     }
 
     if (activeTurn.stopRequested) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        text: "Interrupt already requested."
+        text: "Interrupt already requested"
       });
       return;
     }
@@ -916,7 +920,7 @@ export class TelegramCodexBridge {
 
     try {
       await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: STOPPING_CURRENT_RESPONSE_TEXT
@@ -925,7 +929,7 @@ export class TelegramCodexBridge {
       const classification = classifyInterruptError(error);
       if (classification.kind === "stale_or_missing_active_turn") {
         await this.#lifecycle.finalizeInterruptedTurnById(activeTurn.threadId, activeTurn.turnId);
-        await this.#messenger.sendMessage({
+        await this.sendScopedBridgeMessage({
           chatId: message.chatId,
           topicId: message.topicId,
           text: RESPONSE_ALREADY_FINISHING_TEXT
@@ -937,7 +941,7 @@ export class TelegramCodexBridge {
       await this.syncQueuePreview(this.#lifecycle.getQueueState(activeTurn.chatId, activeTurn.topicId));
 
       this.logger.error("Failed to interrupt turn", error);
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: `Failed to interrupt the current turn: ${formatError(error)}`
@@ -959,7 +963,7 @@ export class TelegramCodexBridge {
     }
 
     if (normalizedArgs === "status") {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: location.chatId,
         ...(location.topicId !== null ? { topicId: location.topicId } : {}),
         text: buildFastStatusMessage(target.scope, target.settings.serviceTier)
@@ -975,7 +979,7 @@ export class TelegramCodexBridge {
     } else if (normalizedArgs === "off") {
       nextTier = null;
     } else {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: location.chatId,
         ...(location.topicId !== null ? { topicId: location.topicId } : {}),
         text: FAST_USAGE_TEXT
@@ -984,7 +988,7 @@ export class TelegramCodexBridge {
     }
 
     if (target.scope === "thread" && this.findActiveTurnByTopic(location.chatId, location.topicId!)) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: location.chatId,
         topicId: location.topicId!,
         text: SETTINGS_CHANGE_REJECTED_TEXT
@@ -1000,7 +1004,7 @@ export class TelegramCodexBridge {
         : await this.codex.updateThreadSettings(target.session.codexThreadId!, {
             serviceTier: nextTier
           });
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: location.chatId,
       ...(location.topicId !== null ? { topicId: location.topicId } : {}),
       text: buildFastUpdatedMessage(target.scope, nextEffective.serviceTier)
@@ -1020,11 +1024,11 @@ export class TelegramCodexBridge {
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text: [
-        target.scope === "global" ? "Choose the global default Codex permissions." : "Choose Codex permissions for this thread.",
+        target.scope === "global" ? "Choose the global default Codex permissions" : "Choose Codex permissions for this thread",
         currentPreset ? `Current: ${currentPreset.label}` : "Current: Custom",
         target.scope === "global"
-          ? "Your selection will apply to future threads."
-          : "Your selection will apply only to this topic."
+          ? "Your selection will apply to future threads"
+          : "Your selection will apply only to this topic"
       ].join("\n"),
       replyMarkup: {
         inline_keyboard: CODEX_PERMISSION_PRESETS.map((preset) => [
@@ -1049,10 +1053,10 @@ export class TelegramCodexBridge {
 
     const models = await this.codex.listModels();
     if (models.length === 0) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         ...(message.topicId !== null ? { topicId: message.topicId } : {}),
-        text: "No visible Codex models are available right now."
+        text: "No visible Codex models are available right now"
       });
       return false;
     }
@@ -1067,9 +1071,9 @@ export class TelegramCodexBridge {
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text: [
-        target.scope === "global" ? "Choose the global default model." : "Choose the model for this thread.",
+        target.scope === "global" ? "Choose the global default model" : "Choose the model for this thread",
         currentModel ? `Current: ${currentModel}` : "Current: unknown-model",
-        "Then choose a reasoning effort."
+        "Then choose a reasoning effort"
       ].join("\n"),
       replyMarkup: {
         inline_keyboard: [
@@ -1109,10 +1113,10 @@ export class TelegramCodexBridge {
     const models = await this.codex.listModels();
     const model = models[modelIndex];
     if (!model) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         ...(message.topicId !== null ? { topicId: message.topicId } : {}),
-        text: "That model is no longer available."
+        text: "That model is no longer available"
       });
       return false;
     }
@@ -1123,7 +1127,7 @@ export class TelegramCodexBridge {
     await this.#messenger.sendMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
-      text: `Choose the reasoning effort for ${model.displayName}.`,
+      text: `Choose the reasoning effort for ${model.displayName}`,
       replyMarkup: {
         inline_keyboard: model.supportedReasoningEfforts.map((option) => [
           {
@@ -1144,10 +1148,10 @@ export class TelegramCodexBridge {
     const models = await this.codex.listModels();
     const model = models[modelIndex];
     if (!model) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         ...(message.topicId !== null ? { topicId: message.topicId } : {}),
-        text: "That model is no longer available."
+        text: "That model is no longer available"
       });
       return false;
     }
@@ -1170,13 +1174,13 @@ export class TelegramCodexBridge {
         reasoningEffort
       });
     }
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text:
         target.scope === "global"
-          ? `Global default model set to ${model.model} ${reasoningEffort}.`
-          : `Thread model set to ${model.model} ${reasoningEffort}.`
+          ? `Global default model set to ${model.model} ${reasoningEffort}`
+          : `Thread model set to ${model.model} ${reasoningEffort}`
     });
     return true;
   }
@@ -1204,13 +1208,13 @@ export class TelegramCodexBridge {
         sandboxPolicy: preset.sandboxPolicy
       });
     }
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text:
         target.scope === "global"
-          ? `Global default permissions set to ${preset.label}.`
-          : `Thread permissions set to ${preset.label}.`
+          ? `Global default permissions set to ${preset.label}`
+          : `Thread permissions set to ${preset.label}`
     });
     return true;
   }
@@ -1220,7 +1224,7 @@ export class TelegramCodexBridge {
     if (area === "permissions" && action === "apply" && isCodexPermissionPresetId(value)) {
       const updated = await this.applyPermissionsSelection({ chatId: event.chatId, topicId: event.topicId }, value);
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: updated ? "Permissions updated." : "Permissions not updated."
+        text: updated ? "Permissions updated" : "Permissions not updated"
       });
       return;
     }
@@ -1229,7 +1233,7 @@ export class TelegramCodexBridge {
       const page = Number.parseInt(value ?? "", 10);
       if (Number.isNaN(page)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-          text: "Invalid model page."
+          text: "Invalid model page"
         });
         return;
       }
@@ -1238,7 +1242,7 @@ export class TelegramCodexBridge {
       await this.telegram.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
-          text: "Model picker unavailable."
+          text: "Model picker unavailable"
         }
       );
       return;
@@ -1248,7 +1252,7 @@ export class TelegramCodexBridge {
       const modelIndex = Number.parseInt(value ?? "", 10);
       if (Number.isNaN(modelIndex)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-          text: "Invalid model selection."
+          text: "Invalid model selection"
         });
         return;
       }
@@ -1257,7 +1261,7 @@ export class TelegramCodexBridge {
       await this.telegram.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
-          text: "Model picker unavailable."
+          text: "Model picker unavailable"
         }
       );
       return;
@@ -1267,20 +1271,20 @@ export class TelegramCodexBridge {
       const modelIndex = Number.parseInt(value ?? "", 10);
       if (Number.isNaN(modelIndex) || !isReasoningEffort(extra)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-          text: "Invalid reasoning selection."
+          text: "Invalid reasoning selection"
         });
         return;
       }
 
       const updated = await this.applyModelSelection({ chatId: event.chatId, topicId: event.topicId }, modelIndex, extra);
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: updated ? "Model updated." : "Model not updated."
+        text: updated ? "Model updated" : "Model not updated"
       });
       return;
     }
 
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-      text: "Unsupported callback."
+      text: "Unsupported callback"
     });
   }
 
@@ -1432,7 +1436,7 @@ export class TelegramCodexBridge {
       await this.maybeSendInitialPromptMessage(message.chatId, message.topicId, options?.initialPromptText);
 
       if (options?.postActivationTopicMessage) {
-        await this.#messenger.sendMessage({
+        await this.sendScopedBridgeMessage({
           chatId: message.chatId,
           topicId: message.topicId,
           text: options.postActivationTopicMessage
@@ -1444,7 +1448,7 @@ export class TelegramCodexBridge {
       }
     } catch (error) {
       await this.database.markSessionErrored(pending.id);
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: `Failed to create Codex session for "${title}": ${formatError(error)}`
@@ -1473,7 +1477,7 @@ export class TelegramCodexBridge {
         cwd: thread.cwd,
         branch: thread.branch
       });
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId,
         topicId,
         text: rendered.text,
@@ -1535,7 +1539,7 @@ export class TelegramCodexBridge {
 
     const session = await this.database.getSessionByTopic(location.chatId, location.topicId);
     if (!session?.codexThreadId) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: location.chatId,
         topicId: location.topicId,
         text: MODE_COMMAND_REQUIRES_SESSION_TEXT
@@ -1544,7 +1548,7 @@ export class TelegramCodexBridge {
     }
 
     if (options?.rejectIfActiveTurn && this.findActiveTurnByTopic(location.chatId, location.topicId)) {
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: location.chatId,
         topicId: location.topicId,
         text: SETTINGS_CHANGE_REJECTED_TEXT
@@ -1839,10 +1843,10 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: session.telegramTopicId,
-      text: "Context compacted."
+      text: "Context compacted"
     });
   }
 
@@ -1855,10 +1859,39 @@ export class TelegramCodexBridge {
   }
 
   private async sendInvalidSlashCommandMessage(message: UserTurnMessage): Promise<void> {
-    await this.#messenger.sendMessage({
+    await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text: INVALID_COMMAND_TEXT
+    });
+  }
+
+  private async buildTopicCommandReplyMarkup(): Promise<ReplyKeyboardMarkup | undefined> {
+    return buildTopicCommandKeyboard(
+      getSurfaceableTopicSlashCommands(),
+      await this.database.listCustomCommands()
+    );
+  }
+
+  private async sendScopedBridgeMessage(input: {
+    chatId: number;
+    topicId?: number | null;
+    text: string;
+    entities?: MessageEntity[];
+    replyToMessageId?: number;
+    replyMarkup?: TelegramReplyMarkup;
+    disableNotification?: boolean;
+  }): Promise<{ messageId: number }> {
+    const replyMarkup =
+      input.replyMarkup ?? (
+        input.topicId !== null && input.topicId !== undefined
+          ? await this.buildTopicCommandReplyMarkup()
+          : undefined
+      );
+
+    return this.#messenger.sendMessage({
+      ...input,
+      ...(replyMarkup ? { replyMarkup } : {})
     });
   }
 
@@ -1907,7 +1940,7 @@ export class TelegramCodexBridge {
       await this.syncQueuePreview(queueState);
 
       if (classification.kind === "invalid_input") {
-        await this.#messenger.sendMessage({
+        await this.sendScopedBridgeMessage({
           chatId: message.chatId,
           topicId: message.topicId,
           text: classification.userMessage ?? `Codex rejected the follow-up: ${formatError(error)}`
@@ -1916,7 +1949,7 @@ export class TelegramCodexBridge {
       }
 
       this.logger.error("Failed to steer turn", error);
-      await this.#messenger.sendMessage({
+      await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: `Failed to add the follow-up to the current turn: ${formatError(error)}`
@@ -2010,12 +2043,9 @@ export class TelegramCodexBridge {
       try {
         const options = replyMarkup
           ? {
-              message_thread_id: queueState.topicId,
               reply_markup: replyMarkup
             }
-          : {
-              message_thread_id: queueState.topicId
-            };
+          : undefined;
         await this.telegram.editMessageText(queueState.chatId, existingMessageId, previewText, options);
         return;
       } catch {
@@ -2145,14 +2175,14 @@ function topicKey(chatId: number, topicId: number): string {
 
 function buildFastStatusMessage(scope: "global" | "thread", serviceTier: ServiceTier | null): string {
   return scope === "global"
-    ? `Global default fast mode is ${serviceTier === "fast" ? "on" : "off"}.`
-    : `Fast mode is ${serviceTier === "fast" ? "on" : "off"} for this thread.`;
+    ? `Global default fast mode is ${serviceTier === "fast" ? "on" : "off"}`
+    : `Fast mode is ${serviceTier === "fast" ? "on" : "off"} for this thread`;
 }
 
 function buildFastUpdatedMessage(scope: "global" | "thread", serviceTier: ServiceTier | null): string {
   return scope === "global"
-    ? `Global default fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}.`
-    : `Thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}.`;
+    ? `Global default fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`
+    : `Thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`;
 }
 
 function resolveKirbotPath(pathText: string, baseCwd: string): string {

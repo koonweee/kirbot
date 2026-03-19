@@ -266,7 +266,7 @@ function resolveCallbackData(transcript: HarnessTranscript, input: PressButtonIn
   const message = [...transcript.root.messages, ...transcript.topics.flatMap((topic) => topic.messages)].find(
     (candidate) => candidate.messageId === input.messageId
   );
-  if (!message?.buttons || message.buttons.length === 0) {
+  if (!message?.inlineButtons || message.inlineButtons.length === 0) {
     throw new Error(`Message ${input.messageId} does not have any callback buttons`);
   }
 
@@ -275,7 +275,7 @@ function resolveCallbackData(transcript: HarnessTranscript, input: PressButtonIn
   }
 
   if (input.buttonText) {
-    for (const row of message.buttons) {
+    for (const row of message.inlineButtons) {
       const button = row.find((candidate) => candidate.text === input.buttonText);
       if (button && "callback_data" in button) {
         return button.callback_data;
@@ -285,7 +285,7 @@ function resolveCallbackData(transcript: HarnessTranscript, input: PressButtonIn
     throw new Error(`Message ${input.messageId} does not have a button labeled "${input.buttonText}"`);
   }
 
-  const buttons = message.buttons.flat();
+  const buttons = message.inlineButtons.flat();
   if (buttons.length === 1) {
     const [button] = buttons;
     if (button && "callback_data" in button) {

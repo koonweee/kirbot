@@ -2,6 +2,7 @@ import type { MessageEntity } from "grammy/types";
 
 import type {
   InlineKeyboardMarkup,
+  ReplyKeyboardMarkup,
   TelegramApi,
   TelegramChatAction,
   TelegramCreateForumTopicOptions,
@@ -68,7 +69,9 @@ export type HarnessTranscriptMessage = {
   text: string;
   entities?: MessageEntity[];
   replyToMessageId?: number;
-  buttons?: InlineKeyboardMarkup["inline_keyboard"];
+  inlineButtons?: InlineKeyboardMarkup["inline_keyboard"];
+  replyKeyboard?: ReplyKeyboardMarkup["keyboard"];
+  replyKeyboardRemoved?: boolean;
 };
 
 export type HarnessTranscriptTopic = {
@@ -224,7 +227,7 @@ export class RecordingTelegram implements TelegramApi {
       text,
       ...(options?.entities ? { entities: options.entities } : {}),
       ...(options?.reply_to_message_id ? { replyToMessageId: options.reply_to_message_id } : {}),
-      ...(options?.reply_markup ? { buttons: options.reply_markup.inline_keyboard } : {})
+      ...mapReplyMarkupToTranscriptFields(options?.reply_markup)
     };
     this.#getMessageStore(options?.message_thread_id ?? null).push(message);
     this.#recordEvent({
@@ -300,11 +303,10 @@ export class RecordingTelegram implements TelegramApi {
     } else {
       delete message.entities;
     }
-    if (options?.reply_markup) {
-      message.buttons = options.reply_markup.inline_keyboard;
-    } else {
-      delete message.buttons;
-    }
+    delete message.inlineButtons;
+    delete message.replyKeyboard;
+    delete message.replyKeyboardRemoved;
+    Object.assign(message, mapReplyMarkupToTranscriptFields(options?.reply_markup));
     if (options?.reply_to_message_id) {
       message.replyToMessageId = options.reply_to_message_id;
     } else {
@@ -410,4 +412,32 @@ function draftKey(chatId: number, topicId: number, draftId: number): string {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function mapReplyMarkupToTranscriptFields(
+  replyMarkup: TelegramSendOptions["reply_markup"] | undefined
+): Partial<Pick<HarnessTranscriptMessage, "inlineButtons" | "replyKeyboard" | "replyKeyboardRemoved">> {
+  if (!replyMarkup) {
+    return {};
+  }
+
+  if ("inline_keyboard" in replyMarkup) {
+    return {
+      inlineButtons: replyMarkup.inline_keyboard
+    };
+  }
+
+  if ("keyboard" in replyMarkup) {
+    return {
+      replyKeyboard: replyMarkup.keyboard
+    };
+  }
+
+  if ("remove_keyboard" in replyMarkup) {
+    return {
+      replyKeyboardRemoved: true
+    };
+  }
+
+  return {};
 }

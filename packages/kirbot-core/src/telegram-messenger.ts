@@ -17,12 +17,41 @@ export type InlineKeyboardMarkup = {
   inline_keyboard: Array<Array<TelegramInlineKeyboardButton>>;
 };
 
+export type TelegramReplyKeyboardButton =
+  | string
+  | {
+      text: string;
+      icon_custom_emoji_id?: string;
+      style?: "danger" | "success" | "primary";
+    };
+
+export type ReplyKeyboardMarkup = {
+  keyboard: Array<Array<TelegramReplyKeyboardButton>>;
+  is_persistent?: boolean;
+  resize_keyboard?: boolean;
+  one_time_keyboard?: boolean;
+  input_field_placeholder?: string;
+  selective?: boolean;
+};
+
+export type ReplyKeyboardRemove = {
+  remove_keyboard: true;
+  selective?: boolean;
+};
+
+export type TelegramReplyMarkup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove;
+
 export type TelegramSendOptions = {
   message_thread_id?: number;
   reply_to_message_id?: number;
-  reply_markup?: InlineKeyboardMarkup;
+  reply_markup?: TelegramReplyMarkup;
   entities?: MessageEntity[];
   disable_notification?: boolean;
+};
+
+export type TelegramEditOptions = {
+  reply_markup?: InlineKeyboardMarkup;
+  entities?: MessageEntity[];
 };
 
 export type TelegramDraftOptions = {
@@ -68,7 +97,7 @@ export interface TelegramApi {
     chatId: number,
     messageId: number,
     text: string,
-    options?: TelegramSendOptions
+    options?: TelegramEditOptions
   ): Promise<unknown>;
   deleteMessage(chatId: number, messageId: number): Promise<true>;
   answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true>;
@@ -113,7 +142,7 @@ export class TelegramMessenger {
     text: string;
     entities?: MessageEntity[];
     replyToMessageId?: number;
-    replyMarkup?: InlineKeyboardMarkup;
+    replyMarkup?: TelegramReplyMarkup;
     disableNotification?: boolean;
   }): Promise<{ messageId: number }> {
     const message = await this.telegram.sendMessage(
@@ -246,7 +275,7 @@ export class TelegramStreamMessageHandle {
   async finalize(
     rendered: TelegramRenderedMessage | TelegramRenderedMessage[],
     options?: {
-      firstMessageReplyMarkup?: InlineKeyboardMarkup;
+      firstMessageReplyMarkup?: TelegramReplyMarkup;
       disableNotification?: boolean;
     }
   ): Promise<number | null> {
@@ -522,7 +551,7 @@ function areSameRenderedMessages(left: TelegramRenderedMessage, right: TelegramR
 function buildTelegramSendOptions(input: {
   topicId?: number | null;
   replyToMessageId?: number;
-  replyMarkup?: InlineKeyboardMarkup;
+  replyMarkup?: TelegramReplyMarkup;
   entities?: MessageEntity[];
 } & TelegramPersistentMessageOptions): TelegramSendOptions {
   const disableNotification = input.disableNotification ?? true;

@@ -8,6 +8,7 @@ import {
   buildRenderedCommandApprovalPrompt,
   buildRenderedFileChangeApprovalPrompt,
   buildRenderedCompletionFooter,
+  buildTopicCommandKeyboard,
   buildResponseArtifactPublication,
   buildStatusDraft,
   renderTelegramStatusDraft,
@@ -159,6 +160,38 @@ describe("plan artifact presentation", () => {
       type: MiniAppArtifactType.Plan,
       title: "Plan",
       markdownText: "1. Draft the rollout"
+    });
+  });
+});
+
+describe("topic command keyboard presentation", () => {
+  it("builds a reply keyboard with built-in topic commands followed by custom commands", () => {
+    expect(
+      buildTopicCommandKeyboard(
+        [
+          { command: "stop" },
+          { command: "plan" },
+          { command: "implement" },
+          { command: "model" },
+          { command: "fast" },
+          { command: "permissions" }
+        ],
+        [
+          { command: "standup" },
+          { command: "triage" }
+        ]
+      )
+    ).toEqual({
+      keyboard: [
+        ["/stop", "/plan"],
+        ["/implement", "/model"],
+        ["/fast", "/permissions"],
+        ["/standup", "/triage"]
+      ],
+      is_persistent: false,
+      resize_keyboard: true,
+      one_time_keyboard: true,
+      input_field_placeholder: "Thread commands"
     });
   });
 });

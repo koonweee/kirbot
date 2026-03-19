@@ -76,6 +76,12 @@ function getCallbackDataByButtonText(
   );
 }
 
+function getReplyKeyboardRows(entry: { options?: Record<string, unknown> } | undefined): string[][] {
+  return (
+    ((entry?.options?.reply_markup as { keyboard?: Array<Array<string>> } | undefined)?.keyboard?.map((row) => [...row])) ?? []
+  );
+}
+
 function findSingleButtonSafeDualButtonUnsafeMiniAppUrl(): string {
   for (let repeatCount = 300; repeatCount <= 1_500; repeatCount += 25) {
     const publicUrl = `https://example.com/${"mini-app/".repeat(repeatCount)}`;
@@ -187,7 +193,10 @@ function createHarness(
         changedFiles?: number;
         cwd?: string | null;
         branch?: string | null;
-      } = { text: "" }
+      } = { text: "" },
+  options?: {
+    buildTopicCommandReplyMarkup?(): Promise<{ keyboard: string[][] } | undefined>;
+  }
 ): {
   coordinator: TurnLifecycleCoordinator;
   telegram: FakeTelegram;
@@ -226,6 +235,9 @@ function createHarness(
     messenger: new TelegramMessenger(telegram),
     telegram,
     planArtifactPublicUrl: "https://example.com/mini-app",
+    ...(options?.buildTopicCommandReplyMarkup
+      ? { buildTopicCommandReplyMarkup: options.buildTopicCommandReplyMarkup }
+      : {}),
     releaseTurnFiles: async (turnId) => {
       releasedTurnIds.push(turnId);
     },
@@ -476,7 +488,7 @@ describe("TurnLifecycleCoordinator", () => {
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
-    const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available.");
+    const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available");
     expect(getInlineButtonTexts(stub)).toEqual(["Commentary"]);
     const url = getWebAppUrlByButtonText(stub, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
@@ -487,7 +499,7 @@ describe("TurnLifecycleCoordinator", () => {
       markdownText: "Inspecting the rollout plan"
     });
     expect(
-      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available.")
+      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available")
     ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text.startsWith("Plan")));
   });
 
@@ -530,10 +542,10 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     expect(
-      telegram.sentMessages.find((entry) => entry.text === "Commentary artifact was too large to encode.")
+      telegram.sentMessages.find((entry) => entry.text === "Commentary artifact was too large to encode")
     ).toBeTruthy();
     expect(
-      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary artifact was too large to encode.")
+      telegram.sentMessages.findIndex((entry) => entry.text === "Commentary artifact was too large to encode")
     ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Final answer"));
   });
 
@@ -577,11 +589,11 @@ describe("TurnLifecycleCoordinator", () => {
     const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
     expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response"]);
 
-    const commentaryStub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available.");
+    const commentaryStub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available");
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
     expect(
       telegram.sentMessages.findIndex((entry) => entry.text === "Final answer")
-    ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available."));
+    ).toBeLessThan(telegram.sentMessages.findIndex((entry) => entry.text === "Commentary is available"));
   });
 
   it("interleaves commentary with chronological activity events in the artifact", async () => {
@@ -685,7 +697,7 @@ describe("TurnLifecycleCoordinator", () => {
     const publishedAnswer = telegram.sentMessages.find((entry) => entry.text.includes("[response truncated]"));
     expect(publishedAnswer).toBeTruthy();
     expect(getInlineButtonTexts(publishedAnswer)).toEqual([]);
-    expect(telegram.sentMessages.some((entry) => entry.text === "Response artifact was too large to encode.")).toBe(true);
+    expect(telegram.sentMessages.some((entry) => entry.text === "Response artifact was too large to encode")).toBe(true);
   });
 
   it("submits merged pending steers when an interrupted turn is finalized with send-now intent", async () => {
@@ -1155,5 +1167,24 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5-codex • <1s • 100% left • /workspace • main"
     );
+  });
+
+  it("adds the topic command reply keyboard to completion footers when provided", async () => {
+    const harness = createHarness("Final answer", {
+      buildTopicCommandReplyMarkup: async () => ({
+        keyboard: [
+          ["/stop", "/plan"],
+          ["/standup"]
+        ]
+      })
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(getReplyKeyboardRows(harness.telegram.sentMessages.at(-1))).toEqual([
+      ["/stop", "/plan"],
+      ["/standup"]
+    ]);
   });
 });

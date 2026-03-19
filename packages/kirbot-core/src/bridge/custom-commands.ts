@@ -109,7 +109,7 @@ export function validateCustomCommandName(commandName: string): string | null {
 
 export function validateCustomCommandPrompt(prompt: string): string | null {
   if (!prompt.trim()) {
-    return "Prompt cannot be empty.";
+    return "Prompt cannot be empty";
   }
 
   return null;
@@ -120,31 +120,31 @@ export function buildCustomCommandConfirmationText(commandName: string, prompt: 
 }
 
 export function buildCustomCommandAddedText(commandName: string): string {
-  return `Added /${commandName}.`;
+  return `Added /${commandName}`;
 }
 
 export function buildCustomCommandUpdatedText(commandName: string): string {
-  return `Updated /${commandName}.`;
+  return `Updated /${commandName}`;
 }
 
 export function buildCustomCommandDeletedText(commandName: string): string {
-  return `Deleted /${commandName}.`;
+  return `Deleted /${commandName}`;
 }
 
 export function buildCustomCommandCanceledText(commandName: string): string {
-  return `Canceled adding /${commandName}.`;
+  return `Canceled adding /${commandName}`;
 }
 
 export function buildCustomCommandDuplicateText(commandName: string): string {
-  return `/${commandName} already exists.`;
+  return `/${commandName} already exists`;
 }
 
 export function buildCustomCommandReservedText(commandName: string): string {
-  return `/${commandName} is reserved.`;
+  return `/${commandName} is reserved`;
 }
 
 export function buildMissingCustomCommandText(commandName: string): string {
-  return `/${commandName} does not exist.`;
+  return `/${commandName} does not exist`;
 }
 
 export function buildPendingCustomCommandCallbackData(

@@ -146,6 +146,38 @@ describe("TelegramMessenger", () => {
     ]);
   });
 
+  it("sends topic messages with reply keyboards", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+
+    await messenger.sendMessage({
+      chatId: 1,
+      topicId: 2,
+      text: "Thread commands refreshed",
+      replyMarkup: {
+        keyboard: [["/stop", "/plan"], ["/standup"]],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      }
+    });
+
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: 1,
+        text: "Thread commands refreshed",
+        options: {
+          message_thread_id: 2,
+          reply_markup: {
+            keyboard: [["/stop", "/plan"], ["/standup"]],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          },
+          disable_notification: true
+        }
+      }
+    ]);
+  });
+
   it("does not send a clear draft for an unused stream", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);

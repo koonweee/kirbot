@@ -14,6 +14,7 @@ import {
 } from "@kirbot/telegram-format";
 import type {
   InlineKeyboardMarkup,
+  ReplyKeyboardMarkup,
   TelegramInlineKeyboardButton,
   TelegramRenderedMessage
 } from "../telegram-messenger";
@@ -255,6 +256,27 @@ export function buildQueuePreviewKeyboard(
   };
 }
 
+export function buildTopicCommandKeyboard(
+  builtInCommands: readonly Readonly<{ command: string }>[],
+  customCommands: readonly Readonly<{ command: string }>[]
+): ReplyKeyboardMarkup | undefined {
+  const commands = [
+    ...builtInCommands.map((command) => `/${command.command}`),
+    ...customCommands.map((command) => `/${command.command}`)
+  ];
+  if (commands.length === 0) {
+    return undefined;
+  }
+
+  return {
+    keyboard: chunkReplyKeyboardButtons(commands, 2),
+    is_persistent: false,
+    resize_keyboard: true,
+    one_time_keyboard: true,
+    input_field_placeholder: "Thread commands"
+  };
+}
+
 export function renderTelegramStatusDraft(
   statusDraft: TurnStatusDraft | null,
   elapsedMs: number | null = null
@@ -306,13 +328,13 @@ export function buildArtifactReplyMarkup(buttons: TelegramInlineKeyboardButton[]
 
 export function buildOversizeCommentaryArtifactMessage(): { text: string } {
   return {
-    text: "Commentary artifact was too large to encode."
+    text: "Commentary artifact was too large to encode"
   };
 }
 
 export function buildOversizeResponseArtifactMessage(): { text: string } {
   return {
-    text: "Response artifact was too large to encode."
+    text: "Response artifact was too large to encode"
   };
 }
 
@@ -435,7 +457,7 @@ export function buildPlanArtifactMessage(publicUrl: string, markdownText: string
 
 export function buildOversizePlanArtifactMessage(): { text: string } {
   return {
-    text: "Plan artifact was too large to encode."
+    text: "Plan artifact was too large to encode"
   };
 }
 
@@ -592,6 +614,15 @@ function measureReplyMarkupJsonBytes(replyMarkup: InlineKeyboardMarkup): number 
   return Buffer.byteLength(JSON.stringify(replyMarkup), "utf8");
 }
 
+function chunkReplyKeyboardButtons(buttons: readonly string[], rowSize: number): string[][] {
+  const rows: string[][] = [];
+  for (let index = 0; index < buttons.length; index += rowSize) {
+    rows.push(buttons.slice(index, index + rowSize));
+  }
+
+  return rows;
+}
+
 function buildArtifactAvailabilityMessage(button: TelegramInlineKeyboardButton, text: string): ArtifactMessage {
   return {
     text,
@@ -606,10 +637,10 @@ function buildArtifactAvailabilityText(
   state: "available" | "ready"
 ): string {
   if (total <= 1) {
-    return label === "Plan" ? "Plan is ready" : `${label} is available.`;
+    return label === "Plan" ? "Plan is ready" : `${label} is available`;
   }
 
-  return `${label} part ${index + 1} of ${total} is ${state}.`;
+  return `${label} part ${index + 1} of ${total} is ${state}`;
 }
 
 function buildCommentaryArtifactChunks(publicUrl: string, entries: ActivityLogEntry[]): ActivityLogEntry[][] {

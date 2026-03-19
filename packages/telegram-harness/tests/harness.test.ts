@@ -547,13 +547,15 @@ describe("Telegram harness", () => {
     await waitForCondition(() =>
       harness
         .getTranscript()
-        .topics.some((topic) => topic.messages.some((message) => Array.isArray(message.buttons) && message.buttons.length > 0))
+        .topics.some((topic) =>
+          topic.messages.some((message) => Array.isArray(message.inlineButtons) && message.inlineButtons.length > 0)
+        )
     );
 
     const approvalMessage = harness
       .getTranscript()
       .topics.flatMap((topic) => topic.messages)
-      .find((message) => Array.isArray(message.buttons) && message.buttons.length > 0);
+      .find((message) => Array.isArray(message.inlineButtons) && message.inlineButtons.length > 0);
     expect(approvalMessage).toBeDefined();
 
     await harness.pressButton({
@@ -665,7 +667,7 @@ describe("Telegram harness", () => {
 
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
     const stub = topicMessages.find((message) => message.text === "Plan is ready");
-    const button = stub?.buttons?.[0]?.[0];
+    const button = stub?.inlineButtons?.[0]?.[0];
     expect(button?.text).toBe("Plan");
     expect(button && "web_app" in button ? button.web_app.url : null).toMatch(/^https:\/\/example\.com\/mini-app\/plan#d=/);
     const stubEvent = harness.getTelegramEvents().find(
@@ -676,6 +678,23 @@ describe("Telegram harness", () => {
       throw new Error("Expected plan-ready sendMessage event");
     }
     expect(stubEvent.options?.disable_notification).toBeUndefined();
+  });
+
+  it("records topic reply keyboards separately from inline buttons", async () => {
+    const harness = await buildHarness(new ScriptedCodex("complete"));
+    harnesses.push(harness);
+
+    await harness.sendRootText("Inspect the repo");
+    await harness.waitForIdle();
+
+    const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
+    const footer = topicMessages[0];
+    expect(footer?.replyKeyboard).toEqual([
+      ["/stop", "/plan"],
+      ["/implement", "/model"],
+      ["/fast", "/permissions"]
+    ]);
+    expect(footer?.inlineButtons).toBeUndefined();
   });
 });
 

@@ -40,6 +40,7 @@ User experience:
 
 - If the user sends a normal message inside a topic that kirbot has not mapped yet, kirbot starts a session in that existing topic instead of creating a new one.
 - kirbot posts the startup footer before any other topic message for that new thread.
+- That startup footer also refreshes a topic-local reply keyboard with the built-in thread commands plus any saved custom thread commands.
 - Later messages in that topic continue the same Codex thread.
 
 Owned by:
@@ -111,6 +112,7 @@ Verified by:
 User experience:
 
 - `/stop` interrupts the active turn for the current topic.
+- Topic footer and command-confirmation messages refresh a reply keyboard that exposes the thread-valid slash commands without relying on Telegram's chat-scoped command menu.
 - If the turn is already finishing, the user gets a clear response instead of a duplicate interrupt.
 - Pending steer instructions can be submitted right after the interrupt completes.
 
@@ -151,7 +153,7 @@ User experience:
 - `/cmd` in the lobby shows a short help blurb for `add`, `update`, and `delete`.
 - `/cmd add <command> <prompt>` validates the command name and prompt, then sends a confirmation message in the lobby with `Add` and `Cancel` buttons instead of creating the command immediately.
 - `/cmd update <command> <prompt>` and `/cmd delete <command>` update the saved command set immediately after validation.
-- Confirmed custom commands are typed-only; kirbot does not add them to Telegram’s visible slash-command picker.
+- Confirmed custom commands are not added to Telegram’s built-in slash-command picker, but they do appear on the topic reply keyboard that kirbot refreshes on topic-owned status and command messages.
 - A custom command can be invoked only inside topics. When invoked, kirbot expands it to the stored prompt text plus any extra trailing text and routes it like a normal user message, including session bootstrap in an unmapped topic and steer or queue behavior during an active turn.
 
 Owned by:

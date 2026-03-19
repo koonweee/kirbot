@@ -13,6 +13,7 @@ import {
   allowCurrentQuestionFreeText,
   answerCurrentUserInputQuestion,
   buildApprovalKeyboard,
+  buildCompletedUserInputPrompt,
   buildPermissionsApprovalKeyboard,
   buildUserInputPrompt,
   buildUserInputResponse,
@@ -70,7 +71,7 @@ export class BridgeRequestCoordinator {
     const requestId = Number.parseInt(requestIdText ?? "", 10);
     if (Number.isNaN(requestId)) {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Invalid callback payload."
+        text: "Invalid callback payload"
       });
       return true;
     }
@@ -78,7 +79,7 @@ export class BridgeRequestCoordinator {
     const request = await this.database.getServerRequestById(requestId);
     if (!request || request.status !== "pending") {
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "This request is no longer pending."
+        text: "This request is no longer pending"
       });
       return true;
     }
@@ -94,14 +95,14 @@ export class BridgeRequestCoordinator {
     if (request.method === "item/permissions/requestApproval") {
       await this.resolvePermissionsApprovalAction(request, actionParts);
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: "Permissions request updated."
+        text: "Permissions request updated"
       });
       return true;
     }
 
     await this.resolveApprovalAction(request, actionParts);
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-      text: "Request updated."
+      text: "Request updated"
     });
     return true;
   }
@@ -155,7 +156,7 @@ export class BridgeRequestCoordinator {
       await this.messenger.sendMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        text: "Use the buttons on the pending question, or choose Other… to reply in text."
+        text: "Use the buttons on the pending question, or choose Other… to reply in text"
       });
       return true;
     }
@@ -165,13 +166,13 @@ export class BridgeRequestCoordinator {
       await this.messenger.sendMessage({
         chatId: message.chatId,
         topicId: message.topicId,
-        text: "Reply with text for the pending question."
+        text: "Reply with text for the pending question"
       });
       return true;
     }
 
     const nextState = answerCurrentUserInputQuestion(payload.questions, state, [answer]);
-    await this.progressUserInputRequest(pending, payload, nextState);
+    await this.progressUserInputRequest(pending, payload, nextState, true, answer);
     return true;
   }
 
@@ -189,10 +190,7 @@ export class BridgeRequestCoordinator {
     await this.telegram.editMessageText(
       Number.parseInt(resolved.telegramChatId, 10),
       resolved.telegramMessageId,
-      "Request resolved.",
-      {
-        message_thread_id: resolved.telegramTopicId
-      }
+      "Request resolved"
     );
   }
 
@@ -330,10 +328,7 @@ export class BridgeRequestCoordinator {
       await this.telegram.editMessageText(
         chatId,
         request.telegramMessageId,
-        `Resolved ${request.method} with "${resolvedActionSummary}".`,
-        {
-          message_thread_id: request.telegramTopicId
-        }
+        `Resolved ${request.method} with "${resolvedActionSummary}".`
       );
     }
   }
@@ -355,11 +350,9 @@ export class BridgeRequestCoordinator {
     if (request.telegramMessageId) {
       const summary =
         Object.keys(response.permissions).length === 0
-          ? "Denied additional permissions."
-          : `Allowed additional permissions for this ${response.scope}.`;
-      await this.telegram.editMessageText(chatId, request.telegramMessageId, summary, {
-        message_thread_id: request.telegramTopicId
-      });
+          ? "Denied additional permissions"
+          : `Allowed additional permissions for this ${response.scope}`;
+      await this.telegram.editMessageText(chatId, request.telegramMessageId, summary);
     }
   }
 
@@ -368,40 +361,41 @@ export class BridgeRequestCoordinator {
     const state = parseUserInputState(request.stateJson);
     const question = getCurrentUserInputQuestion(payload.questions, state);
     if (!question) {
-      return "Request already completed.";
+      return "Request already completed";
     }
 
     const [action, value] = actionParts;
     if (action === "other") {
       if (!question.isOther) {
-        return "That option is not available.";
+        return "That option is not available";
       }
 
       const nextState = allowCurrentQuestionFreeText(payload.questions, state);
       await this.progressUserInputRequest(request, payload, nextState, false);
-      return "Reply with your answer.";
+      return "Reply with your answer";
     }
 
     if (action === "opt") {
       const optionIndex = Number.parseInt(value ?? "", 10);
       const option = question.options?.[optionIndex];
       if (!option) {
-        return "That option is no longer available.";
+        return "That option is no longer available";
       }
 
       const nextState = answerCurrentUserInputQuestion(payload.questions, state, [option.label]);
-      await this.progressUserInputRequest(request, payload, nextState);
-      return "Answer recorded.";
+      await this.progressUserInputRequest(request, payload, nextState, true, option.label);
+      return "Answer recorded";
     }
 
-    return "Unsupported callback.";
+    return "Unsupported callback";
   }
 
   private async progressUserInputRequest(
     request: PendingServerRequest,
     payload: UserInputServerRequest["params"],
     nextState: ReturnType<typeof parseUserInputState>,
-    allowCompletion = true
+    allowCompletion = true,
+    completedAnswer?: string
   ): Promise<void> {
     const serializedState = stringifyUserInputState(nextState);
     const updated = await this.database.updateRequestState(request.requestIdJson, serializedState);
@@ -411,7 +405,7 @@ export class BridgeRequestCoordinator {
       const response = buildUserInputResponse(payload.questions, nextState);
       await this.codex.respondToUserInputRequest(parseRequestId(request.requestIdJson), response);
       await this.database.resolveRequest(request.requestIdJson);
-      await this.finishUserInputRequest(updated);
+      await this.finishUserInputRequest(updated, completedAnswer);
       return;
     }
 
@@ -435,7 +429,6 @@ export class BridgeRequestCoordinator {
 
     if (request.telegramMessageId) {
       await this.telegram.editMessageText(chatId, request.telegramMessageId, prompt.text, {
-        message_thread_id: request.telegramTopicId,
         ...(prompt.replyMarkup ? { reply_markup: prompt.replyMarkup } : {})
       });
       return;
@@ -452,12 +445,15 @@ export class BridgeRequestCoordinator {
     await this.database.updateServerRequestMessageId(request.id, message.messageId);
   }
 
-  private async finishUserInputRequest(request: PendingServerRequest): Promise<void> {
+  private async finishUserInputRequest(request: PendingServerRequest, answer?: string): Promise<void> {
+    const completionPrompt = answer ? buildCompletedUserInputPrompt(answer) : { text: "User answered" };
+
     if (!request.telegramMessageId) {
       await this.messenger.sendMessage({
         chatId: Number.parseInt(request.telegramChatId, 10),
         topicId: request.telegramTopicId,
-        text: "Sent your answers to Codex."
+        text: completionPrompt.text,
+        ...(completionPrompt.entities ? { entities: completionPrompt.entities } : {})
       });
       return;
     }
@@ -465,9 +461,9 @@ export class BridgeRequestCoordinator {
     await this.telegram.editMessageText(
       Number.parseInt(request.telegramChatId, 10),
       request.telegramMessageId,
-      "Sent your answers to Codex.",
+      completionPrompt.text,
       {
-        message_thread_id: request.telegramTopicId
+        ...(completionPrompt.entities ? { entities: completionPrompt.entities } : {})
       }
     );
   }

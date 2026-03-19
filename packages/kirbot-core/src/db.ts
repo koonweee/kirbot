@@ -569,6 +569,16 @@ export class BridgeDatabase {
     return row ? mapCustomCommand(row) : undefined;
   }
 
+  async listCustomCommands(): Promise<CustomCommand[]> {
+    const rows = await this.kysely
+      .selectFrom("custom_commands")
+      .selectAll()
+      .orderBy("command", "asc")
+      .execute();
+
+    return rows.map(mapCustomCommand);
+  }
+
   async updateCustomCommandPrompt(command: string, prompt: string): Promise<CustomCommand | undefined> {
     const existing = await this.getCustomCommandByName(command);
     if (!existing) {

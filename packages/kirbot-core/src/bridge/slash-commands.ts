@@ -124,6 +124,15 @@ export function getVisibleSlashCommands(): readonly TelegramBotCommand[] {
     }));
 }
 
+export function getSurfaceableTopicSlashCommands(): readonly TelegramBotCommand[] {
+  return SLASH_COMMAND_DEFINITIONS
+    .filter((definition) => definition.visible && definition.allowInTopic)
+    .map((definition) => ({
+      command: definition.command,
+      description: definition.description
+    }));
+}
+
 export function isAllowedSlashCommandInScope(command: string, scope: SlashCommandScope): boolean {
   return scope === "root" ? ROOT_COMMAND_SET.has(command as SlashCommandName) : TOPIC_COMMAND_SET.has(command as SlashCommandName);
 }

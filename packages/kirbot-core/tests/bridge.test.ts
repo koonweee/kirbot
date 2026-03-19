@@ -24,6 +24,7 @@ import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTi
 import { JsonRpcMethodError, type AppServerEvent, type ResolvedTurnSnapshot } from "@kirbot/codex-client";
 import {
   TELEGRAM_FORUM_TOPIC_ICON_COLORS,
+  type TelegramEditOptions,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
   type TelegramSendOptions
@@ -69,6 +70,12 @@ function getInlineButtonTexts(message: { options?: TelegramSendOptions } | undef
       ?.flat()
       .map((button) => button.text)
       .filter((text): text is string => typeof text === "string")) ?? []
+  );
+}
+
+function getReplyKeyboardRows(message: { options?: TelegramSendOptions } | undefined): string[][] {
+  return (
+    ((message?.options?.reply_markup as { keyboard?: Array<Array<string>> } | undefined)?.keyboard?.map((row) => [...row])) ?? []
   );
 }
 
@@ -711,7 +718,7 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     messageId: number,
     text: string,
-    options?: TelegramSendOptions
+    options?: TelegramEditOptions
   ): Promise<unknown> {
     this.edits.push({ chatId, messageId, text });
     this.editOptions.push(options ? { chatId, messageId, options } : { chatId, messageId });
@@ -829,6 +836,34 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getSessionByTopic(-1001, 101);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+    expect(getReplyKeyboardRows(telegram.sentMessages[0])).toEqual([
+      ["/stop", "/plan"],
+      ["/implement", "/model"],
+      ["/fast", "/permissions"]
+    ]);
+  });
+
+  it("adds custom thread commands to the topic keyboard on startup footers", async () => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the status update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 21,
+      userId: 42,
+      text: "Inspect the release checklist"
+    });
+
+    expect(getReplyKeyboardRows(telegram.sentMessages[0])).toEqual([
+      ["/stop", "/plan"],
+      ["/implement", "/model"],
+      ["/fast", "/permissions"],
+      ["/standup"]
+    ]);
   });
 
   it("assigns a random custom emoji topic icon when Telegram provides forum topic icons", async () => {
@@ -915,7 +950,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.createdTopics).toHaveLength(0);
     expect(codex.createdThreads).toHaveLength(0);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
   });
 
   it("creates a new empty topic from root /start with a validated cwd override", async () => {
@@ -1095,7 +1130,7 @@ describe("TelegramCodexBridge", () => {
       },
       {
         chatId: -1001,
-        text: "Plan mode enabled.",
+        text: "Plan mode enabled",
         options: {
           message_thread_id: 101
         }
@@ -1138,7 +1173,7 @@ describe("TelegramCodexBridge", () => {
       },
       {
         chatId: -1001,
-        text: "Plan mode enabled.",
+        text: "Plan mode enabled",
         options: {
           message_thread_id: 101
         }
@@ -1161,7 +1196,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.createdTopics).toHaveLength(0);
     expect(codex.createdThreads).toHaveLength(0);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
   });
 
   it("shows a short help blurb for /cmd with no arguments", async () => {
@@ -1230,8 +1265,8 @@ describe("TelegramCodexBridge", () => {
       prompt: "Draft the daily update."
     });
     expect((await database.getPendingCustomCommandAddById(pending!.id))?.status).toBe("confirmed");
-    expect(telegram.edits.at(-1)?.text).toBe("Added /standup.");
-    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Command added.");
+    expect(telegram.edits.at(-1)?.text).toBe("Added /standup");
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Command added");
   });
 
   it("cancels a pending custom command add through callback", async () => {
@@ -1256,8 +1291,8 @@ describe("TelegramCodexBridge", () => {
 
     expect((await database.getPendingCustomCommandAddById(pending!.id))?.status).toBe("canceled");
     expect(await database.getCustomCommandByName("standup")).toBeUndefined();
-    expect(telegram.edits.at(-1)?.text).toBe("Canceled adding /standup.");
-    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Canceled.");
+    expect(telegram.edits.at(-1)?.text).toBe("Canceled adding /standup");
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Canceled");
   });
 
   it("treats repeated custom command confirmation callbacks as stale", async () => {
@@ -1287,7 +1322,7 @@ describe("TelegramCodexBridge", () => {
       userId: 42
     });
 
-    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("This confirmation is no longer pending.");
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("This confirmation is no longer pending");
   });
 
   it("rejects duplicate and reserved custom command names", async () => {
@@ -1304,7 +1339,7 @@ describe("TelegramCodexBridge", () => {
       userId: 42,
       text: "/cmd add standup Draft something else."
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("/standup already exists.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("/standup already exists");
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1314,7 +1349,7 @@ describe("TelegramCodexBridge", () => {
       userId: 42,
       text: "/cmd add plan Draft something else."
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("/plan is reserved.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("/plan is reserved");
   });
 
   it("updates and deletes an existing custom command from root /cmd", async () => {
@@ -1332,7 +1367,7 @@ describe("TelegramCodexBridge", () => {
       text: "/cmd update standup Draft the weekly update."
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Updated /standup.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Updated /standup");
     expect((await database.getCustomCommandByName("standup"))?.prompt).toBe("Draft the weekly update.");
 
     await bridge.handleUserTextMessage({
@@ -1344,7 +1379,7 @@ describe("TelegramCodexBridge", () => {
       text: "/cmd delete standup"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Deleted /standup.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Deleted /standup");
     expect(await database.getCustomCommandByName("standup")).toBeUndefined();
   });
 
@@ -1572,7 +1607,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.turns).toHaveLength(0);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
     const session = await database.getSessionByTopic(-1001, 778);
     expect(session).toBeUndefined();
   });
@@ -1587,7 +1622,7 @@ describe("TelegramCodexBridge", () => {
       text: "/cmd"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
   });
 
   it("requires an existing session before enabling plan mode", async () => {
@@ -1601,7 +1636,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe(
-      "This topic does not have a Codex session yet. Send a normal message first to start one."
+      "This topic does not have a Codex session yet. Send a normal message first to start one"
     );
     expect(telegram.sentMessages.at(-1)?.options?.disable_notification).toBe(true);
   });
@@ -1617,7 +1652,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe(
-      "This topic does not have a Codex session yet. Send a normal message first to start one."
+      "This topic does not have a Codex session yet. Send a normal message first to start one"
     );
   });
 
@@ -1641,7 +1676,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe(
-      "Wait for the current response to finish or stop it first before changing settings."
+      "Wait for the current response to finish or stop it first before changing settings"
     );
     expect(codex.globalSettingsUpdates).toHaveLength(0);
     expect(codex.threadSettingsUpdates).toHaveLength(0);
@@ -1684,7 +1719,7 @@ describe("TelegramCodexBridge", () => {
       text: "/fast on"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default fast mode enabled.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default fast mode enabled");
     expect(codex.globalSettingsUpdates.at(-1)).toEqual({
       serviceTier: "fast"
     });
@@ -1758,7 +1793,7 @@ describe("TelegramCodexBridge", () => {
       text: "/fast on"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode enabled.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode enabled");
     expect(codex.threadSettingsUpdates.at(-1)).toEqual({
       threadId: "thread-1",
       serviceTier: "fast"
@@ -1822,7 +1857,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "Global default fast mode enabled."
+        text: "Global default fast mode enabled"
       },
       {
         chatId: -1001,
@@ -1898,7 +1933,7 @@ describe("TelegramCodexBridge", () => {
       model: "gpt-5.3-codex",
       reasoningEffort: "high"
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default model set to gpt-5.3-codex high.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default model set to gpt-5.3-codex high");
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1942,7 +1977,7 @@ describe("TelegramCodexBridge", () => {
         type: "dangerFullAccess"
       }
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default permissions set to Full Access.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default permissions set to Full Access");
   });
 
   it("enables plan mode without starting a turn when /plan has no prompt", async () => {
@@ -1978,7 +2013,7 @@ describe("TelegramCodexBridge", () => {
       text: "/plan"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
     expect(codex.turns).toHaveLength(1);
     const session = await database.getSessionByTopic(-1001, 781);
     expect(session?.preferredMode).toBe("plan");
@@ -2031,7 +2066,12 @@ describe("TelegramCodexBridge", () => {
         developer_instructions: null
       }
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
+    expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
+      ["/stop", "/plan"],
+      ["/implement", "/model"],
+      ["/fast", "/permissions"]
+    ]);
   });
 
   it("retains Telegram images until the turn completes", async () => {
@@ -2791,11 +2831,11 @@ describe("TelegramCodexBridge", () => {
     expect(answerMessage?.text).toBe("Here is the answer.");
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response"]);
 
-    const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available.");
+    const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available");
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
     expect(
       miniAppTelegram.sentMessages.findIndex((message) => message.text === "Here is the answer.")
-    ).toBeLessThan(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available."));
+    ).toBeLessThan(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available"));
   });
 
   it("truncates long final assistant output into one Telegram message with a response button", async () => {
@@ -3311,7 +3351,7 @@ describe("TelegramCodexBridge", () => {
 
     const planMessages = oversizeMiniAppTelegram.sentMessages.filter((message) => message.text.startsWith("Plan"));
     expect(planMessages.length).toBeGreaterThan(1);
-    expect(planMessages.some((message) => message.text === "Plan artifact was too large to encode.")).toBe(false);
+    expect(planMessages.some((message) => message.text === "Plan artifact was too large to encode")).toBe(false);
     expect(
       oversizeMiniAppTelegram.sentMessages.some((message) => message.text.startsWith("Plan\n\n"))
     ).toBe(false);
@@ -3424,7 +3464,7 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available.");
+    const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available");
     expect(commentaryStub).toBeTruthy();
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
     const url = getWebAppUrlByButtonText(commentaryStub, "Commentary");
@@ -3437,7 +3477,7 @@ describe("TelegramCodexBridge", () => {
     });
     const planIndex = miniAppTelegram.sentMessages.findIndex((message) => message.text.startsWith("Plan"));
     expect(planIndex).toBeGreaterThanOrEqual(0);
-    expect(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available.")).toBeLessThan(planIndex);
+    expect(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available")).toBeLessThan(planIndex);
   });
 
   it("publishes a non-blocking notice when the response artifact is too large to encode", async () => {
@@ -3494,7 +3534,7 @@ describe("TelegramCodexBridge", () => {
     expect(answerMessage?.text).toContain("[response truncated]");
     expect(getInlineButtonTexts(answerMessage)).toEqual([]);
     expect(
-      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Response artifact was too large to encode.")
+      oversizeMiniAppTelegram.sentMessages.some((message) => message.text === "Response artifact was too large to encode")
     ).toBe(true);
   });
 
@@ -4342,7 +4382,7 @@ describe("TelegramCodexBridge", () => {
       text: "/standup"
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
     expect(codex.turns).toHaveLength(0);
   });
 
@@ -4366,7 +4406,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.steerCalls).toEqual([]);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("This command is not valid here");
   });
 
   it("rejects /plan while a turn is active instead of steering", async () => {
@@ -4390,7 +4430,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.steerCalls).toEqual([]);
     expect(telegram.sentMessages.at(-1)?.text).toBe(
-      "Wait for the current response to finish or stop it first before changing modes."
+      "Wait for the current response to finish or stop it first before changing modes"
     );
   });
 
@@ -4438,7 +4478,7 @@ describe("TelegramCodexBridge", () => {
         developer_instructions: config.codex.developerInstructions ?? null
       }
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
     const session = await database.getSessionByTopic(-1001, 784);
     expect(session?.preferredMode).toBe("default");
   });
@@ -4478,7 +4518,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.turns).toHaveLength(2);
     expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
   });
 
   it("starts a default-mode implementation turn from the plan stub button", async () => {
@@ -4542,7 +4582,7 @@ describe("TelegramCodexBridge", () => {
         developer_instructions: config.codex.developerInstructions ?? null
       }
     });
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
     const session = await database.getSessionByTopic(-1001, 786);
     expect(session?.preferredMode).toBe("default");
   });
@@ -4603,7 +4643,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.interruptCalls).toEqual([]);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("There is no active response to stop right now.");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("There is no active response to stop right now");
     const session = await database.getSessionByTopic(-1001, 779);
     expect(session).toBeUndefined();
   });
@@ -4940,13 +4980,15 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.edits.at(-1)?.text).toContain("Question 2/2");
 
+    const finalAnswer = "Keep the diff small";
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 786,
       messageId: 421,
       updateId: 521,
       userId: 42,
-      text: "Keep the diff small"
+      text: finalAnswer
     });
 
     expect(codex.userInputs).toEqual([
@@ -4954,11 +4996,18 @@ describe("TelegramCodexBridge", () => {
         id: 90,
         answers: {
           scope: { answers: ["Refactor"] },
-          notes: { answers: ["Keep the diff small"] }
+          notes: { answers: [finalAnswer] }
         }
       }
     ]);
-    expect(telegram.edits.at(-1)?.text).toBe("Sent your answers to Codex.");
+    expect(telegram.edits.at(-1)?.text).toBe(`User answered: ${finalAnswer}`);
+    expect(telegram.editOptions.at(-1)?.options?.entities).toEqual([
+      {
+        type: "code",
+        offset: "User answered: ".length,
+        length: finalAnswer.length
+      }
+    ]);
   });
 
   it("supports option prompts that fall back to free text via Other", async () => {
@@ -5009,7 +5058,9 @@ describe("TelegramCodexBridge", () => {
       userId: 42
     });
 
-    expect(telegram.edits.at(-1)?.text).toContain("Reply with your own answer in this topic.");
+    expect(telegram.edits.at(-1)?.text).toContain("Reply with your own answer in this topic");
+
+    const finalAnswer = "Use a custom rollout path";
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -5017,15 +5068,23 @@ describe("TelegramCodexBridge", () => {
       messageId: 423,
       updateId: 523,
       userId: 42,
-      text: "Use a custom rollout path"
+      text: finalAnswer
     });
 
     expect(codex.userInputs).toContainEqual({
       id: 91,
       answers: {
-        secret_choice: { answers: ["Use a custom rollout path"] }
+        secret_choice: { answers: [finalAnswer] }
       }
     });
+    expect(telegram.edits.at(-1)?.text).toBe(`User answered: ${finalAnswer}`);
+    expect(telegram.editOptions.at(-1)?.options?.entities).toEqual([
+      {
+        type: "code",
+        offset: "User answered: ".length,
+        length: finalAnswer.length
+      }
+    ]);
   });
 
   it("stores approval requests and resolves them via callback queries", async () => {
@@ -5186,7 +5245,7 @@ describe("TelegramCodexBridge", () => {
     ]);
     const resolved = await database.getPendingRequest(JSON.stringify(288));
     expect(resolved.status).toBe("resolved");
-    expect(telegram.edits.at(-1)?.text).toBe("Allowed additional permissions for this session.");
+    expect(telegram.edits.at(-1)?.text).toBe("Allowed additional permissions for this session");
   });
 
   it("cleans up pending approval prompts when the app server resolves them elsewhere", async () => {
@@ -5230,7 +5289,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.edits.at(-1)).toMatchObject({
       chatId: -1001,
       messageId: promptMessage?.messageId,
-      text: "Request resolved."
+      text: "Request resolved"
     });
 
     const resolved = await database.getPendingRequest(JSON.stringify(89));
@@ -5294,7 +5353,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.sentMessages.at(-1)).toMatchObject({
       chatId: -1001,
-      text: "Context compacted.",
+      text: "Context compacted",
       options: {
         message_thread_id: 777
       }
@@ -5331,7 +5390,7 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.sentMessages.filter((message) => message.text === "Context compacted.")).toHaveLength(1);
+    expect(telegram.sentMessages.filter((message) => message.text === "Context compacted")).toHaveLength(1);
   });
 
   it("ignores callback queries from users other than the configured Telegram user", async () => {
