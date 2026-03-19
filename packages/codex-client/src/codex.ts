@@ -8,7 +8,6 @@ import type { ServiceTier } from "./generated/codex/ServiceTier";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { RequestId } from "./generated/codex/RequestId";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
-import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { AskForApproval } from "./generated/codex/v2/AskForApproval";
 import type { CommandExecutionRequestApprovalParams } from "./generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { CommandExecutionRequestApprovalResponse } from "./generated/codex/v2/CommandExecutionRequestApprovalResponse";

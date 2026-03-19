@@ -259,12 +259,6 @@ describe("BridgeTurnRuntime", () => {
     });
 
     runtime.registerPlanItem("turn-1", "plan-1");
-    expect(runtime.appendPlanDelta("turn-1", "plan-1", "Draft the rollout")).toEqual({
-      itemId: "plan-1",
-      itemText: "Draft the rollout",
-      finalText: "Draft the rollout"
-    });
-
     runtime.commitPlanItem("turn-1", "plan-1", "1. Draft the rollout");
     runtime.registerAssistantItem("turn-1", "item-1", "final_answer");
     runtime.commitAssistantItem("turn-1", "item-1", "Implementation done.", "final_answer");

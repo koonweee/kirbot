@@ -21,14 +21,13 @@ import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generate
 import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
-import { JsonRpcMethodError, type AppServerEvent } from "@kirbot/codex-client";
+import { JsonRpcMethodError, type AppServerEvent, type ResolvedTurnSnapshot } from "@kirbot/codex-client";
 import {
   TELEGRAM_FORUM_TOPIC_ICON_COLORS,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
-import type { ResolvedTurnSnapshot } from "../src/bridge/turn-finalization";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import {
   buildArtifactReplyMarkup,

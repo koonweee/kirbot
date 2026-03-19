@@ -8,11 +8,6 @@ import type { TelegramStreamMessageHandle } from "../telegram-messenger";
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
 export type TerminalTurnStatus = Extract<TurnPhase, "completed" | "failed" | "interrupted">;
 
-export type PlanStreamState = {
-  handle: TelegramStreamMessageHandle;
-  text: string;
-};
-
 export type TurnDraftMode = "status" | "assistant";
 
 export type TurnContext = {
@@ -29,7 +24,6 @@ export type TurnContext = {
   lastStatusUpdateAt: number;
   draftHandle: TelegramStreamMessageHandle;
   statusElapsedTimer: NodeJS.Timeout | null;
-  planStreams: Map<string, PlanStreamState>;
   compactionNoticeSent: boolean;
   publishedPlanMessages: number;
   changedFilePaths: Set<string>;

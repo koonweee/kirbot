@@ -1,4 +1,3 @@
-import type { AppConfig } from "../config";
 import type { ApprovalServerRequest, UserInputServerRequest } from "@kirbot/codex-client";
 import { BridgeDatabase } from "../db";
 import type { PendingServerRequest, TopicSession, UserTurnMessage } from "../domain";
@@ -9,8 +8,7 @@ import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { ServerRequestResolvedNotification } from "@kirbot/codex-client/generated/codex/v2/ServerRequestResolvedNotification";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
-import type { TelegramApi } from "../telegram-messenger";
-import { TelegramMessenger } from "../telegram-messenger";
+import type { TelegramApi, TelegramMessenger } from "../telegram-messenger";
 import {
   allowCurrentQuestionFreeText,
   answerCurrentUserInputQuestion,
@@ -51,21 +49,17 @@ type CallbackQueryEvent = {
 };
 
 export class BridgeRequestCoordinator {
-  readonly #messenger: TelegramMessenger;
-
   constructor(
-    private readonly config: AppConfig,
     private readonly database: BridgeDatabase,
     private readonly telegram: TelegramApi,
+    private readonly messenger: TelegramMessenger,
     private readonly codex: BridgeCodexRequestsApi,
     private readonly updateTurnStatus: (
       turnId: string,
       statusDraft: ReturnType<typeof buildStatusDraft>,
       force?: boolean
     ) => Promise<void>
-  ) {
-    this.#messenger = new TelegramMessenger(telegram);
-  }
+  ) {}
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<boolean> {
     if (!event.data.startsWith("req:")) {
@@ -158,7 +152,7 @@ export class BridgeRequestCoordinator {
     }
 
     if (!currentQuestionAcceptsFreeText(question, state)) {
-      await this.#messenger.sendMessage({
+      await this.messenger.sendMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: "Use the buttons on the pending question, or choose Other… to reply in text."
@@ -168,7 +162,7 @@ export class BridgeRequestCoordinator {
 
     const answer = message.text.trim();
     if (!answer) {
-      await this.#messenger.sendMessage({
+      await this.messenger.sendMessage({
         chatId: message.chatId,
         topicId: message.topicId,
         text: "Reply with text for the pending question."
@@ -227,7 +221,7 @@ export class BridgeRequestCoordinator {
       payloadJson: JSON.stringify(request.params)
     });
 
-    const message = await this.#messenger.sendMessage({
+    const message = await this.messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: session.telegramTopicId,
       text: prompt.text,
@@ -289,7 +283,7 @@ export class BridgeRequestCoordinator {
     });
 
     const prompt = buildRenderedPermissionsApprovalPrompt(request.params);
-    const message = await this.#messenger.sendMessage({
+    const message = await this.messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: session.telegramTopicId,
       text: prompt.text,
@@ -445,7 +439,7 @@ export class BridgeRequestCoordinator {
       return;
     }
 
-    const message = await this.#messenger.sendMessage({
+    const message = await this.messenger.sendMessage({
       chatId,
       topicId: request.telegramTopicId,
       text: prompt.text,
@@ -457,7 +451,7 @@ export class BridgeRequestCoordinator {
 
   private async finishUserInputRequest(request: PendingServerRequest): Promise<void> {
     if (!request.telegramMessageId) {
-      await this.#messenger.sendMessage({
+      await this.messenger.sendMessage({
         chatId: Number.parseInt(request.telegramChatId, 10),
         topicId: request.telegramTopicId,
         text: "Sent your answers to Codex."

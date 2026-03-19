@@ -31,7 +31,7 @@ class FakeTelegram implements TelegramApi {
   }
 
   async createForumTopic(
-    chatId: number,
+    _chatId: number,
     name: string,
     _options?: TelegramCreateForumTopicOptions
   ): Promise<{ message_thread_id: number; name: string }> {

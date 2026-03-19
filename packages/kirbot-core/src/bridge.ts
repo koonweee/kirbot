@@ -8,12 +8,11 @@ import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTi
 import type { ServerNotification } from "@kirbot/codex-client/generated/codex/ServerNotification";
 import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerRequest";
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
-import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
+import type { AppServerEvent, ResolvedTurnSnapshot } from "@kirbot/codex-client";
 import type { UserInput } from "@kirbot/codex-client/generated/codex/v2/UserInput";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
-import type { SandboxPolicy } from "@kirbot/codex-client/generated/codex/v2/SandboxPolicy";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import {
   classifyInterruptError,
@@ -47,11 +46,9 @@ import {
 } from "./bridge/presentation";
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
-import type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
 import type { LoggerLike } from "./logging";
 import { TelegramMessenger, type TelegramApi } from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
-import type { AppServerEvent } from "@kirbot/codex-client";
 
 export type CallbackQueryEvent = {
   callbackQueryId: string;
@@ -143,9 +140,9 @@ export class TelegramCodexBridge {
       submitQueuedFollowUp: this.submitQueuedFollowUp.bind(this)
     }, logger);
     this.#requestCoordinator = new BridgeRequestCoordinator(
-      config,
       database,
       telegram,
+      this.#messenger,
       codex,
       (turnId, statusDraft, force) =>
         this.#lifecycle.updateStatus(turnId, statusDraft, {
@@ -1179,34 +1176,12 @@ export class TelegramCodexBridge {
       },
       "turn/plan/updated": async () => {
         if (notification.method === "turn/plan/updated") {
-          await this.#lifecycle.handlePlanUpdated(
-            notification.params.turnId,
-            buildPlanStatusDetails(notification.params.explanation, notification.params.plan)
-          );
+          await this.#lifecycle.handlePlanUpdated(notification.params.turnId, notification.params.explanation);
         }
       },
       "thread/tokenUsage/updated": async () => {
         if (notification.method === "thread/tokenUsage/updated") {
           this.#lifecycle.handleThreadTokenUsageUpdated(notification.params.turnId, notification.params.tokenUsage);
-        }
-      },
-      "item/reasoning/summaryTextDelta": async () => {
-        if (notification.method === "item/reasoning/summaryTextDelta") {
-          await this.#lifecycle.handleReasoningDelta(
-            notification.params.turnId,
-            notification.params.itemId,
-            notification.params.summaryIndex,
-            notification.params.delta
-          );
-        }
-      },
-      "item/reasoning/textDelta": async () => {
-        if (notification.method === "item/reasoning/textDelta") {
-          await this.#lifecycle.handleReasoningTextDelta(
-            notification.params.turnId,
-            notification.params.itemId,
-            notification.params.delta
-          );
         }
       },
       "model/rerouted": async () => {
@@ -1246,11 +1221,6 @@ export class TelegramCodexBridge {
             notification.params.itemId,
             notification.params.delta
           );
-        }
-      },
-      "item/plan/delta": async () => {
-        if (notification.method === "item/plan/delta") {
-          await this.#lifecycle.handlePlanDelta(notification.params.turnId, notification.params.itemId, notification.params.delta);
         }
       },
       "item/completed": async () => {
@@ -1593,19 +1563,6 @@ function buildImplementationPrompt(extraInstructions: string): string {
   }
 
   return parts.join("\n");
-}
-
-function buildPlanStatusDetails(
-  explanation: string | null,
-  plan: Array<{ step: string; status: "pending" | "inProgress" | "completed" }>
-): string | null {
-  const trimmedExplanation = explanation?.trim();
-  if (trimmedExplanation) {
-    return trimmedExplanation;
-  }
-
-  const activeStep = plan.find((step) => step.status === "inProgress");
-  return activeStep?.step ?? null;
 }
 
 function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string): UserTurnMessage {

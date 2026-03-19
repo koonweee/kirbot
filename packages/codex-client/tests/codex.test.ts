@@ -10,7 +10,6 @@ class FakeTransport implements RpcTransport {
   readonly sent: unknown[] = [];
   #messageListener: ((message: unknown) => void) | null = null;
   #closeListener: (() => void) | null = null;
-  #errorListener: ((error: Error) => void) | null = null;
 
   async connect(): Promise<void> {}
 
@@ -30,8 +29,7 @@ class FakeTransport implements RpcTransport {
     this.#closeListener = listener;
   }
 
-  onError(listener: (error: Error) => void): void {
-    this.#errorListener = listener;
+  onError(_listener: (error: Error) => void): void {
   }
 
   emitMessage(message: unknown): void {

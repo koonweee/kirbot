@@ -1,3 +1,4 @@
+import type { ResolvedTurnSnapshot } from "@kirbot/codex-client";
 import type { UserTurnMessage } from "../domain";
 import {
   buildArtifactReplyMarkup,
@@ -21,15 +22,7 @@ import {
   isTerminalTurnPhase,
   transitionTurnPhase
 } from "./turn-context";
-
-export type ResolvedTurnSnapshot = {
-  text: string;
-  assistantText: string;
-  planText: string;
-  changedFiles: number;
-  cwd: string | null;
-  branch: string | null;
-};
+import { formatError } from "./error-handling";
 
 export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
@@ -92,23 +85,19 @@ export class TurnFinalizer {
     const publishesPlanOnly = policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0;
     const commentaryPublication = this.buildCommentaryPublication(activityLogEntries, !publishesPlanOnly);
     await this.publishStandaloneCommentary(context, commentaryPublication);
-    const publishedPlanMessageId =
-      snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
-        ? await this.callbacks.publishCompletedPlan(context, {
-            itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
-            text: snapshot.planText
-          })
-        : null;
+    if (snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0) {
+      await this.callbacks.publishCompletedPlan(context, {
+        itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
+        text: snapshot.planText
+      });
+    }
     const finalText = policy.buildFinalText(snapshot.text);
     const responsePublication = publishesPlanOnly ? null : this.buildResponsePublication(finalText);
     const publishedFinalAssistantMessage =
       !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
-    const messageId =
-      publishesPlanOnly
-        ? publishedPlanMessageId
-        : publishedFinalAssistantMessage
-          ? await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication)
-          : null;
+    if (!publishesPlanOnly && publishedFinalAssistantMessage) {
+      await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
+    }
 
     if (responsePublication?.oversizeNoticeText) {
       await this.publishArtifactOversizeNotice(context, responsePublication.oversizeNoticeText);
@@ -170,19 +159,6 @@ export class TurnFinalizer {
       context.statusElapsedTimer = null;
     }
     context.statusDraft = null;
-
-    for (const [itemId, plan] of context.planStreams) {
-      if (plan.text.trim().length > 0) {
-        await plan.handle.clear();
-        await this.callbacks.publishCompletedPlan(context, {
-          itemId,
-          text: plan.text
-        });
-      } else {
-        await plan.handle.clear();
-      }
-      context.planStreams.delete(itemId);
-    }
   }
 
   private async publishFinalTurnText(
@@ -389,12 +365,4 @@ function computeContextLeftPercent(tokenUsage: TurnContext["tokenUsage"]): numbe
   const used = Math.max(0, tokenUsage.last.totalTokens - CODEX_CLI_CONTEXT_LEFT_BASELINE_TOKENS);
   const remaining = Math.max(0, effectiveWindow - used);
   return Math.min(100, Math.max(0, Math.round((remaining / effectiveWindow) * 100)));
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return String(error);
 }

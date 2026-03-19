@@ -763,57 +763,6 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("keeps reasoning summaries out of the status draft across elapsed-time refreshes", async () => {
-    vi.useFakeTimers();
-
-    try {
-      const harness = createHarness();
-      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-      await harness.coordinator.publishCurrentStatus("turn-1", true);
-
-      await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "Inspect the current");
-      await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, " status pipeline.");
-
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
-      expect(harness.telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(3000);
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 3s");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("ignores reasoning summary index changes for the live status draft", async () => {
-    const harness = createHarness();
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-
-    await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "First summary.");
-    await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 1, "Second summary.");
-
-    expect(harness.telegram.drafts).toEqual([]);
-  });
-
-  it("ignores raw reasoning deltas for the live status draft", async () => {
-    const harness = createHarness();
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-
-    await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", "**Inspect current renderer**");
-
-    expect(harness.telegram.drafts).toEqual([]);
-  });
-
-  it("ignores both reasoning summaries and raw reasoning fallback previews", async () => {
-    const harness = createHarness();
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-
-    await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", "**Inspect current renderer**");
-    await harness.coordinator.handleReasoningDelta("turn-1", "reasoning-1", 0, "Use the summary instead.");
-    await harness.coordinator.handleReasoningTextDelta("turn-1", "reasoning-1", " Additional raw detail.");
-
-    expect(harness.telegram.drafts).toEqual([]);
-  });
-
   it("keeps successful command and file completions transient", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");

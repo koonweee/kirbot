@@ -17,7 +17,7 @@ import {
   renderTelegramStatusDraft,
   type TurnStatusDraft
 } from "./presentation";
-import { type AssistantRenderUpdate, type PlanRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
+import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import {
   type TurnLifecycleDependencies,
@@ -71,7 +71,6 @@ export class TurnLifecycleCoordinator {
         draftId: buildStableDraftId(`${turnId}:draft`)
       }),
       statusElapsedTimer: null,
-      planStreams: new Map(),
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       changedFilePaths: new Set(),
@@ -259,25 +258,6 @@ export class TurnLifecycleCoordinator {
     await this.updateStatus(turnId, buildStatusDraft("planning"));
   }
 
-  async handlePlanDelta(turnId: string, itemId: string, delta: string): Promise<void> {
-    void turnId;
-    void itemId;
-    void delta;
-  }
-
-  async handleReasoningDelta(turnId: string, itemId: string, summaryIndex: number, delta: string): Promise<void> {
-    void turnId;
-    void itemId;
-    void summaryIndex;
-    void delta;
-  }
-
-  async handleReasoningTextDelta(turnId: string, itemId: string, delta: string): Promise<void> {
-    void turnId;
-    void itemId;
-    void delta;
-  }
-
   async handleToolProgress(turnId: string): Promise<void> {
     await this.updateStatus(turnId, buildStatusDraft("using tool"));
   }
@@ -311,12 +291,11 @@ export class TurnLifecycleCoordinator {
 
     if (item.type === "plan") {
       const context = this.#turns.get(turnId);
-      const update = this.deps.runtime.commitPlanItem(turnId, item.id, item.text);
-      if (!context || !update) {
+      if (!context) {
         return;
       }
 
-      await this.handlePlanRenderUpdate(context, update, "completed");
+      this.deps.runtime.commitPlanItem(turnId, item.id, item.text);
       return;
     }
 
@@ -423,7 +402,6 @@ export class TurnLifecycleCoordinator {
     forceDraft = false
   ): Promise<void> {
     if (update.itemPhase === "commentary") {
-      void forceDraft;
       return;
     }
 
@@ -432,16 +410,6 @@ export class TurnLifecycleCoordinator {
       context.statusDraft = null;
       await context.draftHandle.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
     }
-  }
-
-  private async handlePlanRenderUpdate(
-    context: TurnContext,
-    update: PlanRenderUpdate,
-    stage: "delta" | "completed"
-  ): Promise<void> {
-    void context;
-    void update;
-    void stage;
   }
 
   private async setStatusDraft(

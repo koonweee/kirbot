@@ -106,6 +106,10 @@ belongs in `packages/telegram-format/src`.
 - When changing completion footers, queue previews, commands, approvals, or
   mode routing, assert the exact user-visible Telegram text so regressions stay
   obvious.
+- Leave touched code clean under the repo's unused-code compiler checks.
+  Remove unused imports, locals, parameters, exports, and placeholder no-op
+  helpers instead of suppressing them or leaving dead compatibility shims in
+  place.
 
 ## PR Notes
 

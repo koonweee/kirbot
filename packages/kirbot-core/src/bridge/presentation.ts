@@ -266,10 +266,6 @@ export function renderTelegramAssistantDraft(text: string): TelegramRenderedMess
   return renderMarkdownToFormattedText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT));
 }
 
-export function renderTelegramPlanDraft(text: string): TelegramRenderedMessage {
-  return renderMarkdownToFormattedText(buildPlanPreviewText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT)));
-}
-
 export function buildCommentaryArtifactButton(publicUrl: string, entries: ActivityLogEntry[]): TelegramInlineKeyboardButton {
   return buildMarkdownArtifactButton({
     publicUrl,
@@ -306,16 +302,6 @@ export function buildArtifactReplyMarkup(buttons: TelegramInlineKeyboardButton[]
   }
 
   return replyMarkup;
-}
-
-export function buildCommentaryArtifactStubMessage(replyMarkup: InlineKeyboardMarkup): {
-  text: string;
-  replyMarkup: InlineKeyboardMarkup;
-} {
-  return {
-    text: "Commentary is available.",
-    replyMarkup
-  };
 }
 
 export function buildOversizeCommentaryArtifactMessage(): { text: string } {
@@ -511,15 +497,6 @@ function summarizeFileChanges(changes: Array<{ path: string }>): string | null {
 
 function buildDraftPreviewWithLimit(text: string, limit: number): string {
   return buildTruncatedPreview(text, limit, "…\n", "\n\n[preview truncated]");
-}
-
-function buildPlanPreviewText(text: string): string {
-  return `Plan\n\n${text}`;
-}
-
-export function buildActivityLogEntryForItemStarted(item: ThreadItem): ActivityLogEntry | null {
-  void item;
-  return null;
 }
 
 export function buildActivityLogEntryForItemCompleted(item: ThreadItem): ActivityLogEntry | null {

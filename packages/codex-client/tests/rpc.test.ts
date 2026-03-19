@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { CodexRpcClient, JsonRpcMethodError, StdioRpcTransport, type RpcTransport } from "../src/rpc";
+import { CodexRpcClient, StdioRpcTransport, type RpcTransport } from "../src/rpc";
 
 class FakeTransport implements RpcTransport {
   readonly sent: unknown[] = [];

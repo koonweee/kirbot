@@ -162,5 +162,6 @@ Minimum close-out checklist:
 
 - code change is in the owning module
 - relevant tests were added or updated
+- `npm run typecheck` passes, including the repo-wide unused-code compiler checks
 - docs were updated if behavior, ownership, or setup changed
 - generated Codex bindings were touched only if the pinned dependency changed

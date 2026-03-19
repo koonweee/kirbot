@@ -1,5 +1,5 @@
 export * from "./bridge";
-export type { ResolvedTurnSnapshot } from "./bridge/turn-finalization";
+export type { ResolvedTurnSnapshot } from "@kirbot/codex-client";
 export * from "./config";
 export * from "./db";
 export * from "./domain";

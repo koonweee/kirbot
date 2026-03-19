@@ -104,12 +104,6 @@ export type AssistantRenderUpdate = {
   startedAssistantText: boolean;
 };
 
-export type PlanRenderUpdate = {
-  itemId: string;
-  itemText: string;
-  finalText: string;
-};
-
 export class BridgeTurnRuntime {
   readonly #turns = new Map<string, RuntimeTurn>();
   readonly #topicStates = new Map<string, TopicState>();
@@ -299,26 +293,14 @@ export class BridgeTurnRuntime {
     return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
 
-  appendPlanDelta(turnId: string, itemId: string, delta: string): PlanRenderUpdate | null {
+  commitPlanItem(turnId: string, itemId: string, text: string): void {
     const turn = this.#turns.get(turnId);
     if (!turn) {
-      return null;
-    }
-
-    const item = ensurePlanItem(turn, itemId);
-    item.text = `${item.text}${delta}`;
-    return buildPlanRenderUpdate(turn, itemId);
-  }
-
-  commitPlanItem(turnId: string, itemId: string, text: string): PlanRenderUpdate | null {
-    const turn = this.#turns.get(turnId);
-    if (!turn) {
-      return null;
+      return;
     }
 
     const item = ensurePlanItem(turn, itemId);
     item.text = text;
-    return buildPlanRenderUpdate(turn, itemId);
   }
 
   renderAssistantItems(turnId: string): string {
@@ -504,15 +486,6 @@ function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAs
     draftKind: draft.kind,
     finalText: renderFinalAssistantText(turn),
     startedAssistantText
-  };
-}
-
-function buildPlanRenderUpdate(turn: RuntimeTurn, itemId: string): PlanRenderUpdate {
-  const item = turn.planItems.get(itemId);
-  return {
-    itemId,
-    itemText: item?.text ?? "",
-    finalText: renderPlanText(turn)
   };
 }
 
