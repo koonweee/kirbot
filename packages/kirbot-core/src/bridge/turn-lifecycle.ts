@@ -458,7 +458,8 @@ export class TurnLifecycleCoordinator {
             chatId: context.chatId,
             topicId: context.topicId,
             text: publication.text,
-            replyMarkup: publication.replyMarkup
+            replyMarkup: publication.replyMarkup,
+            disableNotification: lastMessageId === null ? false : true
           })
         ).messageId;
       }
@@ -473,7 +474,8 @@ export class TurnLifecycleCoordinator {
         return this.deps.messenger.sendMessage({
           chatId: context.chatId,
           topicId: context.topicId,
-          ...buildOversizePlanArtifactMessage()
+          ...buildOversizePlanArtifactMessage(),
+          disableNotification: false
         }).then((message) => message.messageId);
       }
 

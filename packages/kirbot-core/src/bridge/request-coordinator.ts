@@ -229,7 +229,8 @@ export class BridgeRequestCoordinator {
       replyMarkup: buildApprovalKeyboard(
         pending.id,
         request.method === "item/commandExecution/requestApproval" ? request.params.availableDecisions ?? null : null
-      )
+      ),
+      disableNotification: false
     });
 
     await this.database.updateServerRequestMessageId(pending.id, message.messageId);
@@ -288,7 +289,8 @@ export class BridgeRequestCoordinator {
       topicId: session.telegramTopicId,
       text: prompt.text,
       ...(prompt.entities ? { entities: prompt.entities } : {}),
-      replyMarkup: buildPermissionsApprovalKeyboard(pending.id)
+      replyMarkup: buildPermissionsApprovalKeyboard(pending.id),
+      disableNotification: false
     });
 
     await this.database.updateServerRequestMessageId(pending.id, message.messageId);
@@ -443,7 +445,8 @@ export class BridgeRequestCoordinator {
       chatId,
       topicId: request.telegramTopicId,
       text: prompt.text,
-      ...(prompt.replyMarkup ? { replyMarkup: prompt.replyMarkup } : {})
+      ...(prompt.replyMarkup ? { replyMarkup: prompt.replyMarkup } : {}),
+      disableNotification: false
     });
 
     await this.database.updateServerRequestMessageId(request.id, message.messageId);

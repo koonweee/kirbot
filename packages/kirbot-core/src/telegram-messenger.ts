@@ -22,6 +22,7 @@ export type TelegramSendOptions = {
   reply_to_message_id?: number;
   reply_markup?: InlineKeyboardMarkup;
   entities?: MessageEntity[];
+  disable_notification?: boolean;
 };
 
 export type TelegramDraftOptions = {
@@ -79,6 +80,10 @@ export type TelegramRenderedMessage = {
   entities?: MessageEntity[];
 };
 
+type TelegramPersistentMessageOptions = {
+  disableNotification?: boolean;
+};
+
 type DraftSessionState = {
   pending: TelegramRenderedMessage | null;
   flushTimer: NodeJS.Timeout | null;
@@ -109,13 +114,19 @@ export class TelegramMessenger {
     entities?: MessageEntity[];
     replyToMessageId?: number;
     replyMarkup?: InlineKeyboardMarkup;
+    disableNotification?: boolean;
   }): Promise<{ messageId: number }> {
-    const message = await this.telegram.sendMessage(input.chatId, input.text, {
-      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
-      ...(input.replyToMessageId !== undefined ? { reply_to_message_id: input.replyToMessageId } : {}),
-      ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}),
-      ...(input.entities ? { entities: input.entities } : {})
-    });
+    const message = await this.telegram.sendMessage(
+      input.chatId,
+      input.text,
+      buildTelegramSendOptions({
+        ...(input.topicId !== undefined ? { topicId: input.topicId } : {}),
+        ...(input.replyToMessageId !== undefined ? { replyToMessageId: input.replyToMessageId } : {}),
+        ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {}),
+        ...(input.entities ? { entities: input.entities } : {}),
+        ...(input.disableNotification !== undefined ? { disableNotification: input.disableNotification } : {})
+      })
+    );
     return { messageId: message.message_id };
   }
 
@@ -236,6 +247,7 @@ export class TelegramStreamMessageHandle {
     rendered: TelegramRenderedMessage | TelegramRenderedMessage[],
     options?: {
       firstMessageReplyMarkup?: InlineKeyboardMarkup;
+      disableNotification?: boolean;
     }
   ): Promise<number | null> {
     const outputs = Array.isArray(rendered) ? rendered : [rendered];
@@ -244,13 +256,20 @@ export class TelegramStreamMessageHandle {
     await this.#session.prepareForFinalize();
 
     for (const output of outputs) {
-      const message = await this.telegram.sendMessage(this.chatId, output.text, {
-        message_thread_id: this.topicId,
-        ...(firstMessageId === null && options?.firstMessageReplyMarkup
-          ? { reply_markup: options.firstMessageReplyMarkup }
-          : {}),
-        ...(output.entities ? { entities: output.entities } : {})
-      });
+      const message = await this.telegram.sendMessage(
+        this.chatId,
+        output.text,
+        buildTelegramSendOptions({
+          topicId: this.topicId,
+          ...(firstMessageId === null && options?.firstMessageReplyMarkup
+            ? { replyMarkup: options.firstMessageReplyMarkup }
+            : {}),
+          ...(output.entities ? { entities: output.entities } : {}),
+          ...(options?.disableNotification !== undefined
+            ? { disableNotification: options.disableNotification }
+            : {})
+        })
+      );
       if (firstMessageId === null) {
         firstMessageId = message.message_id;
       }
@@ -498,6 +517,22 @@ class TelegramDraftSession {
 
 function areSameRenderedMessages(left: TelegramRenderedMessage, right: TelegramRenderedMessage): boolean {
   return left.text === right.text && areSameEntities(left.entities, right.entities);
+}
+
+function buildTelegramSendOptions(input: {
+  topicId?: number | null;
+  replyToMessageId?: number;
+  replyMarkup?: InlineKeyboardMarkup;
+  entities?: MessageEntity[];
+} & TelegramPersistentMessageOptions): TelegramSendOptions {
+  const disableNotification = input.disableNotification ?? true;
+  return {
+    ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+    ...(input.replyToMessageId !== undefined ? { reply_to_message_id: input.replyToMessageId } : {}),
+    ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}),
+    ...(input.entities ? { entities: input.entities } : {}),
+    ...(disableNotification ? { disable_notification: true } : {})
+  };
 }
 
 function areSameEntities(left: MessageEntity[] | undefined, right: MessageEntity[] | undefined): boolean {

@@ -532,6 +532,14 @@ describe("Telegram harness", () => {
     expect(transcript.topics[0]?.messages.some((message) => message.text === "Approved result")).toBe(true);
     expect(transcript.topics[0]?.messages.some((message) => message.text.includes('Resolved item/commandExecution/requestApproval with "accept".'))).toBe(true);
     expect(harness.getTelegramEvents().some((event) => event.type === "telegram.answerCallbackQuery")).toBe(true);
+    const approvalEvent = harness.getTelegramEvents().find(
+      (event) => event.type === "telegram.sendMessage" && event.text.includes("Command approval needed")
+    );
+    expect(approvalEvent).toBeDefined();
+    if (!approvalEvent || approvalEvent.type !== "telegram.sendMessage") {
+      throw new Error("Expected command approval sendMessage event");
+    }
+    expect(approvalEvent.options?.disable_notification).toBeUndefined();
   });
 
   it("does not recreate the status draft when a late approval request arrives during turn finalization", async () => {
@@ -619,6 +627,14 @@ describe("Telegram harness", () => {
     const button = stub?.buttons?.[0]?.[0];
     expect(button?.text).toBe("Plan");
     expect(button && "web_app" in button ? button.web_app.url : null).toMatch(/^https:\/\/example\.com\/mini-app\/plan#d=/);
+    const stubEvent = harness.getTelegramEvents().find(
+      (event) => event.type === "telegram.sendMessage" && event.text === "Plan is ready"
+    );
+    expect(stubEvent).toBeDefined();
+    if (!stubEvent || stubEvent.type !== "telegram.sendMessage") {
+      throw new Error("Expected plan-ready sendMessage event");
+    }
+    expect(stubEvent.options?.disable_notification).toBeUndefined();
   });
 });
 

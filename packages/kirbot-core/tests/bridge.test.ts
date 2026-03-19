@@ -178,6 +178,7 @@ class FakeCodex implements BridgeCodexApi {
   model = "gpt-5-codex";
   reasoningEffort: ReasoningEffort | null = null;
   serviceTier: ServiceTier | null = null;
+  threadServiceTier: ServiceTier | null = null;
   approvalPolicy: AskForApproval = "on-request";
   sandboxPolicy: SandboxPolicy = {
     type: "workspaceWrite",
@@ -235,12 +236,13 @@ class FakeCodex implements BridgeCodexApi {
       title,
       ...(options?.cwd !== undefined ? { cwd: options.cwd } : {})
     });
+    this.threadServiceTier = null;
     return {
       threadId: "thread-1",
       branch: this.branch,
       model: this.model,
       reasoningEffort: this.reasoningEffort,
-      serviceTier: this.serviceTier,
+      serviceTier: this.threadServiceTier,
       cwd: options?.cwd ?? this.cwd,
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
@@ -311,7 +313,7 @@ class FakeCodex implements BridgeCodexApi {
     return {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
-      serviceTier: this.serviceTier,
+      serviceTier: this.threadServiceTier,
       cwd: this.cwd,
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
@@ -367,7 +369,7 @@ class FakeCodex implements BridgeCodexApi {
       this.reasoningEffort = options?.overrides?.reasoningEffort ?? null;
     }
     if ("serviceTier" in (options?.overrides ?? {})) {
-      this.serviceTier = options?.overrides?.serviceTier ?? null;
+      this.threadServiceTier = options?.overrides?.serviceTier ?? null;
     }
     if (options?.overrides?.approvalPolicy) {
       this.approvalPolicy = options.overrides.approvalPolicy;
@@ -1511,6 +1513,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe(
       "This topic does not have a Codex session yet. Send a normal message first to start one."
     );
+    expect(telegram.sentMessages.at(-1)?.options?.disable_notification).toBe(true);
   });
 
   it("applies native Codex slash commands globally while a turn is active", async () => {
@@ -1593,7 +1596,9 @@ describe("TelegramCodexBridge", () => {
       text: "Use fast mode"
     });
 
-    expect(codex.turnOverrides.at(-1)?.overrides).toBeNull();
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      serviceTier: "fast"
+    });
 
     codex.emitNotification({
       method: "turn/completed",
@@ -1610,6 +1615,47 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.sentMessages.at(-1)?.text).toContain("gpt-5-codex fast");
+  });
+
+  it("applies global fast mode to newly created topic footers", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 29,
+      userId: 42,
+      text: "/fast on"
+    });
+
+    const sessionDir = join(tempDir, "fast-session");
+    mkdirSync(sessionDir, { recursive: true });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 30,
+      userId: 42,
+      text: `/start ${sessionDir}`
+    });
+
+    expect(telegram.sentMessages).toMatchObject([
+      {
+        chatId: -1001,
+        text: "Global fast mode enabled."
+      },
+      {
+        chatId: -1001,
+        text: `gpt-5-codex fast • <1s • 100% left • ${sessionDir} • main`,
+        options: {
+          message_thread_id: 101,
+          entities: preformattedEntities(
+            `gpt-5-codex fast • <1s • 100% left • ${sessionDir} • main`,
+            "status"
+          )
+        }
+      }
+    ]);
   });
 
   it("updates the global model and reasoning effort through /model", async () => {
@@ -1683,7 +1729,9 @@ describe("TelegramCodexBridge", () => {
       text: "Use the new model"
     });
 
-    expect(codex.turnOverrides.at(-1)?.overrides).toBeNull();
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      serviceTier: null
+    });
     expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toBeNull();
     expect(codex.model).toBe("gpt-5.3-codex");
     expect(codex.reasoningEffort).toBe("high");
@@ -3009,6 +3057,7 @@ describe("TelegramCodexBridge", () => {
     expect(miniAppTelegram.sentMessages.filter((message) => message.text === "Plan is ready")).toHaveLength(1);
     expect(miniAppTelegram.sentMessages.some((message) => message.text === "Plan\n\n1. Draft the rollout")).toBe(false);
     const stub = miniAppTelegram.sentMessages.find((message) => message.text === "Plan is ready");
+    expect(stub?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(stub)).toEqual(["Plan", "Implement"]);
     const url = getWebAppUrlByButtonText(stub, "Plan");
     expect(url).toBeTruthy();
@@ -4293,6 +4342,7 @@ describe("TelegramCodexBridge", () => {
     await database.updateSessionPreferredMode(-1001, 786, "plan");
 
     const stub = telegram.sentMessages.find((message) => message.text === "Plan is ready");
+    expect(stub?.options?.disable_notification).toBeUndefined();
     const callbackData = getCallbackDataByButtonText(stub, "Implement");
     expect(callbackData).toBe(TOPIC_IMPLEMENT_CALLBACK_DATA);
 
@@ -4700,6 +4750,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.options?.reply_markup).toEqual({
       inline_keyboard: [[{ text: "Refactor", callback_data: `req:${pending.id}:opt:0` }]]
     });
+    expect(telegram.sentMessages.at(-1)?.options?.disable_notification).toBeUndefined();
 
     await bridge.handleCallbackQuery({
       callbackQueryId: "callback-user-input-1",
@@ -4830,6 +4881,7 @@ describe("TelegramCodexBridge", () => {
       "Command approval needed\n\nnpm publish\n\nCWD: /workspace\nScope: this approval is for this command only"
     );
     expect(promptMessage?.options?.entities?.map((entity) => entity.type)).toEqual(["pre", "code"]);
+    expect(promptMessage?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow once", "Deny", "Interrupt turn"]);
 
     await bridge.handleCallbackQuery({
@@ -4876,6 +4928,7 @@ describe("TelegramCodexBridge", () => {
       "File change approval needed\n\nReason: needs write access outside the current sandbox root\nRequested root: /workspace/packages/kirbot-core\nScope: this approval is for this change; accepting also proposes this write root for the session"
     );
     expect(promptMessage?.options?.entities?.map((entity) => entity.type)).toEqual(["code"]);
+    expect(promptMessage?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow once", "Deny", "Interrupt turn"]);
 
     await bridge.handleCallbackQuery({
@@ -4928,6 +4981,7 @@ describe("TelegramCodexBridge", () => {
     expect(promptMessage?.text).toContain("Additional permissions requested");
     expect(promptMessage?.text).toContain("Need to write outside the workspace");
     expect(promptMessage?.text).toContain("Write /tmp/export");
+    expect(promptMessage?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow this turn", "Allow this session", "Deny"]);
 
     await bridge.handleCallbackQuery({

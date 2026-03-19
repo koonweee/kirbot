@@ -117,7 +117,30 @@ describe("TelegramMessenger", () => {
         text: "Hello",
         options: {
           message_thread_id: 2,
-          entities
+          entities,
+          disable_notification: true
+        }
+      }
+    ]);
+  });
+
+  it("allows persistent messages to notify when requested", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+
+    await messenger.sendMessage({
+      chatId: 1,
+      topicId: 2,
+      text: "Need attention",
+      disableNotification: false
+    });
+
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: 1,
+        text: "Need attention",
+        options: {
+          message_thread_id: 2
         }
       }
     ]);
@@ -172,7 +195,8 @@ describe("TelegramMessenger", () => {
         chatId: 1,
         text: "Done",
         options: {
-          message_thread_id: 2
+          message_thread_id: 2,
+          disable_notification: true
         }
       }
     ]);
@@ -206,6 +230,30 @@ describe("TelegramMessenger", () => {
       {
         chatId: 1,
         text: "Done",
+        options: {
+          message_thread_id: 2,
+          disable_notification: true
+        }
+      }
+    ]);
+  });
+
+  it("allows finalized stream messages to notify when requested", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+    const stream = messenger.streamMessage({
+      chatId: 1,
+      topicId: 2,
+      draftId: 106
+    });
+
+    await stream.update({ text: "Working" }, true);
+    await stream.finalize({ text: "Plan is ready" }, { disableNotification: false });
+
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: 1,
+        text: "Plan is ready",
         options: {
           message_thread_id: 2
         }

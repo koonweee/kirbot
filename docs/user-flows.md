@@ -70,6 +70,7 @@ User experience:
 - In-progress planning stays in the status path; kirbot no longer streams partial plan text into Telegram bubbles.
 - When the final plan item completes, kirbot posts a compact Telegram stub with `Plan` and `Implement` actions so the user can inspect the plan or immediately start implementation in the same topic.
 - When the turn finishes, kirbot clears drafts, sends durable final messages, and posts a completion footer with execution context.
+- New Telegram messages are muted by default; completed-plan stubs are one of the few cases that still notify so the user notices when attention is needed.
 
 Owned by:
 
@@ -197,6 +198,7 @@ User experience:
 - Button presses resolve approvals directly.
 - Structured user input can progress through multiple questions and can fall back to free text when the prompt allows an `Other` path.
 - Normal topic messages are interpreted as answers only when a pending question is currently waiting for free text.
+- These async prompts notify by default even though most other bot messages are muted.
 
 Owned by:
 
