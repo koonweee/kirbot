@@ -14,8 +14,13 @@ import type { ServerNotification } from "@kirbot/codex-client/generated/codex/Se
 import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerRequest";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
+import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
+import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
+import type { SandboxPolicy } from "@kirbot/codex-client/generated/codex/v2/SandboxPolicy";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
+import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
+import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import { JsonRpcMethodError, type AppServerEvent } from "@kirbot/codex-client";
 import {
   TELEGRAM_FORUM_TOPIC_ICON_COLORS,
@@ -151,16 +156,51 @@ class FakeCodex implements BridgeCodexApi {
   ensuredThreads: string[] = [];
   turns: Array<{ threadId: string; text: string; input: UserInput[]; turnId: string }> = [];
   turnCollaborationModes: Array<{ turnId: string; collaborationMode: unknown | null }> = [];
+  turnOverrides: Array<{ turnId: string; overrides: unknown | null }> = [];
   steerCalls: Array<{ threadId: string; expectedTurnId: string; text: string; input: UserInput[] }> = [];
   interruptCalls: Array<{ threadId: string; turnId: string }> = [];
   commandApprovals: Array<{ id: string | number; decision: CommandExecutionApprovalDecision }> = [];
   fileApprovals: Array<{ id: string | number; decision: FileChangeApprovalDecision }> = [];
+  permissionsApprovals: Array<{ id: string | number; response: PermissionsRequestApprovalResponse }> = [];
   userInputs: Array<{ id: string | number; answers: ToolRequestUserInputResponse["answers"] }> = [];
   unsupported: Array<{ id: string | number; message: string }> = [];
   readTurnMessagesResult = "";
   readTurnSnapshotResult: Partial<ResolvedTurnSnapshot> = {};
   model = "gpt-5-codex";
   reasoningEffort: ReasoningEffort | null = null;
+  serviceTier: ServiceTier | null = null;
+  approvalPolicy: AskForApproval = "on-request";
+  sandboxPolicy: SandboxPolicy = {
+    type: "workspaceWrite",
+    writableRoots: [],
+    readOnlyAccess: {
+      type: "fullAccess"
+    },
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false
+  };
+  models: Model[] = [
+    {
+      id: "model-1",
+      model: "gpt-5-codex",
+      upgrade: null,
+      upgradeInfo: null,
+      availabilityNux: null,
+      displayName: "gpt-5-codex",
+      description: "Default coding model",
+      hidden: false,
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low", description: "Faster responses" },
+        { reasoningEffort: "medium", description: "Balanced reasoning" },
+        { reasoningEffort: "high", description: "Deeper reasoning" }
+      ],
+      defaultReasoningEffort: "medium",
+      inputModalities: [],
+      supportsPersonality: false,
+      isDefault: true
+    }
+  ];
   nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
@@ -171,24 +211,56 @@ class FakeCodex implements BridgeCodexApi {
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
 
-  async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: ReasoningEffort | null }> {
+  async createThread(title: string): Promise<{
+    threadId: string;
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
     this.createdThreads.push(title);
     return {
       threadId: "thread-1",
       model: this.model,
-      reasoningEffort: this.reasoningEffort
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy
     };
   }
 
-  async ensureThreadLoaded(threadId: string): Promise<{ model: string; reasoningEffort: ReasoningEffort | null }> {
+  async ensureThreadLoaded(threadId: string): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
     this.ensuredThreads.push(threadId);
     return {
       model: this.model,
-      reasoningEffort: this.reasoningEffort
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy
     };
   }
 
-  async sendTurn(threadId: string, input: UserInput[], collaborationMode?: unknown): Promise<{ id: string }> {
+  async sendTurn(
+    threadId: string,
+    input: UserInput[],
+    options?: {
+      collaborationMode?: unknown | null;
+      overrides?: {
+        model?: string;
+        reasoningEffort?: ReasoningEffort | null;
+        serviceTier?: ServiceTier | null;
+        approvalPolicy?: AskForApproval;
+        sandboxPolicy?: SandboxPolicy;
+      } | null;
+    }
+  ): Promise<{ id: string }> {
     if (this.nextSendTurnError) {
       const error = this.nextSendTurnError;
       this.nextSendTurnError = null;
@@ -211,8 +283,27 @@ class FakeCodex implements BridgeCodexApi {
     this.turns.push(turn);
     this.turnCollaborationModes.push({
       turnId,
-      collaborationMode: collaborationMode ?? null
+      collaborationMode: options?.collaborationMode ?? null
     });
+    this.turnOverrides.push({
+      turnId,
+      overrides: options?.overrides ?? null
+    });
+    if (options?.overrides?.model) {
+      this.model = options.overrides.model;
+    }
+    if ("reasoningEffort" in (options?.overrides ?? {})) {
+      this.reasoningEffort = options?.overrides?.reasoningEffort ?? null;
+    }
+    if ("serviceTier" in (options?.overrides ?? {})) {
+      this.serviceTier = options?.overrides?.serviceTier ?? null;
+    }
+    if (options?.overrides?.approvalPolicy) {
+      this.approvalPolicy = options.overrides.approvalPolicy;
+    }
+    if (options?.overrides?.sandboxPolicy) {
+      this.sandboxPolicy = options.overrides.sandboxPolicy;
+    }
     await this.beforeSendTurnResolve?.({
       threadId,
       turnId,
@@ -281,6 +372,13 @@ class FakeCodex implements BridgeCodexApi {
     this.fileApprovals.push({ id, decision: response.decision });
   }
 
+  async respondToPermissionsApproval(
+    id: string | number,
+    response: PermissionsRequestApprovalResponse
+  ): Promise<void> {
+    this.permissionsApprovals.push({ id, response });
+  }
+
   async respondToUserInputRequest(
     id: string | number,
     response: ToolRequestUserInputResponse
@@ -315,6 +413,10 @@ class FakeCodex implements BridgeCodexApi {
       kind: "serverRequest",
       request
     });
+  }
+
+  async listModels(): Promise<Model[]> {
+    return this.models;
   }
 
   private emitEvent(event: AppServerEvent): void {
@@ -988,6 +1090,279 @@ describe("TelegramCodexBridge", () => {
     );
   });
 
+  it("rejects native Codex slash commands while a turn is active", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 781,
+      messageId: 10,
+      updateId: 24,
+      userId: 42,
+      text: "Start the session"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 781,
+      messageId: 11,
+      updateId: 25,
+      userId: 42,
+      text: "/fast"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing native Codex settings."
+    );
+  });
+
+  it("applies /fast on to the next turn and shows fast in the footer", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 782,
+      messageId: 10,
+      updateId: 26,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 782,
+      messageId: 11,
+      updateId: 27,
+      userId: 42,
+      text: "/fast on"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Fast mode enabled for the next turn in this topic.");
+
+    codex.readTurnSnapshotResult = {
+      text: "Fast answer",
+      assistantText: "Fast answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 782,
+      messageId: 12,
+      updateId: 28,
+      userId: 42,
+      text: "Use fast mode"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      serviceTier: "fast"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-2",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.at(-1)?.text).toContain("gpt-5-codex fast");
+  });
+
+  it("updates the next turn model and reasoning effort through /model", async () => {
+    codex.models = [
+      codex.models[0]!,
+      {
+        id: "model-2",
+        model: "gpt-5.3-codex",
+        upgrade: null,
+        upgradeInfo: null,
+        availabilityNux: null,
+        displayName: "gpt-5.3-codex",
+        description: "Alternative model",
+        hidden: false,
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Fast" },
+          { reasoningEffort: "high", description: "Deep" }
+        ],
+        defaultReasoningEffort: "low",
+        inputModalities: [],
+        supportsPersonality: false,
+        isDefault: false
+      }
+    ];
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 10,
+      updateId: 29,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 11,
+      updateId: 30,
+      userId: 42,
+      text: "/model"
+    });
+
+    const modelPicker = telegram.sentMessages.at(-1);
+    const pickCallback = getCallbackDataByButtonText(modelPicker, "gpt-5.3-codex");
+    expect(pickCallback).toBe("slash:model:pick:1");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "pick-model",
+      data: pickCallback!,
+      chatId: -1001,
+      topicId: 783,
+      userId: 42
+    });
+
+    const reasoningPicker = telegram.sentMessages.at(-1);
+    const applyCallback = getCallbackDataByButtonText(reasoningPicker, "high");
+    expect(applyCallback).toBe("slash:model:apply:1:high");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "pick-effort",
+      data: applyCallback!,
+      chatId: -1001,
+      topicId: 783,
+      userId: 42
+    });
+
+    const session = await database.getSessionByTopic(-1001, 783);
+    expect(session?.codexSettings.pending).toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 12,
+      updateId: 31,
+      userId: 42,
+      text: "Use the new model"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    });
+  });
+
+  it("treats /approvals as an alias for /permissions and applies the selected preset on the next turn", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 10,
+      updateId: 32,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 11,
+      updateId: 33,
+      userId: 42,
+      text: "/approvals"
+    });
+
+    const permissionsPicker = telegram.sentMessages.at(-1);
+    expect(getInlineButtonTexts(permissionsPicker)).toEqual(["Read Only", "• Default", "Full Access"]);
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "permissions-full",
+      data: "slash:permissions:apply:full-access",
+      chatId: -1001,
+      topicId: 784,
+      userId: 42
+    });
+
+    const session = await database.getSessionByTopic(-1001, 784);
+    expect(session?.codexSettings.pending).toEqual({
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 12,
+      updateId: 34,
+      userId: 42,
+      text: "Use the full-access preset"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+  });
+
   it("enables plan mode without starting a turn when /plan has no prompt", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1371,6 +1746,70 @@ describe("TelegramCodexBridge", () => {
       preformattedEntities("gpt-5-codex high • <1s • 0 files • 100% left • /workspace • main", "status")
     );
     expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
+  });
+
+  it("uses streamed file-change items in the footer when the resolved snapshot still reports zero files", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 21,
+      userId: 42,
+      text: "Edit the files"
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "fileChange",
+          id: "item-1",
+          changes: [
+            {
+              path: "packages/kirbot-core/src/bridge.ts",
+              kind: {
+                type: "update",
+                move_path: null
+              },
+              diff: ""
+            },
+            {
+              path: "packages/kirbot-core/src/bridge/presentation.ts",
+              kind: {
+                type: "update",
+                move_path: null
+              },
+              diff: ""
+            }
+          ],
+          status: "inProgress"
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex • <1s • 2 files • 100% left • /workspace • main");
+    expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
+      preformattedEntities("gpt-5-codex • <1s • 2 files • 100% left • /workspace • main", "status")
+    );
   });
 
   it("formats assistant markdown as Telegram entities for drafts and final messages", async () => {
@@ -3906,6 +4345,71 @@ describe("TelegramCodexBridge", () => {
     const resolved = await database.getPendingRequest(JSON.stringify(188));
     expect(resolved.status).toBe("resolved");
     expect(telegram.edits.at(-1)?.text).toContain("accept");
+  });
+
+  it("stores permissions approval requests and resolves them via callback queries", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Request additional permissions"
+    });
+
+    codex.emitRequest({
+      method: "item/permissions/requestApproval",
+      id: 288,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-perm-1",
+        reason: "Need to write outside the workspace",
+        permissions: {
+          network: null,
+          fileSystem: {
+            read: null,
+            write: ["/tmp/export"]
+          },
+          macos: null
+        }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pending = await database.getPendingRequest(JSON.stringify(288));
+    expect(pending.method).toBe("item/permissions/requestApproval");
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text).toContain("Additional permissions requested");
+    expect(promptMessage?.text).toContain("Need to write outside the workspace");
+    expect(promptMessage?.text).toContain("Write /tmp/export");
+    expect(getInlineButtonTexts(promptMessage)).toEqual(["Allow this turn", "Allow this session", "Deny"]);
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-permissions-1",
+      data: getCallbackDataByButtonText(promptMessage, "Allow this session")!,
+      chatId: -1001,
+      topicId: 101,
+      userId: 42
+    });
+
+    expect(codex.permissionsApprovals).toEqual([
+      {
+        id: 288,
+        response: {
+          permissions: {
+            fileSystem: {
+              read: null,
+              write: ["/tmp/export"]
+            }
+          },
+          scope: "session"
+        }
+      }
+    ]);
+    const resolved = await database.getPendingRequest(JSON.stringify(288));
+    expect(resolved.status).toBe("resolved");
+    expect(telegram.edits.at(-1)?.text).toBe("Allowed additional permissions for this session.");
   });
 
   it("cleans up pending approval prompts when the app server resolves them elsewhere", async () => {

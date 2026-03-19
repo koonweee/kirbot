@@ -1,6 +1,9 @@
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
+import type { PermissionGrantScope } from "@kirbot/codex-client/generated/codex/v2/PermissionGrantScope";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
+import type { PermissionsRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalParams";
+import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { UserInputServerRequest } from "@kirbot/codex-client";
 import type { InlineKeyboardMarkup } from "../telegram-messenger";
@@ -39,6 +42,18 @@ export function buildApprovalKeyboard(
 
   return {
     inline_keyboard: [allowRow, denyRow].filter((row) => row.length > 0)
+  };
+}
+
+export function buildPermissionsApprovalKeyboard(requestId: number): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Allow this turn", callback_data: `req:${requestId}:permissions:turn` },
+        { text: "Allow this session", callback_data: `req:${requestId}:permissions:session` }
+      ],
+      [{ text: "Deny", callback_data: `req:${requestId}:permissions:deny` }]
+    ]
   };
 }
 
@@ -226,6 +241,36 @@ export function resolveFileApprovalDecision(actionParts: string[]): FileChangeAp
   return normalizeFileApprovalDecision(action ?? "cancel");
 }
 
+export function resolvePermissionsApprovalResponse(
+  params: PermissionsRequestApprovalParams,
+  actionParts: string[]
+): PermissionsRequestApprovalResponse {
+  const [action, value] = actionParts;
+  if (action !== "permissions") {
+    return {
+      permissions: {},
+      scope: "turn"
+    };
+  }
+
+  const scope = normalizePermissionGrantScope(value ?? "turn");
+  if (value === "deny") {
+    return {
+      permissions: {},
+      scope: "turn"
+    };
+  }
+
+  return {
+    permissions: {
+      ...(params.permissions.network ? { network: params.permissions.network } : {}),
+      ...(params.permissions.fileSystem ? { fileSystem: params.permissions.fileSystem } : {}),
+      ...(params.permissions.macos ? { macos: params.permissions.macos } : {})
+    },
+    scope
+  };
+}
+
 function normalizeCommandApprovalDecision(action: string): CommandExecutionApprovalDecision {
   switch (action) {
     case "accept":
@@ -238,6 +283,10 @@ function normalizeCommandApprovalDecision(action: string): CommandExecutionAppro
     default:
       return "cancel";
   }
+}
+
+function normalizePermissionGrantScope(value: string): PermissionGrantScope {
+  return value === "session" ? "session" : "turn";
 }
 
 export function normalizeFileApprovalDecision(action: string): FileChangeApprovalDecision {

@@ -1,6 +1,7 @@
 import type { UserTurnMessage } from "../domain";
 import type { SessionMode } from "../domain";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
+import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
@@ -46,6 +47,7 @@ export class TurnLifecycleCoordinator {
     turnId: string,
     model: string | null,
     reasoningEffort: ReasoningEffort | null = null,
+    serviceTier: ServiceTier | null = null,
     mode: SessionMode = "default"
   ): TurnContext {
     if (message.topicId === null) {
@@ -74,9 +76,11 @@ export class TurnLifecycleCoordinator {
       planStreams: new Map(),
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
+      changedFilePaths: new Set(),
       mode,
       model,
       reasoningEffort,
+      serviceTier,
       tokenUsage: null
     };
 
@@ -238,10 +242,15 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleItemStarted(turnId: string, item: ThreadItem): Promise<void> {
+    const context = this.#turns.get(turnId);
     if (item.type === "agentMessage") {
       this.deps.runtime.registerAssistantItem(turnId, item.id, item.phase);
     } else if (item.type === "plan") {
       this.deps.runtime.registerPlanItem(turnId, item.id);
+    } else if (item.type === "fileChange" && context) {
+      for (const change of item.changes) {
+        context.changedFilePaths.add(change.path);
+      }
     }
 
     await this.updateStatus(turnId, buildStatusDraftForItem(item));
@@ -327,6 +336,12 @@ export class TurnLifecycleCoordinator {
     const context = this.#turns.get(turnId);
     if (!context) {
       return;
+    }
+
+    if (item.type === "fileChange") {
+      for (const change of item.changes) {
+        context.changedFilePaths.add(change.path);
+      }
     }
 
     const activityLogEntry = buildActivityLogEntryForItemCompleted(item);

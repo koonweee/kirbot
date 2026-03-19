@@ -2,8 +2,10 @@ import { basename } from "node:path";
 
 import type { CommandExecutionRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { FileChangeRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/FileChangeRequestApprovalParams";
+import type { PermissionsRequestApprovalParams } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalParams";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
+import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import type { SessionMode } from "../domain";
 import {
   renderCodeText,
@@ -55,6 +57,7 @@ export type CompletionFooterDetails = {
   mode: SessionMode;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
+  serviceTier: ServiceTier | null;
   durationMs: number;
   changedFiles: number;
   contextLeftPercent: number | null;
@@ -245,6 +248,34 @@ export function buildRenderedFileChangeApprovalPrompt(
     builder.appendText("\nScope: this approval is for this file change only");
   }
 
+  return builder.build();
+}
+
+export function buildRenderedPermissionsApprovalPrompt(
+  params: PermissionsRequestApprovalParams
+): TelegramRenderedMessage {
+  const builder = new TelegramEntityBuilder();
+  builder.appendText("Additional permissions requested");
+
+  if (params.reason?.trim()) {
+    builder.appendText("\n\nReason: ");
+    builder.appendText(params.reason.trim());
+  }
+
+  const lines = summarizeRequestedPermissions(params);
+  if (lines.length > 0) {
+    builder.appendText("\n\nRequested access:");
+    for (const line of lines) {
+      builder.appendText("\n- ");
+      if (line.code) {
+        builder.appendFormatted(renderCodeText(line.value));
+      } else {
+        builder.appendText(line.value);
+      }
+    }
+  }
+
+  builder.appendText("\n\nChoose whether to allow the request for this turn or the whole session.");
   return builder.build();
 }
 
@@ -935,7 +966,12 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
   const cwd = shortenHomePath(details.cwd);
   const branch = details.branch?.trim() ? details.branch : "no-branch";
   const model = details.model?.trim() ? details.model : "unknown-model";
-  const modelLabel = details.reasoningEffort ? `${model} ${details.reasoningEffort}` : model;
+  const modelLabel =
+    details.serviceTier === "fast"
+      ? `${model} fast`
+      : details.reasoningEffort
+        ? `${model} ${details.reasoningEffort}`
+        : model;
 
   return [
     modelLabel,
@@ -946,6 +982,65 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
     branch,
     ...(details.mode === "plan" ? ["planning"] : [])
   ].join(" • ");
+}
+
+function summarizeRequestedPermissions(
+  params: PermissionsRequestApprovalParams
+): Array<{ value: string; code: boolean }> {
+  const lines: Array<{ value: string; code: boolean }> = [];
+
+  if (params.permissions.network?.enabled) {
+    lines.push({
+      value: "Network access",
+      code: false
+    });
+  }
+
+  for (const root of params.permissions.fileSystem?.read ?? []) {
+    lines.push({
+      value: `Read ${root}`,
+      code: true
+    });
+  }
+
+  for (const root of params.permissions.fileSystem?.write ?? []) {
+    lines.push({
+      value: `Write ${root}`,
+      code: true
+    });
+  }
+
+  if (params.permissions.macos) {
+    if (params.permissions.macos.accessibility) {
+      lines.push({ value: "macOS Accessibility", code: false });
+    }
+    if (params.permissions.macos.launchServices) {
+      lines.push({ value: "macOS Launch Services", code: false });
+    }
+    if (params.permissions.macos.calendar) {
+      lines.push({ value: "macOS Calendar", code: false });
+    }
+    if (params.permissions.macos.reminders) {
+      lines.push({ value: "macOS Reminders", code: false });
+    }
+    if (params.permissions.macos.preferences && params.permissions.macos.preferences !== "none") {
+      lines.push({ value: `macOS Preferences (${params.permissions.macos.preferences})`, code: false });
+    }
+    if (params.permissions.macos.contacts && params.permissions.macos.contacts !== "none") {
+      lines.push({ value: `macOS Contacts (${params.permissions.macos.contacts})`, code: false });
+    }
+    if (params.permissions.macos.automations && params.permissions.macos.automations !== "none") {
+      lines.push({
+        value:
+          typeof params.permissions.macos.automations === "string"
+            ? `macOS Automation (${params.permissions.macos.automations})`
+            : `macOS Automation (${params.permissions.macos.automations.bundle_ids.join(", ")})`,
+        code: false
+      });
+    }
+  }
+
+  return lines;
 }
 
 function formatElapsedDuration(durationMs: number, allowLessThanOneSecond = false): string {

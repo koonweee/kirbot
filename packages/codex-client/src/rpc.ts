@@ -19,6 +19,8 @@ import type { ThreadSetNameParams } from "./generated/codex/v2/ThreadSetNamePara
 import type { ThreadSetNameResponse } from "./generated/codex/v2/ThreadSetNameResponse";
 import type { ThreadStartParams } from "./generated/codex/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "./generated/codex/v2/ThreadStartResponse";
+import type { ModelListParams } from "./generated/codex/v2/ModelListParams";
+import type { ModelListResponse } from "./generated/codex/v2/ModelListResponse";
 import type { TurnInterruptParams } from "./generated/codex/v2/TurnInterruptParams";
 import type { TurnInterruptResponse } from "./generated/codex/v2/TurnInterruptResponse";
 import type { TurnSteerParams } from "./generated/codex/v2/TurnSteerParams";
@@ -70,6 +72,10 @@ type SupportedMethodMap = {
   "thread/name/set": {
     params: ThreadSetNameParams;
     result: ThreadSetNameResponse;
+  };
+  "model/list": {
+    params: ModelListParams;
+    result: ModelListResponse;
   };
   "turn/start": {
     params: TurnStartParams;
@@ -360,6 +366,10 @@ export class CodexRpcClient extends EventEmitter {
 
   async setThreadName(params: ThreadSetNameParams): Promise<ThreadSetNameResponse> {
     return this.call("thread/name/set", params);
+  }
+
+  async listModels(params: ModelListParams): Promise<ModelListResponse> {
+    return this.call("model/list", params);
   }
 
   async startTurn(params: TurnStartParams): Promise<TurnStartResponse> {

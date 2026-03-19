@@ -2,6 +2,7 @@ import type { TurnStatusDraft } from "./presentation";
 import type { SessionMode } from "../domain";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
+import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import type { TelegramStreamMessageHandle } from "../telegram-messenger";
 
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
@@ -31,9 +32,11 @@ export type TurnContext = {
   planStreams: Map<string, PlanStreamState>;
   compactionNoticeSent: boolean;
   publishedPlanMessages: number;
+  changedFilePaths: Set<string>;
   mode: SessionMode;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
+  serviceTier: ServiceTier | null;
   tokenUsage: ThreadTokenUsage | null;
 };
 

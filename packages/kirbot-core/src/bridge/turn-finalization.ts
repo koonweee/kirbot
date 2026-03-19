@@ -293,8 +293,9 @@ export class TurnFinalizer {
       mode: context.mode,
       model: context.model,
       reasoningEffort: context.reasoningEffort,
+      serviceTier: context.serviceTier,
       durationMs: Math.max(0, Date.now() - context.startedAtMs),
-      changedFiles: snapshot.changedFiles,
+      changedFiles: Math.max(snapshot.changedFiles, context.changedFilePaths.size),
       contextLeftPercent,
       cwd: snapshot.cwd,
       branch: snapshot.branch

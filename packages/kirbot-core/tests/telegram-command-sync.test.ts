@@ -98,6 +98,18 @@ describe("TelegramCommandSync", () => {
           {
             command: "implement",
             description: "Implement the plan in this topic"
+          },
+          {
+            command: "model",
+            description: "Choose the model for this topic"
+          },
+          {
+            command: "fast",
+            description: "Toggle fast mode for this topic"
+          },
+          {
+            command: "permissions",
+            description: "Set Codex permissions for this topic"
           }
         ],
         options: {
@@ -119,6 +131,18 @@ describe("TelegramCommandSync", () => {
           {
             command: "implement",
             description: "Implement the plan in this topic"
+          },
+          {
+            command: "model",
+            description: "Choose the model for this topic"
+          },
+          {
+            command: "fast",
+            description: "Toggle fast mode for this topic"
+          },
+          {
+            command: "permissions",
+            description: "Set Codex permissions for this topic"
           }
         ],
         options: {

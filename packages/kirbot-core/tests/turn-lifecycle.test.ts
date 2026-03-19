@@ -1035,6 +1035,32 @@ describe("TurnLifecycleCoordinator", () => {
     );
   });
 
+  it("falls back to tracked file-change notifications when the resolved snapshot reports zero files", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.handleItemStarted("turn-1", {
+      type: "fileChange",
+      id: "patch-1",
+      status: "inProgress",
+      changes: [
+        { path: "src/app.ts", kind: { type: "update", move_path: null }, diff: "" },
+        { path: "src/server.ts", kind: { type: "update", move_path: null }, diff: "" }
+      ]
+    });
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 2 files • 100% left • /workspace • main"
+    );
+  });
+
   it("adds a plan-mode label to the completion footer for plan turns", async () => {
     const harness = createHarness({
       text: "Plan ready",
@@ -1043,7 +1069,7 @@ describe("TurnLifecycleCoordinator", () => {
       branch: "main"
     });
 
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex", null, "plan");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex", null, null, "plan");
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 

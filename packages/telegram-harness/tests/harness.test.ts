@@ -10,21 +10,40 @@ import type { ServerNotification } from "@kirbot/codex-client/generated/codex/Se
 import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerRequest";
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { UserInput } from "@kirbot/codex-client/generated/codex/v2/UserInput";
+import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
+import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
+import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
+import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
+import type { SandboxPolicy } from "@kirbot/codex-client/generated/codex/v2/SandboxPolicy";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
+import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import type { ResolvedTurnSnapshot } from "@kirbot/core";
 import { createTelegramHarness, type TelegramHarness } from "../src/index";
 import type { AppServerEvent } from "@kirbot/codex-client";
 
 class ScriptedCodex implements BridgeCodexApi {
   model = "gpt-5-codex";
-  reasoningEffort = null;
+  reasoningEffort: ReasoningEffort | null = null;
+  serviceTier: ServiceTier | null = null;
+  approvalPolicy: AskForApproval = "on-request";
+  sandboxPolicy: SandboxPolicy = {
+    type: "workspaceWrite",
+    writableRoots: [],
+    readOnlyAccess: {
+      type: "fullAccess"
+    },
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false
+  };
   nextTurnId = 1;
   finalText = "Harness reply";
   tokenUsage: ServerNotification | null = null;
   createdThreadIds: string[] = [];
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
+  permissionsApprovals: Array<{ id: RequestId; response: PermissionsRequestApprovalResponse }> = [];
   snapshotDelayMs = 0;
 
   readonly #eventQueue: AppServerEvent[] = [];
@@ -36,24 +55,72 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
-  async createThread(title: string): Promise<{ threadId: string; model: string; reasoningEffort: null }> {
+  async createThread(title: string): Promise<{
+    threadId: string;
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
     const threadId = `thread-${this.createdThreadIds.length + 1}`;
     this.createdThreadIds.push(title);
     return {
       threadId,
       model: this.model,
-      reasoningEffort: this.reasoningEffort
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy
     };
   }
 
-  async ensureThreadLoaded(): Promise<{ model: string; reasoningEffort: null }> {
+  async ensureThreadLoaded(): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
     return {
       model: this.model,
-      reasoningEffort: this.reasoningEffort
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy
     };
   }
 
-  async sendTurn(threadId: string, _input: UserInput[]): Promise<{ id: string }> {
+  async sendTurn(
+    threadId: string,
+    _input: UserInput[],
+    options?: {
+      collaborationMode?: unknown | null;
+      overrides?: {
+        model?: string;
+        reasoningEffort?: ReasoningEffort | null;
+        serviceTier?: ServiceTier | null;
+        approvalPolicy?: AskForApproval;
+        sandboxPolicy?: SandboxPolicy;
+      } | null;
+    }
+  ): Promise<{ id: string }> {
+    if (options?.overrides?.model) {
+      this.model = options.overrides.model;
+    }
+    if ("reasoningEffort" in (options?.overrides ?? {})) {
+      this.reasoningEffort = options?.overrides?.reasoningEffort ?? null;
+    }
+    if ("serviceTier" in (options?.overrides ?? {})) {
+      this.serviceTier = options?.overrides?.serviceTier ?? null;
+    }
+    if (options?.overrides?.approvalPolicy) {
+      this.approvalPolicy = options.overrides.approvalPolicy;
+    }
+    if (options?.overrides?.sandboxPolicy) {
+      this.sandboxPolicy = options.overrides.sandboxPolicy;
+    }
+
     const turnId = `turn-${this.nextTurnId++}`;
     if (this.behavior === "complete") {
       setTimeout(() => {
@@ -215,9 +282,33 @@ class ScriptedCodex implements BridgeCodexApi {
 
   async respondToFileChangeApproval(_id: RequestId, _response: { decision: FileChangeApprovalDecision }): Promise<void> {}
 
+  async respondToPermissionsApproval(id: RequestId, response: PermissionsRequestApprovalResponse): Promise<void> {
+    this.permissionsApprovals.push({ id, response });
+  }
+
   async respondToUserInputRequest(_id: RequestId, _response: ToolRequestUserInputResponse): Promise<void> {}
 
   async respondUnsupportedRequest(): Promise<void> {}
+
+  async listModels(): Promise<Model[]> {
+    return [
+      {
+        id: "model-1",
+        model: this.model,
+        upgrade: null,
+        upgradeInfo: null,
+        availabilityNux: null,
+        displayName: this.model,
+        description: "Harness model",
+        hidden: false,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: "medium",
+        inputModalities: [],
+        supportsPersonality: false,
+        isDefault: true
+      }
+    ];
+  }
 
   async nextEvent(): Promise<AppServerEvent | null> {
     const event = this.#eventQueue.shift();

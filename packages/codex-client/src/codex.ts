@@ -4,14 +4,20 @@ import { once } from "node:events";
 import type { AppConfig } from "./config";
 import type { CollaborationMode } from "./generated/codex/CollaborationMode";
 import type { ReasoningEffort } from "./generated/codex/ReasoningEffort";
+import type { ServiceTier } from "./generated/codex/ServiceTier";
 import type { UserInput } from "./generated/codex/v2/UserInput";
 import type { RequestId } from "./generated/codex/RequestId";
 import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
+import type { AskForApproval } from "./generated/codex/v2/AskForApproval";
 import type { CommandExecutionRequestApprovalParams } from "./generated/codex/v2/CommandExecutionRequestApprovalParams";
 import type { CommandExecutionRequestApprovalResponse } from "./generated/codex/v2/CommandExecutionRequestApprovalResponse";
 import type { FileChangeRequestApprovalParams } from "./generated/codex/v2/FileChangeRequestApprovalParams";
 import type { FileChangeRequestApprovalResponse } from "./generated/codex/v2/FileChangeRequestApprovalResponse";
+import type { Model } from "./generated/codex/v2/Model";
+import type { PermissionsRequestApprovalParams } from "./generated/codex/v2/PermissionsRequestApprovalParams";
+import type { PermissionsRequestApprovalResponse } from "./generated/codex/v2/PermissionsRequestApprovalResponse";
+import type { SandboxPolicy } from "./generated/codex/v2/SandboxPolicy";
 import type { ToolRequestUserInputParams } from "./generated/codex/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputResponse } from "./generated/codex/v2/ToolRequestUserInputResponse";
 import type { Turn } from "./generated/codex/v2/Turn";
@@ -25,7 +31,13 @@ import type { LoggerLike } from "./logging";
 export type ThreadStartSettings = {
   model: string;
   reasoningEffort: ReasoningEffort | null;
+  serviceTier: ServiceTier | null;
+  cwd: string;
+  approvalPolicy: AskForApproval;
+  sandboxPolicy: SandboxPolicy;
 };
+
+export type ThreadSettingsOverride = Partial<ThreadStartSettings>;
 
 export type AppServerOptions = {
   logger?: LoggerLike;
@@ -68,6 +80,11 @@ export type ApprovalServerRequest =
       method: "item/fileChange/requestApproval";
       id: RequestId;
       params: FileChangeRequestApprovalParams;
+    }
+  | {
+      method: "item/permissions/requestApproval";
+      id: RequestId;
+      params: PermissionsRequestApprovalParams;
     };
 
 export type UserInputServerRequest = {
@@ -124,7 +141,11 @@ export class CodexGateway {
     this.#loadedThreads.add(response.thread.id);
     this.#threadSettings.set(response.thread.id, {
       model: response.model,
-      reasoningEffort: response.reasoningEffort
+      reasoningEffort: response.reasoningEffort,
+      serviceTier: response.serviceTier,
+      cwd: response.cwd,
+      approvalPolicy: response.approvalPolicy,
+      sandboxPolicy: response.sandbox
     });
     await this.client.setThreadName({
       threadId: response.thread.id,
@@ -133,7 +154,11 @@ export class CodexGateway {
     return {
       threadId: response.thread.id,
       model: response.model,
-      reasoningEffort: response.reasoningEffort
+      reasoningEffort: response.reasoningEffort,
+      serviceTier: response.serviceTier,
+      cwd: response.cwd,
+      approvalPolicy: response.approvalPolicy,
+      sandboxPolicy: response.sandbox
     };
   }
 
@@ -142,7 +167,11 @@ export class CodexGateway {
       const settings = this.#threadSettings.get(threadId);
       return {
         model: settings?.model ?? this.config.model ?? "unknown-model",
-        reasoningEffort: settings?.reasoningEffort ?? null
+        reasoningEffort: settings?.reasoningEffort ?? null,
+        serviceTier: settings?.serviceTier ?? null,
+        cwd: settings?.cwd ?? this.config.defaultCwd,
+        approvalPolicy: settings?.approvalPolicy ?? this.config.approvalPolicy ?? "on-request",
+        sandboxPolicy: settings?.sandboxPolicy ?? defaultWorkspaceWriteSandboxPolicy()
       };
     }
 
@@ -153,20 +182,47 @@ export class CodexGateway {
     this.#loadedThreads.add(threadId);
     this.#threadSettings.set(threadId, {
       model: response.model,
-      reasoningEffort: response.reasoningEffort
+      reasoningEffort: response.reasoningEffort,
+      serviceTier: response.serviceTier,
+      cwd: response.cwd,
+      approvalPolicy: response.approvalPolicy,
+      sandboxPolicy: response.sandbox
     });
     return {
       model: response.model,
-      reasoningEffort: response.reasoningEffort
+      reasoningEffort: response.reasoningEffort,
+      serviceTier: response.serviceTier,
+      cwd: response.cwd,
+      approvalPolicy: response.approvalPolicy,
+      sandboxPolicy: response.sandbox
     };
   }
 
-  async sendTurn(threadId: string, input: UserInput[], collaborationMode?: CollaborationMode | null): Promise<Turn> {
+  async sendTurn(
+    threadId: string,
+    input: UserInput[],
+    options?: {
+      collaborationMode?: CollaborationMode | null;
+      overrides?: ThreadSettingsOverride | null;
+    }
+  ): Promise<Turn> {
     const response = await this.client.startTurn({
       threadId,
       input,
-      ...(collaborationMode ? { collaborationMode } : {})
+      ...(options?.collaborationMode ? { collaborationMode: options.collaborationMode } : {}),
+      ...(options?.overrides?.model ? { model: options.overrides.model } : {}),
+      ...("reasoningEffort" in (options?.overrides ?? {}) ? { effort: options?.overrides?.reasoningEffort ?? null } : {}),
+      ...("serviceTier" in (options?.overrides ?? {}) ? { serviceTier: options?.overrides?.serviceTier ?? null } : {}),
+      ...("approvalPolicy" in (options?.overrides ?? {}) ? { approvalPolicy: options?.overrides?.approvalPolicy ?? null } : {}),
+      ...("sandboxPolicy" in (options?.overrides ?? {}) ? { sandboxPolicy: options?.overrides?.sandboxPolicy ?? null } : {})
     });
+    const currentSettings = this.#threadSettings.get(threadId);
+    if (currentSettings && options?.overrides) {
+      this.#threadSettings.set(threadId, {
+        ...currentSettings,
+        ...options.overrides
+      });
+    }
 
     return response.turn;
   }
@@ -189,6 +245,7 @@ export class CodexGateway {
   async archiveThread(threadId: string): Promise<void> {
     await this.client.archiveThread({ threadId });
     this.#loadedThreads.delete(threadId);
+    this.#threadSettings.delete(threadId);
   }
 
   async readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {
@@ -196,6 +253,7 @@ export class CodexGateway {
       threadId,
       includeTurns: true
     });
+    const cwd = this.#threadSettings.get(threadId)?.cwd ?? response.thread.cwd ?? this.config.defaultCwd;
 
     const turn = response.thread.turns.find((candidate) => candidate.id === turnId);
     if (!turn) {
@@ -204,7 +262,7 @@ export class CodexGateway {
         assistantText: "",
         planText: "",
         changedFiles: 0,
-        cwd: response.thread.cwd,
+        cwd,
         branch: response.thread.gitInfo?.branch ?? null
       };
     }
@@ -233,7 +291,7 @@ export class CodexGateway {
       assistantText,
       planText,
       changedFiles: countChangedFiles(turn.items),
-      cwd: response.thread.cwd,
+      cwd,
       branch: response.thread.gitInfo?.branch ?? null
     };
   }
@@ -243,6 +301,10 @@ export class CodexGateway {
   }
 
   async respondToFileChangeApproval(id: RequestId, response: FileChangeRequestApprovalResponse): Promise<void> {
+    await this.client.respond(id, response);
+  }
+
+  async respondToPermissionsApproval(id: RequestId, response: PermissionsRequestApprovalResponse): Promise<void> {
     await this.client.respond(id, response);
   }
 
@@ -267,6 +329,24 @@ export class CodexGateway {
     return event;
   }
 
+  async listModels(): Promise<Model[]> {
+    const models: Model[] = [];
+    let cursor: string | null = null;
+
+    while (true) {
+      const response = await this.client.listModels({
+        limit: 100,
+        includeHidden: false,
+        ...(cursor ? { cursor } : {})
+      });
+      models.push(...response.data.filter((model) => !model.hidden));
+      if (!response.nextCursor) {
+        return models;
+      }
+      cursor = response.nextCursor;
+    }
+  }
+
   private handleNotificationSideEffects(notification: ServerNotification): void {
     if (notification.method === "thread/archived" || notification.method === "thread/closed") {
       this.#loadedThreads.delete(notification.params.threadId);
@@ -278,10 +358,27 @@ export class CodexGateway {
       const existing = this.#threadSettings.get(notification.params.threadId);
       this.#threadSettings.set(notification.params.threadId, {
         model: notification.params.toModel,
-        reasoningEffort: existing?.reasoningEffort ?? null
+        reasoningEffort: existing?.reasoningEffort ?? null,
+        serviceTier: existing?.serviceTier ?? null,
+        cwd: existing?.cwd ?? this.config.defaultCwd,
+        approvalPolicy: existing?.approvalPolicy ?? this.config.approvalPolicy ?? "on-request",
+        sandboxPolicy: existing?.sandboxPolicy ?? defaultWorkspaceWriteSandboxPolicy()
       });
     }
   }
+}
+
+function defaultWorkspaceWriteSandboxPolicy(): SandboxPolicy {
+  return {
+    type: "workspaceWrite",
+    writableRoots: [],
+    readOnlyAccess: {
+      type: "fullAccess"
+    },
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false
+  };
 }
 
 function countChangedFiles(items: ThreadItem[]): number {

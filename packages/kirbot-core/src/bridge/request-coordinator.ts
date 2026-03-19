@@ -6,6 +6,7 @@ import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerRequest";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
+import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { ServerRequestResolvedNotification } from "@kirbot/codex-client/generated/codex/v2/ServerRequestResolvedNotification";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { TelegramApi } from "../telegram-messenger";
@@ -14,6 +15,7 @@ import {
   allowCurrentQuestionFreeText,
   answerCurrentUserInputQuestion,
   buildApprovalKeyboard,
+  buildPermissionsApprovalKeyboard,
   buildUserInputPrompt,
   buildUserInputResponse,
   createInitialUserInputState,
@@ -21,6 +23,7 @@ import {
   getCurrentUserInputQuestion,
   parseRequestId,
   parseUserInputState,
+  resolvePermissionsApprovalResponse,
   resolveCommandApprovalDecision,
   resolveFileApprovalDecision,
   stringifyUserInputState
@@ -28,12 +31,14 @@ import {
 import {
   buildRenderedCommandApprovalPrompt,
   buildRenderedFileChangeApprovalPrompt,
+  buildRenderedPermissionsApprovalPrompt,
   buildStatusDraft
 } from "./presentation";
 
 type BridgeCodexRequestsApi = {
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
+  respondToPermissionsApproval(id: RequestId, response: PermissionsRequestApprovalResponse): Promise<void>;
   respondToUserInputRequest(id: RequestId, response: ToolRequestUserInputResponse): Promise<void>;
   respondUnsupportedRequest(id: RequestId, message: string): Promise<void>;
 };
@@ -92,6 +97,14 @@ export class BridgeRequestCoordinator {
       return true;
     }
 
+    if (request.method === "item/permissions/requestApproval") {
+      await this.resolvePermissionsApprovalAction(request, actionParts);
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: "Permissions request updated."
+      });
+      return true;
+    }
+
     await this.resolveApprovalAction(request, actionParts);
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
       text: "Request updated."
@@ -111,6 +124,11 @@ export class BridgeRequestCoordinator {
       request.method === "item/fileChange/requestApproval"
     ) {
       await this.handleApprovalRequest(session, request);
+      return;
+    }
+
+    if (request.method === "item/permissions/requestApproval") {
+      await this.handlePermissionsApprovalRequest(session, request);
       return;
     }
 
@@ -251,6 +269,37 @@ export class BridgeRequestCoordinator {
     );
   }
 
+  private async handlePermissionsApprovalRequest(
+    session: TopicSession,
+    request: Extract<ServerRequest, { method: "item/permissions/requestApproval" }>
+  ): Promise<void> {
+    if (!session.codexThreadId) {
+      throw new Error("Expected session.codexThreadId for permissions request handling");
+    }
+
+    await this.updateTurnStatus(request.params.turnId, buildStatusDraft("waiting"), true);
+
+    const pending = await this.database.createPendingRequest({
+      requestIdJson: JSON.stringify(request.id),
+      method: request.method,
+      telegramChatId: session.telegramChatId,
+      telegramTopicId: session.telegramTopicId,
+      telegramMessageId: null,
+      payloadJson: JSON.stringify(request.params)
+    });
+
+    const prompt = buildRenderedPermissionsApprovalPrompt(request.params);
+    const message = await this.#messenger.sendMessage({
+      chatId: Number.parseInt(session.telegramChatId, 10),
+      topicId: session.telegramTopicId,
+      text: prompt.text,
+      ...(prompt.entities ? { entities: prompt.entities } : {}),
+      replyMarkup: buildPermissionsApprovalKeyboard(pending.id)
+    });
+
+    await this.database.updateServerRequestMessageId(pending.id, message.messageId);
+  }
+
   private async resolveApprovalAction(request: PendingServerRequest, actionParts: string[]): Promise<void> {
     const requestId = parseRequestId(request.requestIdJson);
     const chatId = Number.parseInt(request.telegramChatId, 10);
@@ -290,6 +339,31 @@ export class BridgeRequestCoordinator {
           message_thread_id: request.telegramTopicId
         }
       );
+    }
+  }
+
+  private async resolvePermissionsApprovalAction(
+    request: PendingServerRequest,
+    actionParts: string[]
+  ): Promise<void> {
+    const requestId = parseRequestId(request.requestIdJson);
+    const chatId = Number.parseInt(request.telegramChatId, 10);
+    const payload = JSON.parse(request.payloadJson) as Extract<
+      ServerRequest,
+      { method: "item/permissions/requestApproval" }
+    >["params"];
+    const response = resolvePermissionsApprovalResponse(payload, actionParts);
+    await this.codex.respondToPermissionsApproval(requestId, response);
+    await this.database.resolveRequest(request.requestIdJson);
+
+    if (request.telegramMessageId) {
+      const summary =
+        Object.keys(response.permissions).length === 0
+          ? "Denied additional permissions."
+          : `Allowed additional permissions for this ${response.scope}.`;
+      await this.telegram.editMessageText(chatId, request.telegramMessageId, summary, {
+        message_thread_id: request.telegramTopicId
+      });
     }
   }
 
