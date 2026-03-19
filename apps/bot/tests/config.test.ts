@@ -14,7 +14,8 @@ describe("loadConfig", () => {
     process.env = {
       ...originalEnv,
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_USER_ID: "123"
+      TELEGRAM_USER_ID: "123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
     };
 
     const { loadConfig } = await import("../src/config");
@@ -30,6 +31,7 @@ describe("loadConfig", () => {
       ...originalEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_USER_ID: "123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
       CODEX_BASE_INSTRUCTIONS_FILE: "/tmp/legacy-ignored.md"
     };
 
