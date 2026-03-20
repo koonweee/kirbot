@@ -176,21 +176,15 @@ export class TurnFinalizer {
         includeContinueInViewNote: attachment.includeContinueInViewNote
       }),
       {
-        ...(attachment.replyMarkup ? { firstMessageReplyMarkup: attachment.replyMarkup } : {})
+        ...(attachment.replyMarkup ? { firstMessageReplyMarkup: attachment.replyMarkup } : {}),
+        disableNotification: false
       }
     );
     if (messageId === null) {
       throw new Error("Failed to publish final assistant message");
     }
 
-    for (const message of attachment.deferredMessages) {
-      await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        text: message.text,
-        replyMarkup: message.replyMarkup
-      });
-    }
+    await this.publishStandaloneAgentMessages(context, attachment.deferredMessages);
 
     return messageId;
   }
@@ -241,14 +235,9 @@ export class TurnFinalizer {
   }
 
   private async publishStandaloneCommentary(context: TurnContext, publication: PlannedArtifactPublication): Promise<void> {
-    for (const message of publication.standaloneMessages) {
-      await this.deps.messenger.sendMessage({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        text: message.text,
-        replyMarkup: message.replyMarkup
-      });
-    }
+    await this.publishStandaloneAgentMessages(context, publication.standaloneMessages, {
+      notifyFirstMessage: true
+    });
 
     if (publication.oversizeNoticeText) {
       await this.publishArtifactOversizeNotice(context, publication.oversizeNoticeText);
@@ -288,6 +277,22 @@ export class TurnFinalizer {
       topicId: context.topicId,
       text
     });
+  }
+
+  private async publishStandaloneAgentMessages(
+    context: TurnContext,
+    messages: ArtifactPublication["standaloneMessages"],
+    options?: { notifyFirstMessage?: boolean }
+  ): Promise<void> {
+    for (const [index, message] of messages.entries()) {
+      await this.deps.messenger.sendMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        text: message.text,
+        replyMarkup: message.replyMarkup,
+        disableNotification: options?.notifyFirstMessage && index === 0 ? false : true
+      });
+    }
   }
 
   private resolveAssistantAttachment(
