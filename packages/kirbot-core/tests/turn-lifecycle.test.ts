@@ -422,6 +422,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(telegram.sentMessages.some((entry) => entry.text.startsWith("Commentary"))).toBe(false);
     const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    expect(finalAnswer?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response", "Commentary"]);
     const responseUrl = getWebAppUrlByButtonText(finalAnswer, "Response");
     const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
@@ -489,6 +490,7 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available");
+    expect(stub?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(stub)).toEqual(["Commentary"]);
     const url = getWebAppUrlByButtonText(stub, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
@@ -587,9 +589,11 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    expect(finalAnswer?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response"]);
 
     const commentaryStub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available");
+    expect(commentaryStub?.options?.disable_notification).toBe(true);
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
     expect(
       telegram.sentMessages.findIndex((entry) => entry.text === "Final answer")

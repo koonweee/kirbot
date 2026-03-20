@@ -2876,6 +2876,7 @@ describe("TelegramCodexBridge", () => {
 
     const answerMessage = getFinalAnswerMessage(telegram);
     expect(answerMessage?.text).toBe("Final answer");
+    expect(answerMessage?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
 
     const commentaryUrl = getWebAppUrlByButtonText(answerMessage, "Commentary");
@@ -2973,9 +2974,11 @@ describe("TelegramCodexBridge", () => {
 
     const answerMessage = miniAppTelegram.sentMessages.find((message) => message.text === "Here is the answer.");
     expect(answerMessage?.text).toBe("Here is the answer.");
+    expect(answerMessage?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response"]);
 
     const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available");
+    expect(commentaryStub?.options?.disable_notification).toBe(true);
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
     expect(
       miniAppTelegram.sentMessages.findIndex((message) => message.text === "Here is the answer.")
