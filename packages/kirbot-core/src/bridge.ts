@@ -1429,10 +1429,8 @@ export class TelegramCodexBridge {
     });
 
     try {
-      const globalSettings = await this.codex.readGlobalSettings();
       const thread = await this.codex.createThread(title, {
-        ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
-        settings: globalSettings
+        ...(options?.threadCwd ? { cwd: options.threadCwd } : {})
       });
       let session = await this.database.activateSession(pending.id, thread.threadId);
 

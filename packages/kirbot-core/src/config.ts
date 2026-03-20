@@ -8,6 +8,7 @@ import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/Ask
 import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
 import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 import type { CodexConfig } from "@kirbot/codex-client/config";
+import { resolveKirbotCodexHomePath } from "./codex-home";
 
 loadKirbotDotenv();
 
@@ -32,6 +33,7 @@ const envSchema = z.object({
     }),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
+  CODEX_HOME_PATH: optionalEnvString(z.string()),
   CODEX_MODEL: optionalEnvString(z.string()),
   CODEX_MODEL_PROVIDER: optionalEnvString(z.string()),
   CODEX_SANDBOX_MODE: optionalEnvString(
@@ -78,6 +80,7 @@ export function loadConfig(): AppConfig {
     },
     codex: {
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
+      homePath: resolveKirbotCodexHomePath(parsed.DATABASE_PATH, parsed.CODEX_HOME_PATH),
       model: parsed.CODEX_MODEL,
       modelProvider: parsed.CODEX_MODEL_PROVIDER,
       sandbox: parsed.CODEX_SANDBOX_MODE as SandboxMode | undefined,

@@ -61,11 +61,17 @@ Commonly adjusted settings:
 
 - `DATABASE_PATH`
 - `CODEX_DEFAULT_CWD`
+- `CODEX_HOME_PATH`
 - `CODEX_MODEL`
 - `CODEX_MODEL_PROVIDER`
 - `CODEX_SANDBOX_MODE`
 - `CODEX_APPROVAL_POLICY`
 - `CODEX_CONFIG_JSON`
+
+Bootstrap note:
+
+- `CODEX_MODEL`, `CODEX_MODEL_PROVIDER`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_CONFIG_JSON` only seed a brand new isolated `CODEX_HOME/config.toml`.
+- After that file exists, treat the isolated `config.toml` as Kirbot's global Codex source of truth.
 
 Telegram BotFather requirements:
 
@@ -129,6 +135,12 @@ npm run verify:codex-upgrade
 Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
+- kirbot prepares a dedicated Codex home for newly created sessions by default. Set `CODEX_HOME_PATH` if you need that isolated state somewhere other than beside `DATABASE_PATH`.
+- kirbot keeps a shared-home Codex app-server available for legacy thread ids, so existing topics can still resume while future topics are isolated from other Codex clients on the same machine.
+- Intentional override points over the isolated global `config.toml` are:
+- global `/model`, `/fast`, and `/permissions` changes, which rewrite the isolated Codex config
+- topic-local `/model`, `/fast`, and `/permissions` changes, which apply thread-local overrides instead of rewriting global defaults
+- new-session `cwd` selection, including `/start <path>`, which stays per thread because it is session-specific
 - `apps/bot/KIRBOT.md` is sent as Codex developer instructions.
 - Codex base instructions are intentionally left unset.
 - `packages/codex-client/src/generated/codex` is checked in and should stay aligned with the pinned `@openai/codex` version.

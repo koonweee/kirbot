@@ -39,4 +39,31 @@ describe("core config module", () => {
 
     expect(() => loadConfig()).toThrow("TELEGRAM_MINI_APP_PUBLIC_URL must use https");
   });
+
+  it("derives an isolated Codex home from the database path by default", async () => {
+    process.env = {
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_USER_ID: "42",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      DATABASE_PATH: "/srv/kirbot/data/bridge.sqlite"
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(loadConfig().codex.homePath).toBe("/srv/kirbot/data/codex-home");
+  });
+
+  it("respects an explicit Codex home override", async () => {
+    process.env = {
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_USER_ID: "42",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      DATABASE_PATH: "/srv/kirbot/data/bridge.sqlite",
+      CODEX_HOME_PATH: "/srv/kirbot/custom-codex-home"
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(loadConfig().codex.homePath).toBe("/srv/kirbot/custom-codex-home");
+  });
 });
