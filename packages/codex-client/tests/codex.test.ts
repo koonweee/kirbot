@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { CodexGateway, spawnCodexAppServer } from "../src/codex";
+import {
+  CodexGateway,
+  buildAppServerSpawnEnv,
+  buildManagedGlobalConfigEdits,
+  spawnCodexAppServer
+} from "../src/codex";
 import { resolvePinnedCodexExecutablePath } from "../src/codex-cli";
 import { CodexRpcClient, StdioRpcTransport, type RpcTransport } from "../src/rpc";
 
@@ -38,6 +43,80 @@ class FakeTransport implements RpcTransport {
 }
 
 describe("CodexGateway", () => {
+  it("adds CODEX_HOME to the app-server environment when requested", () => {
+    const env = buildAppServerSpawnEnv({
+      HOME: "/home/dev",
+      PATH: "/usr/bin"
+    }, "/srv/kirbot/data/codex-home");
+
+    expect(env).toMatchObject({
+      HOME: "/home/dev",
+      PATH: "/usr/bin",
+      CODEX_HOME: "/srv/kirbot/data/codex-home"
+    });
+  });
+
+  it("builds config-file bootstrap edits from managed Codex settings", () => {
+    expect(
+      buildManagedGlobalConfigEdits({
+        defaultCwd: "/workspace",
+        homePath: "/srv/kirbot/data/codex-home",
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+        serviceName: "telegram-codex-bridge",
+        baseInstructions: undefined,
+        developerInstructions: undefined,
+        config: {
+          model_reasoning_effort: "high",
+          sandbox_workspace_write: {
+            writable_roots: ["/workspace"],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false
+          }
+        }
+      })
+    ).toEqual([
+      {
+        keyPath: "model_reasoning_effort",
+        value: "high",
+        mergeStrategy: "replace"
+      },
+      {
+        keyPath: "sandbox_workspace_write",
+        value: {
+          writable_roots: ["/workspace"],
+          network_access: true,
+          exclude_tmpdir_env_var: false,
+          exclude_slash_tmp: false
+        },
+        mergeStrategy: "replace"
+      },
+      {
+        keyPath: "model",
+        value: "gpt-5-codex",
+        mergeStrategy: "replace"
+      },
+      {
+        keyPath: "model_provider",
+        value: "openai",
+        mergeStrategy: "replace"
+      },
+      {
+        keyPath: "approval_policy",
+        value: "never",
+        mergeStrategy: "replace"
+      },
+      {
+        keyPath: "sandbox_mode",
+        value: "danger-full-access",
+        mergeStrategy: "replace"
+      }
+    ]);
+  });
+
   it("resolves the pinned local Codex executable from node_modules", () => {
     const executablePath = resolvePinnedCodexExecutablePath();
 
@@ -379,6 +458,118 @@ describe("CodexGateway", () => {
       sandboxPolicy: {
         type: "dangerFullAccess"
       }
+    });
+  });
+
+  it("does not pass managed global config back into thread/start when no per-thread override is requested", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      homePath: "/srv/kirbot/data/codex-home",
+      model: "gpt-5-codex",
+      modelProvider: "openai",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: {
+        model_provider: "openai",
+        sandbox_workspace_write: {
+          writable_roots: ["/workspace"],
+          network_access: true,
+          exclude_tmpdir_env_var: false,
+          exclude_slash_tmp: false
+        }
+      }
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const createThreadPromise = gateway.createThread("Test thread");
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/start",
+      id: 2,
+      params: {
+        cwd: "/workspace",
+        model: null,
+        modelProvider: null,
+        approvalPolicy: null,
+        sandbox: null,
+        config: null,
+        serviceName: "telegram-codex-bridge",
+        baseInstructions: null,
+        developerInstructions: null,
+        experimentalRawEvents: false,
+        persistExtendedHistory: false,
+        ephemeral: false,
+        personality: null,
+        serviceTier: null
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1",
+          preview: "",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 1,
+          status: "idle",
+          path: null,
+          cwd: "/workspace",
+          cliVersion: "0.0.0",
+          source: "appServer",
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: {
+            sha: null,
+            branch: "main",
+            originUrl: null
+          },
+          name: null,
+          turns: []
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "dangerFullAccess"
+        },
+        reasoningEffort: null
+      }
+    });
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {}
+    });
+
+    await expect(createThreadPromise).resolves.toMatchObject({
+      threadId: "thread-1",
+      approvalPolicy: "never"
     });
   });
 

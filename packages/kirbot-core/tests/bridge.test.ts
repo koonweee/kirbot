@@ -1016,11 +1016,7 @@ describe("TelegramCodexBridge", () => {
     expect(codex.createThreadCalls).toEqual([
       {
         title: "project-root",
-        cwd: sessionDir,
-        settings: expect.objectContaining({
-          model: "gpt-5-codex",
-          serviceTier: null
-        })
+        cwd: sessionDir
       }
     ]);
     expect(codex.turns).toHaveLength(0);
@@ -1056,11 +1052,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.createThreadCalls.at(-1)).toEqual({
       title: "kirbot-core",
-      cwd: sessionDir,
-      settings: expect.objectContaining({
-        cwd: relativeBase,
-        model: "gpt-5-codex"
-      })
+      cwd: sessionDir
     });
   });
 

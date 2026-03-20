@@ -1,10 +1,13 @@
+import { existsSync } from "node:fs";
 import { CodexGateway, spawnCodexAppServer } from "@kirbot/codex-client";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
 import type { AppConfig } from "./config";
+import { prepareKirbotCodexHome, resolveKirbotCodexConfigPath } from "./codex-home";
 import { BridgeDatabase } from "./db";
 import { createConsoleLogTarget, createSourceLogger, type AppLogTarget, type LoggerLike } from "./logging";
 import { TemporaryImageStore } from "./media-store";
 import { CodexRpcClient, StdioRpcTransport, type SpawnedAppServer } from "@kirbot/codex-client";
+import { RoutedCodexApi } from "./routed-codex";
 import {
   TelegramCommandSync,
   initializeTelegramCommandSyncFailOpen,
@@ -56,11 +59,11 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
     appLogger.warn(`Expired ${expiredPendingRequests} pending Codex request(s) from a previous run.`);
   }
 
-  let rpcClient: CodexRpcClient | null = null;
-  let spawnedAppServer: SpawnedAppServer | null = null;
+  const rpcClients: CodexRpcClient[] = [];
+  const spawnedAppServers: SpawnedAppServer[] = [];
   const codex = await initializeCodex(config, options.codexApi, codexLogger).then((result) => {
-    rpcClient = result.rpcClient;
-    spawnedAppServer = result.spawnedAppServer;
+    rpcClients.push(...result.rpcClients);
+    spawnedAppServers.push(...result.spawnedAppServers);
     return result.codex;
   });
 
@@ -89,9 +92,11 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
     database,
     codex,
     shutdown: async () => {
-      await rpcClient?.close();
-      if (spawnedAppServer) {
-        await spawnedAppServer.stop();
+      for (const client of rpcClients) {
+        await client.close();
+      }
+      for (const appServer of spawnedAppServers) {
+        await appServer.stop();
       }
       await database.close();
     },
@@ -109,19 +114,63 @@ async function initializeCodex(
   logger: LoggerLike
 ): Promise<{
   codex: BridgeCodexApi;
-  rpcClient: CodexRpcClient | null;
-  spawnedAppServer: SpawnedAppServer | null;
+  rpcClients: CodexRpcClient[];
+  spawnedAppServers: SpawnedAppServer[];
 }> {
   if (codexApi) {
     return {
       codex: codexApi,
-      rpcClient: null,
-      spawnedAppServer: null
+      rpcClients: [],
+      spawnedAppServers: []
     };
   }
 
+  if (config.codex.homePath) {
+    prepareKirbotCodexHome({
+      targetHomePath: config.codex.homePath
+    });
+  }
+  // The isolated config.toml is Kirbot's global Codex policy source.
+  // Code should only override it intentionally for thread-local settings or per-session cwd.
+  const shouldBootstrapIsolatedConfig =
+    config.codex.homePath !== undefined && !existsSync(resolveKirbotCodexConfigPath(config.codex.homePath));
+  const shared = await initializeGateway(config, logger);
+  const isolated = await initializeGateway(
+    config,
+    logger,
+    config.codex.homePath ? { homePath: config.codex.homePath } : undefined
+  );
+  if (shouldBootstrapIsolatedConfig) {
+    await isolated.codex.bootstrapManagedGlobalConfig();
+  }
+
+  return {
+    codex: new RoutedCodexApi(
+      {
+        shared: shared.codex,
+        isolated: isolated.codex
+      },
+      logger
+    ),
+    rpcClients: [shared.rpcClient, isolated.rpcClient],
+    spawnedAppServers: [shared.spawnedAppServer, isolated.spawnedAppServer]
+  };
+}
+
+async function initializeGateway(
+  config: AppConfig,
+  logger: LoggerLike,
+  options?: {
+    homePath?: string;
+  }
+): Promise<{
+  codex: CodexGateway;
+  rpcClient: CodexRpcClient;
+  spawnedAppServer: SpawnedAppServer;
+}> {
   const spawnedAppServer = await spawnCodexAppServer({
-    logger
+    logger,
+    ...(options?.homePath ? { homePath: options.homePath } : {})
   });
   const transport = new StdioRpcTransport(spawnedAppServer.process);
   await transport.connect();

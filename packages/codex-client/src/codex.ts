@@ -49,11 +49,23 @@ export type CreatedThread = {
 
 export type AppServerOptions = {
   logger?: LoggerLike;
+  homePath?: string;
 };
+
+export function buildAppServerSpawnEnv(
+  env: NodeJS.ProcessEnv,
+  homePath?: string
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...(homePath ? { CODEX_HOME: homePath } : {})
+  };
+}
 
 export async function spawnCodexAppServer(options: AppServerOptions): Promise<SpawnedAppServer> {
   const codex = resolvePinnedCodexInvocation();
   const child = spawn(codex.command, [...codex.args, "app-server"], {
+    env: buildAppServerSpawnEnv(process.env, options.homePath),
     stdio: ["pipe", "pipe", "pipe"]
   });
   child.stderr?.on("data", (chunk) => {
@@ -76,6 +88,36 @@ export async function spawnCodexAppServer(options: AppServerOptions): Promise<Sp
       await once(child, "exit");
     }
   };
+}
+
+export function buildManagedGlobalConfigEdits(config: AppConfig["codex"]): ConfigEdit[] {
+  const managedConfig = {
+    ...(config.config ?? {})
+  } as Record<string, JsonValue | undefined>;
+
+  if (config.model !== undefined) {
+    managedConfig.model = config.model;
+  }
+
+  if (config.modelProvider !== undefined) {
+    managedConfig.model_provider = config.modelProvider;
+  }
+
+  if (config.approvalPolicy !== undefined) {
+    managedConfig.approval_policy = config.approvalPolicy;
+  }
+
+  if (config.sandbox !== undefined) {
+    managedConfig.sandbox_mode = config.sandbox;
+  }
+
+  return Object.entries(managedConfig)
+    .filter(([, value]) => value !== undefined)
+    .map(([keyPath, value]) => ({
+      keyPath,
+      value: value ?? null,
+      mergeStrategy: "replace"
+    }));
 }
 
 export type ApprovalServerRequest =
@@ -137,12 +179,12 @@ export class CodexGateway {
   ): Promise<CreatedThread> {
     const threadStartOverrides = buildThreadStartOverrides(
       options?.settings ?? null,
-      sanitizeThreadStartConfig(this.config.config)
+      options?.settings ? sanitizeThreadStartConfig(this.config.config) : null
     );
     const response = await this.client.startThread({
       cwd: options?.cwd ?? this.config.defaultCwd,
       model: threadStartOverrides.model ?? null,
-      modelProvider: this.config.modelProvider ?? null,
+      modelProvider: options?.settings ? this.config.modelProvider ?? null : null,
       approvalPolicy: threadStartOverrides.approvalPolicy ?? null,
       sandbox: threadStartOverrides.sandbox ?? null,
       config: threadStartOverrides.config ?? null,
@@ -187,6 +229,18 @@ export class CodexGateway {
       edits
     });
     return this.readGlobalSettings();
+  }
+
+  async bootstrapManagedGlobalConfig(): Promise<void> {
+    const edits = buildManagedGlobalConfigEdits(this.config);
+    if (edits.length === 0) {
+      return;
+    }
+
+    await this.client.batchWriteConfig({
+      edits,
+      reloadUserConfig: true
+    });
   }
 
   async ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings> {
