@@ -39,11 +39,71 @@ describe("BridgeDatabase", () => {
     expect(updatedMode?.preferredMode).toBe("plan");
 
     const lookup = await database.getSessionByCodexThreadId("thread-1");
-    expect(lookup?.telegramTopicId).toBe(22);
+    expect(lookup?.surface).toEqual({ kind: "topic", topicId: 22 });
     expect(lookup?.preferredMode).toBe("plan");
 
     const archived = await database.archiveSessionByTopic(-1001, 22);
     expect(archived?.status).toBe("archived");
+  });
+
+  it("creates and looks up a root session separately from a topic session", async () => {
+    const pendingRoot = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+    expect("surface" in pendingRoot && pendingRoot.surface.kind).toBe("root");
+
+    const activeRoot = await database.activateSession(pendingRoot.id, "root-thread");
+    expect("surface" in activeRoot && activeRoot.surface.kind).toBe("root");
+
+    const pendingTopic = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 22 }
+    });
+    const activeTopic = await database.activateSession(pendingTopic.id, "topic-thread");
+    expect("surface" in activeTopic && activeTopic.surface.kind).toBe("topic");
+
+    const rootLookup = await database.getRootSessionByChat(-1001);
+    expect(rootLookup?.codexThreadId).toBe("root-thread");
+
+    const topicLookup = await database.getSessionByTopic(-1001, 22);
+    expect(topicLookup?.codexThreadId).toBe("topic-thread");
+  });
+
+  it("stores separate root and spawn defaults", async () => {
+    await database.upsertChatThreadDefaults("-1001", {
+      root: {
+        model: "gpt-5.4-mini",
+        reasoningEffort: "medium",
+        serviceTier: "fast",
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "dangerFullAccess"
+        }
+      },
+      spawn: {
+        model: "gpt-5-codex",
+        reasoningEffort: "high",
+        serviceTier: null,
+        approvalPolicy: "on-request",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        }
+      }
+    });
+
+    const defaults = await database.getChatThreadDefaults("-1001");
+    expect(defaults?.root.model).toBe("gpt-5.4-mini");
+    expect(defaults?.root.approvalPolicy).toBe("never");
+    expect(defaults?.spawn.model).toBe("gpt-5-codex");
+    expect(defaults?.spawn.reasoningEffort).toBe("high");
   });
 
   it("stores and resolves pending server requests", async () => {

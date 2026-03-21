@@ -1,6 +1,6 @@
 import type { ApprovalServerRequest, UserInputServerRequest } from "@kirbot/codex-client";
 import { BridgeDatabase } from "../db";
-import type { PendingServerRequest, TopicSession, UserTurnMessage } from "../domain";
+import type { BridgeSession, PendingServerRequest, UserTurnMessage } from "../domain";
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerRequest";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
@@ -194,10 +194,11 @@ export class BridgeRequestCoordinator {
     );
   }
 
-  private async handleApprovalRequest(session: TopicSession, request: ApprovalServerRequest): Promise<void> {
+  private async handleApprovalRequest(session: BridgeSession, request: ApprovalServerRequest): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error("Expected session.codexThreadId for approval request handling");
     }
+    const sessionTopicId = session.surface.kind === "topic" ? session.surface.topicId : null;
 
     await this.updateTurnStatus(
       request.params.turnId,
@@ -214,14 +215,14 @@ export class BridgeRequestCoordinator {
       requestIdJson: JSON.stringify(request.id),
       method: request.method,
       telegramChatId: session.telegramChatId,
-      telegramTopicId: session.telegramTopicId,
+      telegramTopicId: sessionTopicId,
       telegramMessageId: null,
       payloadJson: JSON.stringify(request.params)
     });
 
     const message = await this.messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
-      topicId: session.telegramTopicId,
+      topicId: sessionTopicId,
       text: prompt.text,
       ...(prompt.entities ? { entities: prompt.entities } : {}),
       replyMarkup: buildApprovalKeyboard(
@@ -234,10 +235,11 @@ export class BridgeRequestCoordinator {
     await this.database.updateServerRequestMessageId(pending.id, message.messageId);
   }
 
-  private async handleUserInputRequest(session: TopicSession, request: UserInputServerRequest): Promise<void> {
+  private async handleUserInputRequest(session: BridgeSession, request: UserInputServerRequest): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error("Expected session.codexThreadId for user-input request handling");
     }
+    const sessionTopicId = session.surface.kind === "topic" ? session.surface.topicId : null;
 
     await this.updateTurnStatus(request.params.turnId, buildStatusDraft("waiting"), true);
 
@@ -245,7 +247,7 @@ export class BridgeRequestCoordinator {
       requestIdJson: JSON.stringify(request.id),
       method: request.method,
       telegramChatId: session.telegramChatId,
-      telegramTopicId: session.telegramTopicId,
+      telegramTopicId: sessionTopicId,
       telegramMessageId: null,
       payloadJson: JSON.stringify(request.params)
     });
@@ -263,12 +265,13 @@ export class BridgeRequestCoordinator {
   }
 
   private async handlePermissionsApprovalRequest(
-    session: TopicSession,
+    session: BridgeSession,
     request: Extract<ServerRequest, { method: "item/permissions/requestApproval" }>
   ): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error("Expected session.codexThreadId for permissions request handling");
     }
+    const sessionTopicId = session.surface.kind === "topic" ? session.surface.topicId : null;
 
     await this.updateTurnStatus(request.params.turnId, buildStatusDraft("waiting"), true);
 
@@ -276,7 +279,7 @@ export class BridgeRequestCoordinator {
       requestIdJson: JSON.stringify(request.id),
       method: request.method,
       telegramChatId: session.telegramChatId,
-      telegramTopicId: session.telegramTopicId,
+      telegramTopicId: sessionTopicId,
       telegramMessageId: null,
       payloadJson: JSON.stringify(request.params)
     });
@@ -284,7 +287,7 @@ export class BridgeRequestCoordinator {
     const prompt = buildRenderedPermissionsApprovalPrompt(request.params);
     const message = await this.messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
-      topicId: session.telegramTopicId,
+      topicId: sessionTopicId,
       text: prompt.text,
       ...(prompt.entities ? { entities: prompt.entities } : {}),
       replyMarkup: buildPermissionsApprovalKeyboard(pending.id),
@@ -468,7 +471,7 @@ export class BridgeRequestCoordinator {
     );
   }
 
-  private async findSessionForRequest(request: ServerRequest): Promise<TopicSession | undefined> {
+  private async findSessionForRequest(request: ServerRequest): Promise<BridgeSession | undefined> {
     const threadId = "threadId" in request.params && typeof request.params.threadId === "string" ? request.params.threadId : null;
     if (!threadId) {
       return undefined;

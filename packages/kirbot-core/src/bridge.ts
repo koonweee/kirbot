@@ -1422,17 +1422,22 @@ export class TelegramCodexBridge {
     if (message.topicId === null) {
       throw new Error("Cannot start a session without a Telegram topic id");
     }
+    const topicId = message.topicId;
 
     const pending = await this.database.createProvisioningSession({
       telegramChatId: String(message.chatId),
-      telegramTopicId: message.topicId
+      telegramTopicId: topicId
     });
 
     try {
       const thread = await this.codex.createThread(title, {
         ...(options?.threadCwd ? { cwd: options.threadCwd } : {})
       });
-      let session = await this.database.activateSession(pending.id, thread.threadId);
+      await this.database.activateSession(pending.id, thread.threadId);
+      let session = await this.database.getSessionByTopic(message.chatId, topicId);
+      if (!session) {
+        throw new Error(`Failed to load topic session ${topicId} after activation`);
+      }
 
       if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
         session = await this.database.updateSessionPreferredMode(
@@ -1855,7 +1860,7 @@ export class TelegramCodexBridge {
 
     await this.sendScopedBridgeMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
-      topicId: session.telegramTopicId,
+      topicId: session.surface.kind === "topic" ? session.surface.topicId : null,
       text: "Context compacted"
     });
   }
