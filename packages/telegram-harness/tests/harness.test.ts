@@ -511,7 +511,7 @@ describe("Telegram harness", () => {
     expect(readdirSync(workspaceDir)).toEqual([]);
   });
 
-  it("captures root-to-topic transcript output and raw Telegram events", async () => {
+  it("captures persistent root-thread transcript output and raw Telegram events", async () => {
     const harness = await buildHarness(new ScriptedCodex("complete"));
     harnesses.push(harness);
 
@@ -524,20 +524,45 @@ describe("Telegram harness", () => {
         actor: "user",
         messageId: 1,
         text: "Inspect the repo"
+      },
+      {
+        actor: "bot",
+        messageId: 501,
+        text: "Harness reply",
+        inlineButtons: [
+          [
+            {
+              text: "Response",
+              web_app: {
+                url: expect.stringContaining("https://example.com/mini-app/plan#")
+              }
+            }
+          ]
+        ]
+      },
+      {
+        actor: "bot",
+        messageId: 502,
+        text: "gpt-5-codex • <1s • 100% left • /workspace • main",
+        entities: [
+          {
+            type: "pre",
+            offset: 0,
+            length: 49,
+            language: "status"
+          }
+        ],
+        replyKeyboard: [
+          ["/stop", "/plan"],
+          ["/implement", "/model"],
+          ["/fast", "/permissions"]
+        ]
       }
     ]);
-    expect(transcript.topics).toHaveLength(1);
-    expect(transcript.topics[0]?.title).toBe("Inspect the repo");
-    expect(transcript.topics[0]?.messages.map((message) => message.text)).toEqual([
-      "gpt-5-codex • <1s • 100% left • /workspace • main",
-      "Inspect the repo",
-      "Harness reply",
-      "gpt-5-codex • <1s • 100% left • /workspace • main"
-    ]);
+    expect(transcript.topics).toHaveLength(0);
 
     const eventTypes = harness.getTelegramEvents().map((event) => event.type);
-    expect(eventTypes).toContain("telegram.createForumTopic");
-    expect(eventTypes).toContain("telegram.sendMessageDraft");
+    expect(eventTypes).toContain("telegram.sendChatAction");
     expect(eventTypes).toContain("telegram.sendMessage");
   });
 
@@ -554,13 +579,11 @@ describe("Telegram harness", () => {
     });
     await harness.waitForIdle();
 
-    expect(harness.getTranscript().root.messages).toEqual([
-      {
-        actor: "user",
-        messageId: 1,
-        text: "Inspect this screenshot"
-      }
-    ]);
+    expect(harness.getTranscript().root.messages[0]).toEqual({
+      actor: "user",
+      messageId: 1,
+      text: "Inspect this screenshot"
+    });
     expect(codex.turns).toHaveLength(1);
     expect(codex.turns[0]?.input[0]).toEqual({
       type: "text",
@@ -575,7 +598,7 @@ describe("Telegram harness", () => {
     const harness = await buildHarness(codex);
     harnesses.push(harness);
 
-    await harness.sendRootText("Inspect the repo");
+    await harness.sendRootText("/thread Inspect the repo");
     await harness.waitForIdle();
     const topicId = harness.getTranscript().topics[0]?.topicId;
     expect(topicId).toBeDefined();
@@ -601,7 +624,7 @@ describe("Telegram harness", () => {
     const harness = await buildHarness(codex);
     harnesses.push(harness);
 
-    await harness.sendRootText("Run the tests");
+    await harness.sendRootText("/thread Run the tests");
     const topicId = await waitForTopicId(harness);
 
     await harness.sendTopicImage(topicId, {
@@ -625,7 +648,7 @@ describe("Telegram harness", () => {
     const harness = await buildHarness(codex);
     harnesses.push(harness);
 
-    await harness.sendRootText("Run the tests");
+    await harness.sendRootText("/thread Run the tests");
     await waitForCondition(() =>
       harness
         .getTranscript()
@@ -674,7 +697,7 @@ describe("Telegram harness", () => {
     const harness = await buildHarness(codex);
     harnesses.push(harness);
 
-    await harness.sendRootText("Repro stuck status");
+    await harness.sendRootText("/thread Repro stuck status");
     await waitForCondition(() => {
       const transcript = harness.getTranscript();
       return (
@@ -723,7 +746,7 @@ describe("Telegram harness", () => {
     const harness = await buildHarness(codex);
     harnesses.push(harness);
 
-    await harness.sendRootText("Observe context footer");
+    await harness.sendRootText("/thread Observe context footer");
     await harness.waitForIdle();
 
     const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
@@ -744,7 +767,7 @@ describe("Telegram harness", () => {
     harnesses.push(harness);
 
     await harness.start();
-    await harness.sendRootText("Plan the rollout");
+    await harness.sendRootText("/thread Plan the rollout");
     await harness.waitForIdle();
 
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
@@ -766,7 +789,7 @@ describe("Telegram harness", () => {
     const harness = await buildHarness(new ScriptedCodex("complete"));
     harnesses.push(harness);
 
-    await harness.sendRootText("Inspect the repo");
+    await harness.sendRootText("/thread Inspect the repo");
     await harness.waitForIdle();
 
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
