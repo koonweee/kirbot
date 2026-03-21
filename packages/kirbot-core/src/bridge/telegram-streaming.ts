@@ -6,17 +6,12 @@ import {
 } from "./presentation";
 import { splitFlushablePrefix } from "./stream-boundaries";
 import type {
-  InlineKeyboardMarkup,
   TelegramMessenger,
   TelegramRenderedMessage
 } from "../telegram-messenger";
+import type { TelegramTurnSurface, TelegramVisibleMessageRenderOptions } from "./telegram-turn-surface";
 
-type TelegramVisibleMessageRenderOptions = {
-  disableNotification?: boolean;
-  replyMarkup?: InlineKeyboardMarkup;
-};
-
-export class TelegramTurnStream {
+export class EditStreamingTurnSurface implements TelegramTurnSurface {
   #messageId: number | null = null;
   #closed = false;
   #currentRenderedMessage: TelegramRenderedMessage | null = null;
@@ -62,10 +57,10 @@ export class TelegramTurnStream {
     }));
   }
 
-  async finalize(
+  async publishFinalAssistantMessage(
     rendered: TelegramRenderedMessage,
     options?: TelegramVisibleMessageRenderOptions
-  ): Promise<number> {
+  ): Promise<number | null> {
     return this.#runExclusive(async () => {
       this.#assistantStarted = true;
       this.#closed = true;
@@ -100,6 +95,12 @@ export class TelegramTurnStream {
       }
 
       return this.#messageId;
+    });
+  }
+
+  async publishTerminalStatus(rendered: TelegramRenderedMessage): Promise<number | null> {
+    return this.publishFinalAssistantMessage(rendered, {
+      disableNotification: true
     });
   }
 
@@ -292,6 +293,8 @@ export class TelegramTurnStream {
 
   #queue: Promise<void> = Promise.resolve();
 }
+
+export { EditStreamingTurnSurface as TelegramTurnStream };
 
 function sameRenderedMessage(left: TelegramRenderedMessage | null, right: TelegramRenderedMessage | null): boolean {
   if (!left || !right) {

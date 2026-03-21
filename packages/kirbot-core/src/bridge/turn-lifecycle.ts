@@ -17,7 +17,7 @@ import {
 } from "./presentation";
 import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
-import { TelegramTurnStream } from "./telegram-streaming";
+import { createTelegramTurnSurface } from "./telegram-turn-surface";
 import {
   type TurnLifecycleDependencies,
   TurnFinalizer
@@ -57,10 +57,16 @@ export class TurnLifecycleCoordinator {
       stopRequested: false,
       submitPendingSteersAfterInterrupt: false,
       startedAtMs,
+      surfaceMode: this.deps.telegramTurnSurfaceMode ?? "status_then_final_message",
       draftMode: "status",
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: startedAtMs,
-      visibleMessageHandle: new TelegramTurnStream(this.deps.messenger, message.chatId, message.topicId),
+      visibleMessageHandle: createTelegramTurnSurface({
+        messenger: this.deps.messenger,
+        chatId: message.chatId,
+        topicId: message.topicId,
+        ...(this.deps.telegramTurnSurfaceMode ? { mode: this.deps.telegramTurnSurfaceMode } : {})
+      }),
       statusElapsedTimer: null,
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
@@ -403,8 +409,10 @@ export class TurnLifecycleCoordinator {
     }
 
     if (update.draftKind === "assistant") {
-      context.draftMode = "assistant";
-      context.statusDraft = null;
+      if (context.surfaceMode === "edit_streaming") {
+        context.draftMode = "assistant";
+        context.statusDraft = null;
+      }
       await context.visibleMessageHandle.applyAssistantRenderUpdate(update, {
         force: options?.force ?? false,
         commit: options?.commit ?? false

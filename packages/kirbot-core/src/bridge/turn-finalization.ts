@@ -5,7 +5,6 @@ import {
   buildCommentaryArtifactPublication,
   buildOversizeResponseArtifactMessage,
   buildRenderedAssistantMessage,
-  buildRenderedCompletionNotification,
   buildResponseArtifactPublication,
   buildOversizeCommentaryArtifactMessage,
   buildRenderedCompletionFooter,
@@ -25,12 +24,14 @@ import {
   transitionTurnPhase
 } from "./turn-context";
 import { formatError } from "./error-handling";
+import type { TelegramTurnSurfaceMode } from "./telegram-turn-surface";
 
 export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
   messenger: TelegramMessenger;
   telegram: TelegramApi;
   planArtifactPublicUrl: string;
+  telegramTurnSurfaceMode?: TelegramTurnSurfaceMode;
   buildTopicCommandReplyMarkup?(): Promise<ReplyKeyboardMarkup | undefined>;
   releaseTurnFiles(turnId: string): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
@@ -100,7 +101,8 @@ export class TurnFinalizer {
       !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
     if (!publishesPlanOnly && publishedFinalAssistantMessage) {
       await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
-      await this.publishCompletionNotification(context);
+    } else {
+      await this.publishTerminalStatus(context, policy.terminalStatus);
     }
 
     if (responsePublication?.oversizeNoticeText) {
@@ -166,10 +168,10 @@ export class TurnFinalizer {
     text: string,
     commentaryPublication: PlannedArtifactPublication,
     responsePublication: PlannedArtifactPublication | null
-  ): Promise<number> {
+  ): Promise<number | null> {
     const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
 
-    const messageId = await context.visibleMessageHandle.finalize(
+    const messageId = await context.visibleMessageHandle.publishFinalAssistantMessage(
       buildRenderedAssistantMessage(text, {
         includeContinueInViewNote: attachment.includeContinueInViewNote
       }),
@@ -178,11 +180,9 @@ export class TurnFinalizer {
         disableNotification: false
       }
     );
-    if (messageId === null) {
-      throw new Error("Failed to publish final assistant message");
+    if (messageId !== null) {
+      await this.publishStandaloneAgentMessages(context, attachment.deferredMessages);
     }
-
-    await this.publishStandaloneAgentMessages(context, attachment.deferredMessages);
 
     return messageId;
   }
@@ -254,14 +254,9 @@ export class TurnFinalizer {
     });
   }
 
-  private async publishCompletionNotification(context: TurnContext): Promise<void> {
-    const rendered = buildRenderedCompletionNotification();
-    await this.deps.messenger.sendMessage({
-      chatId: context.chatId,
-      topicId: context.topicId,
-      text: rendered.text,
-      ...(rendered.entities ? { entities: rendered.entities } : {}),
-      disableNotification: false
+  private async publishTerminalStatus(context: TurnContext, status: FinalizationPolicy["terminalStatus"]): Promise<void> {
+    await context.visibleMessageHandle.publishTerminalStatus({
+      text: status
     });
   }
 

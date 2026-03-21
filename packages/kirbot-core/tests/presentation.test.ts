@@ -8,6 +8,7 @@ import {
   buildRenderedCommandApprovalPrompt,
   buildRenderedFileChangeApprovalPrompt,
   buildRenderedCompletionFooter,
+  buildRenderedCompletionNotification,
   buildTopicCommandKeyboard,
   buildResponseArtifactPublication,
   buildStatusDraft,
@@ -133,6 +134,19 @@ describe("status presentation", () => {
           offset: 0,
           length: "gpt-5 high • 2s • 1 file • 88% left • /workspace • main • planning".length,
           language: "status"
+        }
+      ]
+    });
+  });
+
+  it("renders the completion notification as inline code", () => {
+    expect(buildRenderedCompletionNotification()).toEqual({
+      text: "> done",
+      entities: [
+        {
+          type: "code",
+          offset: 0,
+          length: 6
         }
       ]
     });
