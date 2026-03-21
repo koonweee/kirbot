@@ -555,7 +555,7 @@ describe("Telegram harness", () => {
       {
         actor: "bot",
         messageId: 503,
-        text: "gpt-5-codex • <1s • 100% left • /workspace • main",
+        text: "<1s • 100% left • /workspace • main • gpt-5-codex",
         entities: [
           {
             type: "pre",
@@ -772,7 +772,7 @@ describe("Telegram harness", () => {
     await harness.waitForIdle();
 
     const footer = harness.getTranscript().topics[0]?.messages.at(-1)?.text;
-    expect(footer).toBe("gpt-5-codex • <1s • 30% left • /workspace • main");
+    expect(footer).toBe("<1s • 30% left • /workspace • main • gpt-5-codex");
   });
 
   it("records Mini App buttons on plan artifact stubs", async () => {

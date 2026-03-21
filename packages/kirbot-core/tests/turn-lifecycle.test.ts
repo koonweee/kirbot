@@ -329,7 +329,7 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual([
       "thinking · 0s",
       "Final answer",
-      "gpt-5-codex • <1s • 100% left • /workspace • main"
+      "<1s • 100% left • /workspace • main • gpt-5-codex"
     ]);
     expect(harness.telegram.deletions).toEqual([{ chatId: -1001, messageId: 1 }]);
     expect(harness.telegram.sentMessages.some((entry) => entry.text === "> done")).toBe(false);
@@ -1106,7 +1106,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5 high • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
+      "<1s • 75% left • 2 files • /home/tester/kirbot • feature/footer • gpt-5 high"
     );
   });
 
@@ -1126,7 +1126,7 @@ describe("TurnLifecycleCoordinator", () => {
     expect((harness.telegram.sentMessages.at(-2)?.options as Record<string, unknown> | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(harness.telegram.sentMessages.at(-2))).toEqual(["Response"]);
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 100% left • /workspace • main"
+      "<1s • 100% left • /workspace • main • gpt-5-codex"
     );
   });
 
@@ -1152,7 +1152,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 2 files • 100% left • /workspace • main"
+      "<1s • 100% left • 2 files • /workspace • main • gpt-5-codex"
     );
   });
 
@@ -1170,7 +1170,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Plan ready");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 100% left • /workspace • main • planning"
+      "<1s • 100% left • /workspace • main • gpt-5-codex • planning"
     );
   });
 
@@ -1204,7 +1204,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 30% left • /workspace • main"
+      "<1s • 30% left • /workspace • main • gpt-5-codex"
     );
   });
 
@@ -1238,7 +1238,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 75% left • /workspace • main"
+      "<1s • 75% left • /workspace • main • gpt-5-codex"
     );
   });
 
@@ -1272,7 +1272,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 51% left • /workspace • main"
+      "<1s • 51% left • /workspace • main • gpt-5-codex"
     );
   });
 
@@ -1288,7 +1288,7 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
-      "gpt-5-codex • <1s • 100% left • /workspace • main"
+      "<1s • 100% left • /workspace • main • gpt-5-codex"
     );
   });
 
