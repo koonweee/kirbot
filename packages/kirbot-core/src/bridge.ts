@@ -62,7 +62,7 @@ import {
   validateCustomCommandPrompt
 } from "./bridge/custom-commands";
 import {
-  getSurfaceableTopicSlashCommands,
+  getVisibleSlashCommands,
   isAllowedSlashCommandInScope,
   isBuiltInSlashCommand,
   isCodexSlashCommand,
@@ -156,7 +156,7 @@ type ThreadSettingsTarget =
 
 export type TelegramCodexBridgeOptions = {
   topicIconPicker?: TopicIconPicker;
-  restartKirbot?: () => Promise<void>;
+  restartKirbot?: (reportStep: (command: string) => Promise<void>) => Promise<void>;
 };
 
 const INVALID_COMMAND_TEXT = "This command is not valid here";
@@ -172,7 +172,7 @@ const COMPACT_COMMAND_REQUIRES_SESSION_TEXT = "This chat does not have a Codex s
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
 const THREAD_USAGE_TEXT = "Usage: /thread <initial prompt>";
 const RESTART_NOT_CONFIGURED_TEXT = "Restart is not configured for this kirbot deployment";
-const RESTARTING_KIRBOT_TEXT = "Rebuilding kirbot and restarting the production session…";
+const RESTART_COMPLETED_TEXT = "Kirbot production session restarted.";
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled";
 const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
 const COMMANDS_KEYBOARD_TEXT = "Commands";
@@ -195,7 +195,7 @@ export class TelegramCodexBridge {
   readonly #lifecycle: TurnLifecycleCoordinator;
   readonly #requestCoordinator: BridgeRequestCoordinator;
   readonly #topicIconPicker: TopicIconPicker;
-  readonly #restartKirbot: (() => Promise<void>) | null;
+  readonly #restartKirbot: ((reportStep: (command: string) => Promise<void>) => Promise<void>) | null;
 
   constructor(
     private readonly config: AppConfig,
@@ -2433,13 +2433,19 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.sendScopedBridgeMessage({
-      chatId: message.chatId,
-      text: RESTARTING_KIRBOT_TEXT
-    });
-
     try {
-      await this.#restartKirbot();
+      await this.#restartKirbot(async (command) => {
+        const runningMessage = buildRestartStepMessage(command);
+        await this.sendScopedBridgeMessage({
+          chatId: message.chatId,
+          text: runningMessage.text,
+          entities: runningMessage.entities
+        });
+      });
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        text: RESTART_COMPLETED_TEXT
+      });
     } catch (error) {
       this.logger.error("Failed to restart kirbot", error);
       await this.sendScopedBridgeMessage({
@@ -2463,7 +2469,7 @@ export class TelegramCodexBridge {
 
   private async buildTopicCommandReplyMarkup(): Promise<ReplyKeyboardMarkup | undefined> {
     return buildTopicCommandKeyboard(
-      getSurfaceableTopicSlashCommands(),
+      getVisibleSlashCommands(),
       await this.database.listCustomCommands()
     );
   }
@@ -2874,6 +2880,19 @@ function describeModelSelectionTitle(scope: SettingsSelectionScope): string {
     case "spawn":
       return "Choose the default model for new /thread topics";
   }
+}
+
+function buildRestartStepMessage(command: string): { text: string; entities: MessageEntity[] } {
+  return {
+    text: `Running: ${command}`,
+    entities: [
+      {
+        type: "code",
+        offset: "Running: ".length,
+        length: command.length
+      }
+    ]
+  };
 }
 
 function describePermissionsSelectionTitle(scope: SettingsSelectionScope): string {

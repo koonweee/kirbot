@@ -1,18 +1,50 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
+type RestartStepReporter = (command: string) => Promise<void>;
+
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const repoRoot = resolve(__dirname, "..", "..", "..");
 const OUTPUT_TAIL_LIMIT = 8_000;
 
-export async function restartKirbotProductionSession(): Promise<void> {
-  await runNpmScript("build");
-  await runNpmScript("start:tmux:restart");
+const RESTART_STEPS = [
+  {
+    command: "git",
+    args: ["checkout", "master"],
+    display: "git checkout master"
+  },
+  {
+    command: "git",
+    args: ["fetch", "origin"],
+    display: "git fetch origin"
+  },
+  {
+    command: "git",
+    args: ["reset", "--hard", "origin/master"],
+    display: "git reset --hard origin/master"
+  },
+  {
+    command: npmCommand,
+    args: ["run", "build"],
+    display: "npm run build"
+  },
+  {
+    command: npmCommand,
+    args: ["run", "start:tmux:restart"],
+    display: "npm run start:tmux:restart"
+  }
+] as const;
+
+export async function restartKirbotProductionSession(reportStep: RestartStepReporter): Promise<void> {
+  for (const step of RESTART_STEPS) {
+    await reportStep(step.display);
+    await runCommand(step.command, step.args, step.display);
+  }
 }
 
-async function runNpmScript(scriptName: string): Promise<void> {
+async function runCommand(command: string, args: readonly string[], displayCommand: string): Promise<void> {
   await new Promise<void>((resolveOutput, rejectOutput) => {
-    const child = spawn(npmCommand, ["run", scriptName], {
+    const child = spawn(command, [...args], {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -28,14 +60,14 @@ async function runNpmScript(scriptName: string): Promise<void> {
     child.once("close", (code, signal) => {
       if (signal) {
         rejectOutput(
-          new Error(formatScriptFailure(scriptName, `terminated by signal ${signal}`, combinedOutput))
+          new Error(formatCommandFailure(displayCommand, `terminated by signal ${signal}`, combinedOutput))
         );
         return;
       }
 
       if ((code ?? 1) !== 0) {
         rejectOutput(
-          new Error(formatScriptFailure(scriptName, `exited with code ${code ?? 1}`, combinedOutput))
+          new Error(formatCommandFailure(displayCommand, `exited with code ${code ?? 1}`, combinedOutput))
         );
         return;
       }
@@ -53,11 +85,11 @@ function keepOutputTail(output: string): string {
   return output.slice(-OUTPUT_TAIL_LIMIT);
 }
 
-function formatScriptFailure(scriptName: string, reason: string, output: string): string {
+function formatCommandFailure(command: string, reason: string, output: string): string {
   const trimmedOutput = output.trim();
   if (trimmedOutput.length === 0) {
-    return `npm run ${scriptName} ${reason}`;
+    return `${command} ${reason}`;
   }
 
-  return `npm run ${scriptName} ${reason}\n\n${trimmedOutput}`;
+  return `${command} ${reason}\n\n${trimmedOutput}`;
 }
