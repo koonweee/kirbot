@@ -1488,6 +1488,9 @@ describe("TelegramCodexBridge", () => {
         }
       }
     ]);
+    expect(await database.getSessionByTopic(-1001, 101)).toMatchObject({
+      preferredMode: "plan"
+    });
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
@@ -2521,8 +2524,16 @@ describe("TelegramCodexBridge", () => {
     expect(codex.turnCollaborationModes.at(-1)).toMatchObject({
       turnId: "turn-2",
       collaborationMode: {
-        mode: "plan"
+        mode: "plan",
+        settings: {
+          model: "gpt-5-codex",
+          reasoning_effort: null,
+          developer_instructions: null
+        }
       }
+    });
+    expect(await database.getSessionByTopic(-1001, 782)).toMatchObject({
+      preferredMode: "plan"
     });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([]);
@@ -4955,6 +4966,17 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.turns.at(-1)?.text).toBe(["Implement the plan.", "", "Additional instructions:", "and keep the diff small"].join("\n"));
+    expect(codex.turnCollaborationModes.at(-1)).toMatchObject({
+      turnId: "turn-2",
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5-codex",
+          reasoning_effort: null,
+          developer_instructions: null
+        }
+      }
+    });
     expect(await database.getSessionByTopic(-1001, 784)).toMatchObject({
       preferredMode: "default"
     });
@@ -4996,10 +5018,15 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.turns).toHaveLength(2);
     expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
-    expect(codex.turnCollaborationModes.at(-1)).toMatchObject({
+    expect(codex.turnCollaborationModes.at(-1)).toEqual({
       turnId: "turn-2",
       collaborationMode: {
-        mode: "default"
+        mode: "default",
+        settings: {
+          model: "gpt-5-codex",
+          reasoning_effort: null,
+          developer_instructions: null
+        }
       }
     });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
