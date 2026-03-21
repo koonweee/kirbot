@@ -3,7 +3,7 @@ export type TelegramBotCommand = {
   description: string;
 };
 
-export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "implement" | "cmd" | "commands";
+export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "implement" | "cmd" | "clear" | "commands";
 export type CodexSlashCommand = "model" | "fast" | "compact" | "approvals" | "permissions";
 export type SlashCommandName = KirbotSlashCommand | CodexSlashCommand;
 export type SlashCommandKind = "kirbot" | "codex";
@@ -97,6 +97,14 @@ const SLASH_COMMAND_DEFINITIONS = [
   {
     command: "compact",
     description: "Compact the current thread",
+    kind: "codex",
+    visible: true,
+    allowInRoot: true,
+    allowInTopic: true
+  },
+  {
+    command: "clear",
+    description: "Start a fresh Codex thread",
     kind: "codex",
     visible: true,
     allowInRoot: true,
@@ -209,5 +217,5 @@ export function isBuiltInSlashCommand(command: string): command is SlashCommandN
 }
 
 export function isCodexSlashCommand(command: SlashCommandName): command is CodexSlashCommand {
-  return command === "model" || command === "fast" || command === "compact" || command === "approvals" || command === "permissions";
+  return command === "model" || command === "fast" || command === "compact" || command === "clear" || command === "approvals" || command === "permissions";
 }

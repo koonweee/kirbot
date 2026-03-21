@@ -124,6 +124,10 @@ describe("TelegramCommandSync", () => {
             description: "Compact the current thread"
           },
           {
+            command: "clear",
+            description: "Start a fresh Codex thread"
+          },
+          {
             command: "permissions",
             description: "Set default or thread permissions"
           },
@@ -175,6 +179,10 @@ describe("TelegramCommandSync", () => {
           {
             command: "compact",
             description: "Compact the current thread"
+          },
+          {
+            command: "clear",
+            description: "Start a fresh Codex thread"
           },
           {
             command: "permissions",

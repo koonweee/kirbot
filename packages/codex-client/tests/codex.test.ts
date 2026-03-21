@@ -499,6 +499,71 @@ describe("CodexGateway", () => {
     await expect(compactPromise).resolves.toBeUndefined();
   });
 
+  it("reads thread metadata with thread/read and includeTurns disabled", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const readPromise = gateway.readThread("thread-1");
+    await Promise.resolve();
+
+    expect(transport.sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "thread/read",
+        id: 1,
+        params: {
+          threadId: "thread-1",
+          includeTurns: false
+        }
+      }
+    ]);
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        thread: {
+          id: "thread-1",
+          preview: "",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 1,
+          status: "idle",
+          path: null,
+          cwd: "/workspace/packages/kirbot-core",
+          cliVersion: "0.0.0",
+          source: "appServer",
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: {
+            sha: null,
+            branch: "main",
+            originUrl: null
+          },
+          name: "Fresh Thread",
+          turns: []
+        }
+      }
+    });
+
+    await expect(readPromise).resolves.toEqual({
+      name: "Fresh Thread",
+      cwd: "/workspace/packages/kirbot-core"
+    });
+  });
+
   it("omits null reasoning effort from thread/start overrides", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);

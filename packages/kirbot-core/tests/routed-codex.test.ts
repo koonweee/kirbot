@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = {
 class FakeCodexApi implements BridgeCodexApi {
   readonly createThreadCalls: string[] = [];
   readonly ensureThreadLoadedCalls: string[] = [];
+  readonly readThreadCalls: string[] = [];
   readonly sendTurnCalls: string[] = [];
   readonly commandApprovalResponses: RequestId[] = [];
   readonly fileChangeApprovalResponses: RequestId[] = [];
@@ -64,6 +65,18 @@ class FakeCodexApi implements BridgeCodexApi {
     this.ensureThreadLoadedCalls.push(threadId);
     this.#assertThreadExists(threadId);
     return DEFAULT_SETTINGS;
+  }
+
+  async readThread(threadId: string): Promise<{
+    name: string | null;
+    cwd: string;
+  }> {
+    this.readThreadCalls.push(threadId);
+    this.#assertThreadExists(threadId);
+    return {
+      name: null,
+      cwd: "/workspace"
+    };
   }
 
   async compactThread(threadId: string): Promise<void> {
@@ -170,6 +183,18 @@ describe("RoutedCodexApi", () => {
     expect(shared.ensureThreadLoadedCalls).toEqual(["legacy-thread-1"]);
     expect(shared.sendTurnCalls).toEqual(["legacy-thread-1"]);
     expect(isolated.sendTurnCalls).toEqual([]);
+  });
+
+  it("routes thread metadata reads to the gateway that created the thread", async () => {
+    const shared = new FakeCodexApi("shared");
+    const isolated = new FakeCodexApi("isolated");
+    const routed = new RoutedCodexApi({ shared, isolated });
+
+    const thread = await routed.createThread("New session");
+    await routed.readThread(thread.threadId);
+
+    expect(isolated.readThreadCalls).toEqual([thread.threadId]);
+    expect(shared.readThreadCalls).toEqual([]);
   });
 
   it("routes approval responses back to the gateway that emitted the request", async () => {

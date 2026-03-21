@@ -193,6 +193,16 @@ class ScriptedCodex implements BridgeCodexApi {
     };
   }
 
+  async readThread(): Promise<{
+    name: string | null;
+    cwd: string;
+  }> {
+    return {
+      name: null,
+      cwd: this.cwd
+    };
+  }
+
   async compactThread(): Promise<void> {}
 
   async sendTurn(

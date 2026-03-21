@@ -159,6 +159,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
 
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
+  readThreadCalls: string[] = [];
   createThreadCalls: Array<{
     title: string;
     cwd?: string | null;
@@ -221,6 +222,8 @@ class FakeCodex implements BridgeCodexApi {
   threadApprovalPolicy: AskForApproval | undefined = undefined;
   threadSandboxPolicy: SandboxPolicy | undefined = undefined;
   threadCwd: string | undefined = undefined;
+  threadName: string | undefined = undefined;
+  #nextThreadId = 1;
   models: Model[] = [
     {
       id: "model-1",
@@ -277,6 +280,7 @@ class FakeCodex implements BridgeCodexApi {
       ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
       ...(options?.settings !== undefined ? { settings: options.settings } : {})
     });
+    const threadId = `thread-${this.#nextThreadId++}`;
     const initialSettings = options?.settings ?? {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
@@ -290,8 +294,9 @@ class FakeCodex implements BridgeCodexApi {
     this.threadApprovalPolicy = initialSettings.approvalPolicy;
     this.threadSandboxPolicy = initialSettings.sandboxPolicy;
     this.threadCwd = options?.cwd ?? this.cwd;
+    this.threadName = optionsTitle;
     return {
-      threadId: "thread-1",
+      threadId,
       branch: this.branch,
       model: this.threadModel ?? this.model,
       reasoningEffort: this.threadReasoningEffort === undefined ? this.reasoningEffort : this.threadReasoningEffort,
@@ -299,6 +304,17 @@ class FakeCodex implements BridgeCodexApi {
       cwd: this.threadCwd,
       approvalPolicy: this.threadApprovalPolicy ?? this.approvalPolicy,
       sandboxPolicy: this.threadSandboxPolicy ?? this.sandboxPolicy
+    };
+  }
+
+  async readThread(threadId: string): Promise<{
+    name: string | null;
+    cwd: string;
+  }> {
+    this.readThreadCalls.push(threadId);
+    return {
+      name: this.threadName ?? null,
+      cwd: this.threadCwd ?? this.cwd
     };
   }
 
@@ -923,9 +939,166 @@ describe("TelegramCodexBridge", () => {
       ["/stop", "/plan"],
       ["/implement", "/model"],
       ["/fast", "/compact"],
-      ["/permissions", "/commands"],
-      ["/standup"]
+      ["/clear", "/permissions"],
+      ["/commands", "/standup"]
     ]);
+  });
+
+  it.each([
+    {
+      title: "root",
+      topicId: null,
+      initialMessage: "Inspect the root session",
+      followUpMessage: "Continue here"
+    },
+    {
+      title: "topic",
+      topicId: 777,
+      initialMessage: "Inspect the topic session",
+      followUpMessage: "Continue here"
+    }
+  ])("starts a fresh Codex thread when /clear is requested in $title scope", async ({ topicId, initialMessage, followUpMessage }) => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: initialMessage
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/clear"
+    });
+
+    expect(codex.createdThreads).toHaveLength(2);
+    expect(codex.createdThreads[1]).toBe(codex.createdThreads[0]);
+    expect(codex.createThreadCalls.at(1)?.settings).toEqual(codex.createThreadCalls.at(0)?.settings);
+    expect(codex.readThreadCalls).toEqual(["thread-1"]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Started a fresh Codex thread");
+
+    const session =
+      topicId === null
+        ? await database.getRootSessionByChat(-1001)
+        : await database.getSessionByTopic(-1001, topicId);
+    expect(session?.codexThreadId).toBe("thread-2");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: followUpMessage
+    });
+
+    expect(codex.turns.at(-1)?.threadId).toBe("thread-2");
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turn: {
+          id: "turn-2",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+  });
+
+  it.each([
+    {
+      title: "root",
+      topicId: null,
+      expectedText: "This chat does not have a Codex session yet. Send a normal message first to start one"
+    },
+    {
+      title: "topic",
+      topicId: 777,
+      expectedText: "This topic does not have a Codex session yet. Send a normal message first to start one"
+    }
+  ])("rejects /clear before a Codex session exists in $title scope", async ({ topicId, expectedText }) => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "/clear"
+    });
+
+    expect(codex.createdThreads).toHaveLength(0);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(expectedText);
+  });
+
+  it.each([
+    {
+      title: "root",
+      topicId: null
+    },
+    {
+      title: "topic",
+      topicId: 777
+    }
+  ])("rejects /clear while a turn is active in $title scope", async ({ topicId }) => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "Inspect the active response"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/clear"
+    });
+
+    expect(codex.createdThreads).toHaveLength(1);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before clearing"
+    );
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
   });
 
   it("assigns a random custom emoji topic icon when /thread creates a topic", async () => {

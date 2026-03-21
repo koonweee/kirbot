@@ -168,6 +168,36 @@ describe("BridgeDatabase", () => {
     expect(updatedRoot?.settings.approvalPolicy).toBe("on-request");
   });
 
+  it("repoints an active session to a fresh Codex thread without changing settings", async () => {
+    const pendingRoot = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+    await database.activateSession(pendingRoot.id, "thread-1");
+
+    await database.updateRootSessionSettings("-1001", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    const repointed = await database.activateSession(pendingRoot.id, "thread-2");
+    expect(repointed.codexThreadId).toBe("thread-2");
+    expect(repointed.settings.model).toBe("gpt-5.4-mini");
+    expect(repointed.settings.reasoningEffort).toBe("medium");
+  });
+
   it("returns the existing root provisioning session when creation races", async () => {
     const first = await database.createProvisioningSession({
       telegramChatId: "-1001",
