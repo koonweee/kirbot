@@ -937,7 +937,7 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("keeps successful item completions transient but still publishes failures durably", async () => {
+  it("keeps successful item completions transient but still publishes one durable compaction notice", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
@@ -1011,8 +1011,27 @@ describe("TurnLifecycleCoordinator", () => {
       id: "compact-2"
     });
 
-    expect(harness.telegram.sentMessages).toEqual([]);
-    expect(harness.telegram.drafts).toEqual([]);
+    expect(harness.telegram.sentMessages).toEqual([
+      {
+        chatId: -1001,
+        text: "Context compacted",
+        options: {
+          disable_notification: true,
+          message_thread_id: 777
+        }
+      }
+    ]);
+    expect(harness.telegram.drafts).toEqual([
+      {
+        chatId: -1001,
+        draftId: 1,
+        text: "Context compacted",
+        options: {
+          disable_notification: true,
+          message_thread_id: 777
+        }
+      }
+    ]);
   });
 
   it("keeps failed command details in commentary without sending a standalone bubble", async () => {

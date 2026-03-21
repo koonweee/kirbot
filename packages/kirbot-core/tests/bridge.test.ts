@@ -6069,6 +6069,61 @@ describe("TelegramCodexBridge", () => {
     ).toHaveLength(1);
   });
 
+  it("surfaces auto-compaction notices from item-level contextCompaction events", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "Start the session"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "Keep going until the thread gets long"
+    });
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        item: {
+          type: "contextCompaction",
+          id: "compact-1"
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.findLast((message) => message.text === "Context compacted")).toMatchObject({
+      chatId: -1001,
+      text: "Context compacted",
+      options: {
+        message_thread_id: 777
+      }
+    });
+  });
+
   it("ignores callback queries from users other than the configured Telegram user", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

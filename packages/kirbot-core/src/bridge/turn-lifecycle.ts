@@ -317,6 +317,11 @@ export class TurnLifecycleCoordinator {
         return;
       }
       context.compactionNoticeSent = true;
+      await this.deps.messenger.sendMessage({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        text: "Context compacted"
+      });
     }
   }
 
