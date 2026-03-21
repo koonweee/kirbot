@@ -63,7 +63,7 @@ Owns the lifecycle of an active turn after submission: status drafts, streaming 
 Owns Codex server requests that need user action in Telegram: command approvals, file approvals, and structured user-input prompts.
 
 [`packages/kirbot-core/src/bridge/custom-commands.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/custom-commands.ts)
-Owns custom slash-command parsing, validation, prompt expansion, and confirmation callback payload helpers for the root `/cmd` flow and typed topic invocation.
+Owns custom slash-command parsing, validation, prompt expansion, and confirmation callback payload helpers for the shared `/cmd` flow and root/topic invocation.
 
 [`packages/kirbot-core/src/bridge/presentation.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/bridge/presentation.ts)
 Owns Telegram-facing presentation outside the formatting subsystem: topic titles, status text, completion footers, and queue previews.

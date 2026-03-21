@@ -161,7 +161,7 @@ export class TelegramMessenger {
 
   statusDraft(input: {
     chatId: number;
-    topicId: number;
+    topicId: number | null;
     draftId: number;
     throttleMs?: number;
     chatAction?: TelegramChatAction | false;
@@ -181,7 +181,7 @@ export class TelegramMessenger {
 
   streamMessage(input: {
     chatId: number;
-    topicId: number;
+    topicId: number | null;
     draftId: number;
     throttleMs?: number;
     chatAction?: TelegramChatAction | false;
@@ -207,7 +207,7 @@ export class TelegramStatusDraftHandle {
     telegram: TelegramApi,
     logger: LoggerLike,
     chatId: number,
-    topicId: number,
+    topicId: number | null,
     draftId: number,
     throttleMs = DEFAULT_DRAFT_THROTTLE_MS,
     chatAction: TelegramChatAction | false = "typing",
@@ -250,7 +250,7 @@ export class TelegramStreamMessageHandle {
     private readonly telegram: TelegramApi,
     logger: LoggerLike,
     private readonly chatId: number,
-    private readonly topicId: number,
+    private readonly topicId: number | null,
     draftId: number,
     throttleMs = DEFAULT_DRAFT_THROTTLE_MS,
     chatAction: TelegramChatAction | false = "typing",
@@ -334,7 +334,7 @@ class TelegramDraftSession {
     private readonly telegram: TelegramApi,
     private readonly logger: LoggerLike,
     private readonly chatId: number,
-    private readonly topicId: number,
+    private readonly topicId: number | null,
     private readonly draftId: number,
     private readonly throttleMs: number,
     private readonly chatAction: TelegramChatAction | false,
@@ -496,7 +496,7 @@ class TelegramDraftSession {
 
   private async sendDraft(rendered: TelegramRenderedMessage): Promise<void> {
     await this.telegram.sendMessageDraft(this.chatId, this.draftId, rendered.text, {
-      message_thread_id: this.topicId,
+      ...(this.topicId !== null ? { message_thread_id: this.topicId } : {}),
       ...(rendered.entities ? { entities: rendered.entities } : {})
     });
   }
@@ -533,7 +533,7 @@ class TelegramDraftSession {
 
     try {
       await this.telegram.sendChatAction(this.chatId, this.chatAction, {
-        message_thread_id: this.topicId
+        ...(this.topicId !== null ? { message_thread_id: this.topicId } : {})
       });
       this.#state.lastChatActionAt = now;
     } catch (error) {

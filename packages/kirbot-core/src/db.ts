@@ -6,25 +6,44 @@ import { sql } from "kysely";
 import { Generated, Kysely, Selectable, SqliteDialect } from "kysely";
 
 import type {
+  BridgeSession,
+  ChatThreadDefaults,
   CustomCommand,
   PendingCustomCommandAdd,
   PendingCustomCommandStatus,
   PendingServerRequest,
+  PersistedThreadSettings,
+  SessionSurface,
   SessionMode,
   SessionStatus,
   TopicSession
 } from "./domain";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
-type TopicSessionsTable = {
+type SessionsTable = {
   id: Generated<number>;
   telegram_chat_id: string;
-  telegram_topic_id: number;
+  surface_kind: "root" | "topic";
+  telegram_topic_id: number | null;
   codex_thread_id: string | null;
   status: SessionStatus;
   preferred_mode: SessionMode;
+};
+
+type ChatThreadDefaultsTable = {
+  telegram_chat_id: string;
+  root_model: string | null;
+  root_reasoning_effort: string | null;
+  root_service_tier: string | null;
+  root_approval_policy: string | null;
+  root_sandbox_policy_json: string | null;
+  spawn_model: string | null;
+  spawn_reasoning_effort: string | null;
+  spawn_service_tier: string | null;
+  spawn_approval_policy: string | null;
+  spawn_sandbox_policy_json: string | null;
 };
 
 type ServerRequestsTable = {
@@ -32,7 +51,7 @@ type ServerRequestsTable = {
   request_id_json: string;
   method: string;
   telegram_chat_id: string;
-  telegram_topic_id: number;
+  telegram_topic_id: number | null;
   telegram_message_id: number | null;
   payload_json: string;
   state_json: string | null;
@@ -64,7 +83,8 @@ type ProcessedUpdatesTable = {
 };
 
 export type DatabaseSchema = {
-  topic_sessions: TopicSessionsTable;
+  sessions: SessionsTable;
+  chat_thread_defaults: ChatThreadDefaultsTable;
   server_requests: ServerRequestsTable;
   custom_commands: CustomCommandsTable;
   pending_custom_command_adds: PendingCustomCommandAddsTable;
@@ -75,14 +95,41 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function mapTopicSession(row: Selectable<TopicSessionsTable>): TopicSession {
+function mapSession(row: Selectable<SessionsTable>): BridgeSession {
+  if (row.surface_kind === "topic" && row.telegram_topic_id === null) {
+    throw new Error("Topic session row is missing telegram_topic_id");
+  }
+
+  const surface: SessionSurface =
+    row.surface_kind === "root" ? { kind: "root" } : { kind: "topic", topicId: row.telegram_topic_id! };
+
   return {
     id: row.id,
     telegramChatId: row.telegram_chat_id,
-    telegramTopicId: row.telegram_topic_id,
+    surface,
     codexThreadId: row.codex_thread_id,
     status: row.status,
     preferredMode: row.preferred_mode
+  };
+}
+
+function mapChatThreadDefaults(row: Selectable<ChatThreadDefaultsTable>): ChatThreadDefaults {
+  return {
+    telegramChatId: row.telegram_chat_id,
+    root: mapPersistedThreadSettings({
+      model: row.root_model,
+      reasoningEffort: row.root_reasoning_effort,
+      serviceTier: row.root_service_tier,
+      approvalPolicyJson: row.root_approval_policy,
+      sandboxPolicyJson: row.root_sandbox_policy_json
+    }),
+    spawn: mapPersistedThreadSettings({
+      model: row.spawn_model,
+      reasoningEffort: row.spawn_reasoning_effort,
+      serviceTier: row.spawn_service_tier,
+      approvalPolicyJson: row.spawn_approval_policy,
+      sandboxPolicyJson: row.spawn_sandbox_policy_json
+    })
   };
 }
 
@@ -124,6 +171,36 @@ function mapPendingCustomCommandAdd(row: Selectable<PendingCustomCommandAddsTabl
   };
 }
 
+function mapPersistedThreadSettings(input: {
+  model: string | null;
+  reasoningEffort: string | null;
+  serviceTier: string | null;
+  approvalPolicyJson: string | null;
+  sandboxPolicyJson: string | null;
+}): PersistedThreadSettings {
+  return {
+    model: input.model,
+    reasoningEffort: input.reasoningEffort as PersistedThreadSettings["reasoningEffort"],
+    serviceTier: input.serviceTier as PersistedThreadSettings["serviceTier"],
+    approvalPolicy: input.approvalPolicyJson
+      ? (JSON.parse(input.approvalPolicyJson) as PersistedThreadSettings["approvalPolicy"])
+      : null,
+    sandboxPolicy: input.sandboxPolicyJson ? (JSON.parse(input.sandboxPolicyJson) as PersistedThreadSettings["sandboxPolicy"]) : null
+  };
+}
+
+function sessionSurfaceToRow(surface: SessionSurface): Pick<SessionsTable, "surface_kind" | "telegram_topic_id"> {
+  return surface.kind === "root"
+    ? {
+        surface_kind: "root",
+        telegram_topic_id: null
+      }
+    : {
+        surface_kind: "topic",
+        telegram_topic_id: surface.topicId
+      };
+}
+
 export class BridgeDatabase {
   readonly kysely: Kysely<DatabaseSchema>;
   readonly #sqlite: InstanceType<typeof Database>;
@@ -139,105 +216,24 @@ export class BridgeDatabase {
 
   async migrate(): Promise<void> {
     const currentVersion = this.#readSchemaVersion();
-    if (currentVersion !== SCHEMA_VERSION) {
-      this.#dropAllTables();
+    if (currentVersion === SCHEMA_VERSION) {
+      this.#createSchemaV5();
+      return;
     }
 
-    await this.kysely.schema
-      .createTable("topic_sessions")
-      .ifNotExists()
-      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
-      .addColumn("telegram_chat_id", "text", (column) => column.notNull())
-      .addColumn("telegram_topic_id", "integer", (column) => column.notNull())
-      .addColumn("codex_thread_id", "text")
-      .addColumn("status", "text", (column) => column.notNull())
-      .addColumn("preferred_mode", "text", (column) => column.notNull().defaultTo("default"))
-      .execute();
+    if (currentVersion === 0) {
+      this.#createSchemaV5();
+      this.#writeSchemaVersion(SCHEMA_VERSION);
+      return;
+    }
 
-    await this.kysely.schema
-      .createIndex("topic_sessions_chat_topic_unique")
-      .ifNotExists()
-      .on("topic_sessions")
-      .columns(["telegram_chat_id", "telegram_topic_id"])
-      .unique()
-      .execute();
+    if (currentVersion === 4) {
+      this.#migrateFromV4ToV5();
+      this.#writeSchemaVersion(SCHEMA_VERSION);
+      return;
+    }
 
-    await this.kysely.schema
-      .createIndex("topic_sessions_thread_unique")
-      .ifNotExists()
-      .on("topic_sessions")
-      .column("codex_thread_id")
-      .unique()
-      .execute();
-
-    await this.kysely.schema
-      .createTable("server_requests")
-      .ifNotExists()
-      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
-      .addColumn("request_id_json", "text", (column) => column.notNull())
-      .addColumn("method", "text", (column) => column.notNull())
-      .addColumn("telegram_chat_id", "text", (column) => column.notNull())
-      .addColumn("telegram_topic_id", "integer", (column) => column.notNull())
-      .addColumn("telegram_message_id", "integer")
-      .addColumn("payload_json", "text", (column) => column.notNull())
-      .addColumn("state_json", "text")
-      .addColumn("status", "text", (column) => column.notNull())
-      .addColumn("created_at", "text", (column) => column.notNull())
-      .execute();
-
-    await this.kysely.schema
-      .createIndex("server_requests_request_id_unique")
-      .ifNotExists()
-      .on("server_requests")
-      .column("request_id_json")
-      .unique()
-      .execute();
-
-    await this.kysely.schema
-      .createTable("processed_updates")
-      .ifNotExists()
-      .addColumn("telegram_update_id", "integer", (column) => column.primaryKey())
-      .execute();
-
-    await this.kysely.schema
-      .createTable("custom_commands")
-      .ifNotExists()
-      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
-      .addColumn("command", "text", (column) => column.notNull())
-      .addColumn("prompt", "text", (column) => column.notNull())
-      .addColumn("created_at", "text", (column) => column.notNull())
-      .addColumn("updated_at", "text", (column) => column.notNull())
-      .execute();
-
-    await this.kysely.schema
-      .createIndex("custom_commands_command_unique")
-      .ifNotExists()
-      .on("custom_commands")
-      .column("command")
-      .unique()
-      .execute();
-
-    await this.kysely.schema
-      .createTable("pending_custom_command_adds")
-      .ifNotExists()
-      .addColumn("id", "integer", (column) => column.primaryKey().autoIncrement())
-      .addColumn("command", "text", (column) => column.notNull())
-      .addColumn("prompt", "text", (column) => column.notNull())
-      .addColumn("telegram_chat_id", "text", (column) => column.notNull())
-      .addColumn("telegram_message_id", "integer")
-      .addColumn("status", "text", (column) => column.notNull())
-      .addColumn("created_at", "text", (column) => column.notNull())
-      .addColumn("updated_at", "text", (column) => column.notNull())
-      .execute();
-
-    await this.kysely.schema
-      .createIndex("pending_custom_command_adds_status_command_index")
-      .ifNotExists()
-      .on("pending_custom_command_adds")
-      .columns(["status", "command"])
-      .execute();
-
-    this.#writeSchemaVersion(SCHEMA_VERSION);
+    throw new Error(`Unsupported database schema version: ${currentVersion}`);
   }
 
   async close(): Promise<void> {
@@ -259,34 +255,47 @@ export class BridgeDatabase {
   async createProvisioningSession(input: {
     telegramChatId: string;
     telegramTopicId: number;
-  }): Promise<TopicSession> {
+  }): Promise<TopicSession>;
+  async createProvisioningSession(input: {
+    telegramChatId: string;
+    surface: SessionSurface;
+  }): Promise<BridgeSession>;
+  async createProvisioningSession(input: {
+    telegramChatId: string;
+    telegramTopicId?: number;
+    surface?: SessionSurface;
+  }): Promise<TopicSession | BridgeSession> {
+    const surface: SessionSurface = input.surface ?? { kind: "topic", topicId: input.telegramTopicId! };
+    const sessionRow = sessionSurfaceToRow(surface);
     await this.kysely
-      .insertInto("topic_sessions")
+      .insertInto("sessions")
       .values({
         telegram_chat_id: input.telegramChatId,
-        telegram_topic_id: input.telegramTopicId,
+        ...sessionRow,
         codex_thread_id: null,
         status: "provisioning",
         preferred_mode: "default"
       })
       .execute();
 
-    const row = await this.kysely
-      .selectFrom("topic_sessions")
-      .selectAll()
-      .where("telegram_chat_id", "=", input.telegramChatId)
-      .where("telegram_topic_id", "=", input.telegramTopicId)
-      .executeTakeFirstOrThrow();
+    const created = await this.getSessionBySurface(input.telegramChatId, surface);
+    if (!created) {
+      throw new Error(`Failed to create provisioning session for ${input.telegramChatId}`);
+    }
 
-    return mapTopicSession(row);
+    if (surface.kind === "topic" && !input.surface) {
+      return this.requireTopicSession(created);
+    }
+
+    return created;
   }
 
   async activateSession(
     id: number,
     codexThreadId: string
-  ): Promise<TopicSession> {
+  ): Promise<BridgeSession> {
     await this.kysely
-      .updateTable("topic_sessions")
+      .updateTable("sessions")
       .set({
         codex_thread_id: codexThreadId,
         status: "active"
@@ -299,7 +308,7 @@ export class BridgeDatabase {
 
   async markSessionErrored(id: number): Promise<void> {
     await this.kysely
-      .updateTable("topic_sessions")
+      .updateTable("sessions")
       .set({
         status: "errored"
       })
@@ -307,36 +316,51 @@ export class BridgeDatabase {
       .execute();
   }
 
-  async getSessionById(id: number): Promise<TopicSession> {
+  async getSessionById(id: number): Promise<BridgeSession> {
     const row = await this.kysely
-      .selectFrom("topic_sessions")
+      .selectFrom("sessions")
       .selectAll()
       .where("id", "=", id)
       .executeTakeFirstOrThrow();
 
-    return mapTopicSession(row);
+    return mapSession(row);
+  }
+
+  async getSessionBySurface(chatId: number | string, surface: SessionSurface): Promise<BridgeSession | undefined> {
+    let query = this.kysely
+      .selectFrom("sessions")
+      .selectAll()
+      .where("telegram_chat_id", "=", String(chatId))
+      .where("surface_kind", "=", surface.kind)
+      .where("status", "in", ["provisioning", "active"]);
+
+    if (surface.kind === "root") {
+      query = query.where("telegram_topic_id", "is", null);
+    } else {
+      query = query.where("telegram_topic_id", "=", surface.topicId);
+    }
+
+    const row = await query.executeTakeFirst();
+    return row ? mapSession(row) : undefined;
+  }
+
+  async getRootSessionByChat(chatId: number | string): Promise<BridgeSession | undefined> {
+    return this.getSessionBySurface(chatId, { kind: "root" });
   }
 
   async getSessionByTopic(chatId: number, topicId: number): Promise<TopicSession | undefined> {
-    const row = await this.kysely
-      .selectFrom("topic_sessions")
-      .selectAll()
-      .where("telegram_chat_id", "=", String(chatId))
-      .where("telegram_topic_id", "=", topicId)
-      .where("status", "in", ["provisioning", "active"])
-      .executeTakeFirst();
-
-    return row ? mapTopicSession(row) : undefined;
+    const session = await this.getSessionBySurface(chatId, { kind: "topic", topicId });
+    return session ? this.requireTopicSession(session) : undefined;
   }
 
-  async archiveSessionByTopic(chatId: number, topicId: number): Promise<TopicSession | undefined> {
-    const existing = await this.getSessionByTopic(chatId, topicId);
+  async archiveSessionBySurface(chatId: number | string, surface: SessionSurface): Promise<BridgeSession | undefined> {
+    const existing = await this.getSessionBySurface(chatId, surface);
     if (!existing) {
       return undefined;
     }
 
     await this.kysely
-      .updateTable("topic_sessions")
+      .updateTable("sessions")
       .set({
         status: "archived"
       })
@@ -346,24 +370,33 @@ export class BridgeDatabase {
     return this.getSessionById(existing.id);
   }
 
-  async listActiveSessions(): Promise<TopicSession[]> {
+  async archiveSessionByTopic(chatId: number, topicId: number): Promise<TopicSession | undefined> {
+    const session = await this.archiveSessionBySurface(chatId, { kind: "topic", topicId });
+    return session ? this.requireTopicSession(session) : undefined;
+  }
+
+  async listActiveSessions(): Promise<BridgeSession[]> {
     const rows = await this.kysely
-      .selectFrom("topic_sessions")
+      .selectFrom("sessions")
       .selectAll()
       .where("status", "=", "active")
       .execute();
 
-    return rows.map(mapTopicSession);
+    return rows.map(mapSession);
   }
 
-  async updateSessionPreferredMode(chatId: number, topicId: number, preferredMode: SessionMode): Promise<TopicSession | undefined> {
-    const existing = await this.getSessionByTopic(chatId, topicId);
+  async updateSessionPreferredModeForSurface(
+    chatId: number | string,
+    surface: SessionSurface,
+    preferredMode: SessionMode
+  ): Promise<BridgeSession | undefined> {
+    const existing = await this.getSessionBySurface(chatId, surface);
     if (!existing) {
       return undefined;
     }
 
     await this.kysely
-      .updateTable("topic_sessions")
+      .updateTable("sessions")
       .set({
         preferred_mode: preferredMode
       })
@@ -373,11 +406,16 @@ export class BridgeDatabase {
     return this.getSessionById(existing.id);
   }
 
+  async updateSessionPreferredMode(chatId: number, topicId: number, preferredMode: SessionMode): Promise<TopicSession | undefined> {
+    const session = await this.updateSessionPreferredModeForSurface(chatId, { kind: "topic", topicId }, preferredMode);
+    return session ? this.requireTopicSession(session) : undefined;
+  }
+
   async createPendingRequest(input: {
     requestIdJson: string;
     method: string;
     telegramChatId: string;
-    telegramTopicId: number;
+    telegramTopicId: number | null;
     telegramMessageId: number | null;
     payloadJson: string;
   }): Promise<PendingServerRequest> {
@@ -423,13 +461,17 @@ export class BridgeDatabase {
     return mapServerRequest(row);
   }
 
-  async getPendingRequestByTopic(chatId: number, topicId: number, method?: string): Promise<PendingServerRequest | undefined> {
+  async getPendingRequestByTopic(chatId: number, topicId: number | null, method?: string): Promise<PendingServerRequest | undefined> {
     let query = this.kysely
       .selectFrom("server_requests")
       .selectAll()
       .where("telegram_chat_id", "=", String(chatId))
-      .where("telegram_topic_id", "=", topicId)
       .where("status", "=", "pending");
+
+    query =
+      topicId === null
+        ? query.where("telegram_topic_id", "is", null)
+        : query.where("telegram_topic_id", "=", topicId);
 
     if (method) {
       query = query.where("method", "=", method);
@@ -499,15 +541,15 @@ export class BridgeDatabase {
     return Number(result.numUpdatedRows ?? 0);
   }
 
-  async getSessionByCodexThreadId(codexThreadId: string): Promise<TopicSession | undefined> {
+  async getSessionByCodexThreadId(codexThreadId: string): Promise<BridgeSession | undefined> {
     const row = await this.kysely
-      .selectFrom("topic_sessions")
+      .selectFrom("sessions")
       .selectAll()
       .where("codex_thread_id", "=", codexThreadId)
       .where("status", "=", "active")
       .executeTakeFirst();
 
-    return row ? mapTopicSession(row) : undefined;
+    return row ? mapSession(row) : undefined;
   }
 
   async getServerRequestById(id: number): Promise<PendingServerRequest | undefined> {
@@ -538,6 +580,59 @@ export class BridgeDatabase {
       .executeTakeFirstOrThrow();
 
     return Number(row.count);
+  }
+
+  async upsertChatThreadDefaults(
+    telegramChatId: string,
+    defaults: Omit<ChatThreadDefaults, "telegramChatId">
+  ): Promise<ChatThreadDefaults> {
+    await this.kysely
+      .insertInto("chat_thread_defaults")
+      .values({
+        telegram_chat_id: telegramChatId,
+        root_model: defaults.root.model,
+        root_reasoning_effort: defaults.root.reasoningEffort,
+        root_service_tier: defaults.root.serviceTier,
+        root_approval_policy: defaults.root.approvalPolicy ? JSON.stringify(defaults.root.approvalPolicy) : null,
+        root_sandbox_policy_json: defaults.root.sandboxPolicy ? JSON.stringify(defaults.root.sandboxPolicy) : null,
+        spawn_model: defaults.spawn.model,
+        spawn_reasoning_effort: defaults.spawn.reasoningEffort,
+        spawn_service_tier: defaults.spawn.serviceTier,
+        spawn_approval_policy: defaults.spawn.approvalPolicy ? JSON.stringify(defaults.spawn.approvalPolicy) : null,
+        spawn_sandbox_policy_json: defaults.spawn.sandboxPolicy ? JSON.stringify(defaults.spawn.sandboxPolicy) : null
+      })
+      .onConflict((oc) =>
+        oc.column("telegram_chat_id").doUpdateSet({
+          root_model: defaults.root.model,
+          root_reasoning_effort: defaults.root.reasoningEffort,
+          root_service_tier: defaults.root.serviceTier,
+          root_approval_policy: defaults.root.approvalPolicy ? JSON.stringify(defaults.root.approvalPolicy) : null,
+          root_sandbox_policy_json: defaults.root.sandboxPolicy ? JSON.stringify(defaults.root.sandboxPolicy) : null,
+          spawn_model: defaults.spawn.model,
+          spawn_reasoning_effort: defaults.spawn.reasoningEffort,
+          spawn_service_tier: defaults.spawn.serviceTier,
+          spawn_approval_policy: defaults.spawn.approvalPolicy ? JSON.stringify(defaults.spawn.approvalPolicy) : null,
+          spawn_sandbox_policy_json: defaults.spawn.sandboxPolicy ? JSON.stringify(defaults.spawn.sandboxPolicy) : null
+        })
+      )
+      .execute();
+
+    return this.getChatThreadDefaults(telegramChatId).then((value) => {
+      if (!value) {
+        throw new Error(`Failed to load chat thread defaults for ${telegramChatId}`);
+      }
+      return value;
+    });
+  }
+
+  async getChatThreadDefaults(telegramChatId: string): Promise<ChatThreadDefaults | undefined> {
+    const row = await this.kysely
+      .selectFrom("chat_thread_defaults")
+      .selectAll()
+      .where("telegram_chat_id", "=", telegramChatId)
+      .executeTakeFirst();
+
+    return row ? mapChatThreadDefaults(row) : undefined;
   }
 
   async createCustomCommand(input: {
@@ -706,22 +801,244 @@ export class BridgeDatabase {
     return mapCustomCommand(row);
   }
 
+  private requireTopicSession(session: BridgeSession): TopicSession {
+    if (session.surface.kind !== "topic") {
+      throw new Error(`Expected topic session, received ${session.surface.kind}`);
+    }
+
+    return {
+      id: session.id,
+      telegramChatId: session.telegramChatId,
+      telegramTopicId: session.surface.topicId,
+      codexThreadId: session.codexThreadId,
+      status: session.status,
+      preferredMode: session.preferredMode
+    };
+  }
+
+  #createSchemaV5(): void {
+    this.#sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default'
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_root_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'root';
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS chat_thread_defaults (
+        telegram_chat_id TEXT PRIMARY KEY,
+        root_model TEXT,
+        root_reasoning_effort TEXT,
+        root_service_tier TEXT,
+        root_approval_policy TEXT,
+        root_sandbox_policy_json TEXT,
+        spawn_model TEXT,
+        spawn_reasoning_effort TEXT,
+        spawn_service_tier TEXT,
+        spawn_approval_policy TEXT,
+        spawn_sandbox_policy_json TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS server_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id_json TEXT NOT NULL,
+        method TEXT NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        telegram_message_id INTEGER,
+        payload_json TEXT NOT NULL,
+        state_json TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS server_requests_request_id_unique
+        ON server_requests (request_id_json);
+
+      CREATE TABLE IF NOT EXISTS processed_updates (
+        telegram_update_id INTEGER PRIMARY KEY
+      );
+
+      CREATE TABLE IF NOT EXISTS custom_commands (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        command TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS custom_commands_command_unique
+        ON custom_commands (command);
+
+      CREATE TABLE IF NOT EXISTS pending_custom_command_adds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        command TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        telegram_message_id INTEGER,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS pending_custom_command_adds_status_command_index
+        ON pending_custom_command_adds (status, command);
+    `);
+  }
+
+  #migrateFromV4ToV5(): void {
+    this.#sqlite.exec(`
+      BEGIN;
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default'
+      );
+
+      INSERT INTO sessions (id, telegram_chat_id, surface_kind, telegram_topic_id, codex_thread_id, status, preferred_mode)
+      SELECT
+        ts.id,
+        ts.telegram_chat_id,
+        'topic',
+        ts.telegram_topic_id,
+        ts.codex_thread_id,
+        ts.status,
+        ts.preferred_mode
+      FROM topic_sessions ts
+      WHERE NOT EXISTS (
+        SELECT 1 FROM sessions existing WHERE existing.id = ts.id
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_root_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'root';
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS chat_thread_defaults (
+        telegram_chat_id TEXT PRIMARY KEY,
+        root_model TEXT,
+        root_reasoning_effort TEXT,
+        root_service_tier TEXT,
+        root_approval_policy TEXT,
+        root_sandbox_policy_json TEXT,
+        spawn_model TEXT,
+        spawn_reasoning_effort TEXT,
+        spawn_service_tier TEXT,
+        spawn_approval_policy TEXT,
+        spawn_sandbox_policy_json TEXT
+      );
+
+      DROP TABLE IF EXISTS server_requests_v5;
+
+      CREATE TABLE server_requests_v5 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id_json TEXT NOT NULL,
+        method TEXT NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        telegram_message_id INTEGER,
+        payload_json TEXT NOT NULL,
+        state_json TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO server_requests_v5 (
+        id,
+        request_id_json,
+        method,
+        telegram_chat_id,
+        telegram_topic_id,
+        telegram_message_id,
+        payload_json,
+        state_json,
+        status,
+        created_at
+      )
+      SELECT
+        id,
+        request_id_json,
+        method,
+        telegram_chat_id,
+        telegram_topic_id,
+        telegram_message_id,
+        payload_json,
+        state_json,
+        status,
+        created_at
+      FROM server_requests;
+
+      DROP TABLE server_requests;
+      ALTER TABLE server_requests_v5 RENAME TO server_requests;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS server_requests_request_id_unique
+        ON server_requests (request_id_json);
+
+      CREATE TABLE IF NOT EXISTS processed_updates (
+        telegram_update_id INTEGER PRIMARY KEY
+      );
+
+      CREATE TABLE IF NOT EXISTS custom_commands (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        command TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS custom_commands_command_unique
+        ON custom_commands (command);
+
+      CREATE TABLE IF NOT EXISTS pending_custom_command_adds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        command TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        telegram_message_id INTEGER,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS pending_custom_command_adds_status_command_index
+        ON pending_custom_command_adds (status, command);
+
+      COMMIT;
+    `);
+  }
+
   #readSchemaVersion(): number {
     return Number(this.#sqlite.pragma("user_version", { simple: true }) ?? 0);
   }
 
   #writeSchemaVersion(version: number): void {
     this.#sqlite.pragma(`user_version = ${version}`);
-  }
-
-  #dropAllTables(): void {
-    this.#sqlite.exec(`
-      DROP TABLE IF EXISTS processed_updates;
-      DROP TABLE IF EXISTS pending_custom_command_adds;
-      DROP TABLE IF EXISTS custom_commands;
-      DROP TABLE IF EXISTS server_requests;
-      DROP TABLE IF EXISTS turn_messages;
-      DROP TABLE IF EXISTS topic_sessions;
-    `);
   }
 }

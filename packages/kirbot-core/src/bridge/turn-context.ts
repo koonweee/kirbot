@@ -12,7 +12,7 @@ export type TurnDraftMode = "status" | "assistant";
 
 export type TurnContext = {
   chatId: number;
-  topicId: number;
+  topicId: number | null;
   threadId: string;
   turnId: string;
   phase: TurnPhase;

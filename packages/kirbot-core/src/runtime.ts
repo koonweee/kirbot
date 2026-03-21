@@ -18,7 +18,7 @@ import type { TelegramApi } from "./telegram-messenger";
 export type BridgeActivitySnapshot = {
   activeTurnCount: number;
   pendingRequestCount: number;
-  activeTopics: Array<{ chatId: number; topicId: number }>;
+  activeTopics: Array<{ chatId: number; topicId: number | null }>;
 };
 
 export type KirbotRuntime = {

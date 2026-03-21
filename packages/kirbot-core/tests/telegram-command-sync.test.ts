@@ -96,8 +96,8 @@ describe("TelegramCommandSync", () => {
             description: "Switch this topic into plan mode"
           },
           {
-            command: "start",
-            description: "Start an empty session in a directory"
+            command: "thread",
+            description: "Start a new topic thread"
           },
           {
             command: "restart",
@@ -141,8 +141,8 @@ describe("TelegramCommandSync", () => {
             description: "Switch this topic into plan mode"
           },
           {
-            command: "start",
-            description: "Start an empty session in a directory"
+            command: "thread",
+            description: "Start a new topic thread"
           },
           {
             command: "restart",

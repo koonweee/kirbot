@@ -2,7 +2,7 @@
 
 <img src="./kirbot.png" alt="kirbot" width="128" />
 
-kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can start sessions from the lobby, continue them inside topics, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
+kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can keep a persistent Codex conversation in the root chat, spawn additional topic threads with `/thread <prompt>`, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
 
 ## Start Here
 
@@ -27,11 +27,12 @@ kirbot sits between Telegram and a pinned local Codex app server:
 - `packages/kirbot-core/src/telegram-messenger.ts` and `packages/telegram-format/src/*` own Telegram delivery and formatting.
 - `apps/plan-mini-app` is a separate SvelteKit frontend for rendering completed plans from typed URL payloads.
 
-The bridge is intentionally topic-centric:
+The bridge uses one persistent root session plus topic sessions:
 
-- a root-chat message usually creates a new Telegram topic and a new Codex thread
-- later messages inside that topic continue the same Codex thread
-- pending approvals and user-input requests are routed back into that same topic
+- plain root-chat messages continue the same root Codex thread
+- `/thread <prompt>` and root `/plan [prompt]` create topic-backed Codex sessions
+- later messages inside a topic continue that topic's Codex thread
+- pending approvals and user-input requests route back to the surface that owns the session
 
 ## Quick Start
 
@@ -76,7 +77,7 @@ Bootstrap note:
 Telegram BotFather requirements:
 
 - Enable private-chat topics for the bot.
-- Disable user-created topics in private chats so kirbot can own session topic creation from the lobby.
+- Disable user-created topics in private chats so kirbot can own `/thread` and root `/plan` topic creation.
 
 Run locally in development:
 

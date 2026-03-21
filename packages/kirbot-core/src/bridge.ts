@@ -1,11 +1,17 @@
-import { statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, isAbsolute, resolve } from "node:path";
 import type { MessageEntity } from "grammy/types";
 
 import type { AppConfig } from "./config";
 import { BridgeDatabase } from "./db";
-import type { PendingCustomCommandAdd, SessionMode, TopicLifecycleEvent, TopicSession, UserTurnInput, UserTurnMessage } from "./domain";
+import type {
+  BridgeSession,
+  PersistedThreadSettings,
+  PendingCustomCommandAdd,
+  SessionMode,
+  TopicLifecycleEvent,
+  TopicSession,
+  UserTurnInput,
+  UserTurnMessage
+} from "./domain";
 import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
 import type { CollaborationMode } from "@kirbot/codex-client/generated/codex/CollaborationMode";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
@@ -128,6 +134,24 @@ type ThreadStartSettings = CodexThreadSettings & {
   cwd: string;
 };
 
+type SettingsSelectionScope = "thread" | "root" | "spawn";
+
+type ThreadSettingsTarget =
+  | {
+      scope: "thread";
+      session: TopicSession;
+      settings: ThreadStartSettings;
+    }
+  | {
+      scope: "root";
+      session: BridgeSession | null;
+      settings: PersistedThreadSettings;
+    }
+  | {
+      scope: "spawn";
+      settings: PersistedThreadSettings;
+    };
+
 export type TelegramCodexBridgeOptions = {
   topicIconPicker?: TopicIconPicker;
   restartKirbot?: () => Promise<void>;
@@ -141,15 +165,17 @@ const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or st
 const SETTINGS_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing settings";
 const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one";
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
-const START_USAGE_TEXT = "Usage: /start <path>";
+const THREAD_USAGE_TEXT = "Usage: /thread <initial prompt>";
 const RESTART_NOT_CONFIGURED_TEXT = "Restart is not configured for this kirbot deployment";
 const RESTARTING_KIRBOT_TEXT = "Rebuilding kirbot and restarting the production session…";
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled";
 const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
+const DEFAULT_ROOT_SESSION_TITLE = "Root Chat";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
+const ROOT_SESSION_PROVISIONING_TEXT = "The root Codex session is still provisioning. Try again in a moment";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -252,7 +278,7 @@ export class TelegramCodexBridge {
     return this.#lifecycle.getActiveTurnCount();
   }
 
-  getActiveTopics(): Array<{ chatId: number; topicId: number }> {
+  getActiveTopics(): Array<{ chatId: number; topicId: number | null }> {
     return this.#lifecycle.getActiveTopics();
   }
 
@@ -385,12 +411,45 @@ export class TelegramCodexBridge {
       return;
     }
 
+    const resolvedPendingInput = await this.tryResolveUserInput(message);
+    if (resolvedPendingInput) {
+      return;
+    }
+
+    const parsedCustomCommand = parseSlashCommandToken(message.text);
+    if (parsedCustomCommand) {
+      const handled = await this.tryHandleCustomCommandInvocation(message, parsedCustomCommand.command, parsedCustomCommand.argsText);
+      if (handled) {
+        return;
+      }
+    }
+
     if (looksLikeSlashCommand(message.text)) {
       await this.sendInvalidSlashCommandMessage(message);
       return;
     }
 
-    await this.startSessionFromRootMessage(message);
+    const session = await this.database.getRootSessionByChat(message.chatId);
+    if (!session) {
+      await this.startSessionFromRootMessage(message);
+      return;
+    }
+
+    if (!session.codexThreadId) {
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        text: ROOT_SESSION_PROVISIONING_TEXT
+      });
+      return;
+    }
+
+    const activeTurn = this.findActiveTurnByTopic(message.chatId, null);
+    if (activeTurn) {
+      await this.trySteerTurn(activeTurn, message);
+      return;
+    }
+
+    await this.sendTurnForSession(session, message);
   }
 
   private async handleTopicMessage(message: UserTurnMessage): Promise<void> {
@@ -469,8 +528,8 @@ export class TelegramCodexBridge {
       return;
     }
 
-    if (command.command === "start") {
-      await this.startSessionFromRootPath(message, command.argsText);
+    if (command.command === "thread") {
+      await this.startThreadSessionFromRootMessage(message, command.argsText);
       return;
     }
 
@@ -513,26 +572,17 @@ export class TelegramCodexBridge {
 
   private async handleRootCodexSlashCommand(message: UserTurnMessage, command: ParsedSlashCommand): Promise<void> {
     if (command.command === "fast") {
-      await this.handleFastSlashCommand(
-        {
-          chatId: message.chatId,
-          topicId: null
-        },
-        command.argsText
-      );
+      await this.openRootFastSelection(message.chatId, command.argsText);
       return;
     }
 
     if (command.command === "model") {
-      await this.openModelSelection({ chatId: message.chatId, topicId: null });
+      await this.openRootSettingsScopeSelection(message.chatId, "model");
       return;
     }
 
     if (command.command === "permissions" || command.command === "approvals") {
-      await this.openPermissionsSelection({
-        chatId: message.chatId,
-        topicId: null
-      });
+      await this.openRootSettingsScopeSelection(message.chatId, "permissions");
       return;
     }
 
@@ -662,7 +712,7 @@ export class TelegramCodexBridge {
     commandName: string,
     argsText: string
   ): Promise<boolean> {
-    if (message.topicId === null || isBuiltInSlashCommand(commandName)) {
+    if (isBuiltInSlashCommand(commandName)) {
       return false;
     }
 
@@ -673,17 +723,23 @@ export class TelegramCodexBridge {
 
     const expandedPrompt = expandCustomCommandPrompt(customCommand.prompt, argsText);
     const expandedMessage = replaceMessageText(message, expandedPrompt);
-    const session = await this.database.getSessionByTopic(message.chatId, message.topicId);
+    const session = await this.getSessionByLocation(message.chatId, message.topicId);
     if (!session) {
-      await this.startSessionInExistingTopic(expandedMessage);
+      if (message.topicId === null) {
+        await this.startSessionFromRootMessage(expandedMessage);
+      } else {
+        await this.startSessionInExistingTopic(expandedMessage);
+      }
       return true;
     }
 
     if (!session.codexThreadId) {
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
-        topicId: message.topicId,
-        text: "This topic is still provisioning a Codex session. Try again in a moment"
+        ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+        text: message.topicId === null
+          ? ROOT_SESSION_PROVISIONING_TEXT
+          : "This topic is still provisioning a Codex session. Try again in a moment"
       });
       return true;
     }
@@ -961,6 +1017,61 @@ export class TelegramCodexBridge {
     }
   }
 
+  private async openRootFastSelection(chatId: number, argsText: string): Promise<void> {
+    const normalizedArgs = argsText.trim().toLowerCase();
+    const fastAction =
+      !normalizedArgs
+        ? "toggle"
+        : normalizedArgs === "on" || normalizedArgs === "off" || normalizedArgs === "status"
+          ? normalizedArgs
+          : null;
+    if (!fastAction) {
+      await this.sendScopedBridgeMessage({
+        chatId,
+        text: FAST_USAGE_TEXT
+      });
+      return;
+    }
+
+    await this.#messenger.sendMessage({
+      chatId,
+      text: "Apply fast mode to:",
+      replyMarkup: {
+        inline_keyboard: [[
+          {
+            text: "Root Thread",
+            callback_data: `slash:fast:apply:root:${fastAction}`
+          }
+        ], [
+          {
+            text: "New /thread Topics",
+            callback_data: `slash:fast:apply:spawn:${fastAction}`
+          }
+        ]]
+      }
+    });
+  }
+
+  private async openRootSettingsScopeSelection(chatId: number, area: "model" | "permissions"): Promise<void> {
+    await this.#messenger.sendMessage({
+      chatId,
+      text: "Choose which settings to update",
+      replyMarkup: {
+        inline_keyboard: [[
+          {
+            text: "Root Thread",
+            callback_data: `slash:scope:${area}:root`
+          }
+        ], [
+          {
+            text: "New /thread Topics",
+            callback_data: `slash:scope:${area}:spawn`
+          }
+        ]]
+      }
+    });
+  }
+
   private async handleFastSlashCommand(
     location: {
       chatId: number;
@@ -1023,30 +1134,88 @@ export class TelegramCodexBridge {
     });
   }
 
+  private async applyRootFastSelection(
+    chatId: number,
+    scope: Exclude<SettingsSelectionScope, "thread">,
+    action: FastSelectionAction
+  ): Promise<boolean> {
+    const target = await this.resolveThreadSettingsTarget(
+      {
+        chatId,
+        topicId: null
+      },
+      scope,
+      {
+        rejectIfActiveTurn: action !== "status"
+      }
+    );
+    if (!target || (target.scope !== "root" && target.scope !== "spawn")) {
+      return false;
+    }
+
+    if (action === "status") {
+      await this.sendScopedBridgeMessage({
+        chatId,
+        text: buildScopedFastStatusMessage(target.scope, target.settings.serviceTier)
+      });
+      return true;
+    }
+
+    const nextTier =
+      action === "toggle"
+        ? target.settings.serviceTier === "fast" ? null : "fast"
+        : action === "on"
+          ? "fast"
+          : null;
+
+    await this.updateChatThreadSettingsDefaults(chatId, target.scope, {
+      serviceTier: nextTier
+    });
+    if (target.scope === "root" && target.session?.codexThreadId) {
+      await this.codex.updateThreadSettings(target.session.codexThreadId, {
+        serviceTier: nextTier
+      });
+    }
+
+    await this.sendScopedBridgeMessage({
+      chatId,
+      text: buildScopedFastUpdatedMessage(target.scope, nextTier)
+    });
+    return true;
+  }
+
   private async openPermissionsSelection(message: { chatId: number; topicId: number | null }): Promise<boolean> {
-    const target = await this.resolveCodexSettingsCommandTarget(message);
+    return this.openScopedPermissionsSelection(message, "thread");
+  }
+
+  private async openScopedPermissionsSelection(
+    message: { chatId: number; topicId: number | null },
+    scope: SettingsSelectionScope
+  ): Promise<boolean> {
+    const target = await this.resolveThreadSettingsTarget(message, scope);
     if (!target) {
       return false;
     }
 
-    const currentPresetId = detectCodexPermissionPreset(target.settings);
+    const currentPresetId = detectCodexPermissionPreset(toPermissionDetectionSettings(target.settings));
     const currentPreset = currentPresetId ? getCodexPermissionPreset(currentPresetId) : null;
 
     await this.#messenger.sendMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text: [
-        target.scope === "global" ? "Choose the global default Codex permissions" : "Choose Codex permissions for this thread",
+        describePermissionsSelectionTitle(target.scope),
         currentPreset ? `Current: ${currentPreset.label}` : "Current: Custom",
-        target.scope === "global"
-          ? "Your selection will apply to future threads"
-          : "Your selection will apply only to this topic"
+        describePermissionsSelectionScope(target.scope)
       ].join("\n"),
       replyMarkup: {
         inline_keyboard: CODEX_PERMISSION_PRESETS.map((preset) => [
           {
             text: `${preset.id === currentPresetId ? "• " : ""}${preset.label}`,
-            callback_data: `slash:permissions:apply:${preset.id}`
+            callback_data:
+              target.scope === "thread"
+                ? `slash:permissions:apply:${preset.id}`
+                : `slash:permissions:apply:${target.scope}:${preset.id}`
           }
         ])
       }
@@ -1056,9 +1225,10 @@ export class TelegramCodexBridge {
 
   private async openModelSelection(
     message: { chatId: number; topicId: number | null },
-    page = 0
+    page = 0,
+    scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
-    const target = await this.resolveCodexSettingsCommandTarget(message);
+    const target = await this.resolveThreadSettingsTarget(message, scope);
     if (!target) {
       return false;
     }
@@ -1083,7 +1253,7 @@ export class TelegramCodexBridge {
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text: [
-        target.scope === "global" ? "Choose the global default model" : "Choose the model for this thread",
+        describeModelSelectionTitle(target.scope),
         currentModel ? `Current: ${currentModel}` : "Current: unknown-model",
         "Then choose a reasoning effort"
       ].join("\n"),
@@ -1092,7 +1262,10 @@ export class TelegramCodexBridge {
           ...pageModels.map((model, index) => [
             {
               text: `${model.model === currentModel ? "• " : ""}${model.displayName}`,
-              callback_data: `slash:model:pick:${startIndex + index}`
+              callback_data:
+                target.scope === "thread"
+                  ? `slash:model:pick:${startIndex + index}`
+                  : `slash:model:pick:${target.scope}:${startIndex + index}`
             }
           ]),
           ...(totalPages > 1
@@ -1115,9 +1288,10 @@ export class TelegramCodexBridge {
 
   private async openModelReasoningSelection(
     message: { chatId: number; topicId: number | null },
-    modelIndex: number
+    modelIndex: number,
+    scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
-    const target = await this.resolveCodexSettingsCommandTarget(message);
+    const target = await this.resolveThreadSettingsTarget(message, scope);
     if (!target) {
       return false;
     }
@@ -1144,7 +1318,10 @@ export class TelegramCodexBridge {
         inline_keyboard: model.supportedReasoningEfforts.map((option) => [
           {
             text: `${option.reasoningEffort === currentEffort ? "• " : ""}${option.reasoningEffort}`,
-            callback_data: `slash:model:apply:${modelIndex}:${option.reasoningEffort}`
+            callback_data:
+              target.scope === "thread"
+                ? `slash:model:apply:${modelIndex}:${option.reasoningEffort}`
+                : `slash:model:apply:${target.scope}:${modelIndex}:${option.reasoningEffort}`
           }
         ])
       }
@@ -1155,7 +1332,8 @@ export class TelegramCodexBridge {
   private async applyModelSelection(
     message: { chatId: number; topicId: number | null },
     modelIndex: number,
-    reasoningEffort: ReasoningEffort
+    reasoningEffort: ReasoningEffort,
+    scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
     const models = await this.codex.listModels();
     const model = models[modelIndex];
@@ -1168,73 +1346,132 @@ export class TelegramCodexBridge {
       return false;
     }
 
-    const target = await this.resolveCodexSettingsCommandTarget(message, {
+    const target = await this.resolveThreadSettingsTarget(message, scope, {
       rejectIfActiveTurn: true
     });
     if (!target) {
       return false;
     }
 
-    if (target.scope === "global") {
-      await this.codex.updateGlobalSettings({
-        model: model.model,
-        reasoningEffort
-      });
-    } else {
+    if (target.scope === "thread") {
       await this.codex.updateThreadSettings(target.session.codexThreadId!, {
         model: model.model,
         reasoningEffort
       });
+    } else {
+      await this.updateChatThreadSettingsDefaults(message.chatId, target.scope, {
+        model: model.model,
+        reasoningEffort
+      });
+      if (target.scope === "root" && target.session?.codexThreadId) {
+        await this.codex.updateThreadSettings(target.session.codexThreadId, {
+          model: model.model,
+          reasoningEffort
+        });
+      }
     }
     await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
-      text:
-        target.scope === "global"
-          ? `Global default model set to ${model.model} ${reasoningEffort}`
-          : `Thread model set to ${model.model} ${reasoningEffort}`
+      text: buildModelUpdatedMessage(target.scope, model.model, reasoningEffort)
     });
     return true;
   }
 
   private async applyPermissionsSelection(
     message: { chatId: number; topicId: number | null },
-    presetId: CodexPermissionPresetId
+    presetId: CodexPermissionPresetId,
+    scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
     const preset = getCodexPermissionPreset(presetId);
-    const target = await this.resolveCodexSettingsCommandTarget(message, {
+    const target = await this.resolveThreadSettingsTarget(message, scope, {
       rejectIfActiveTurn: true
     });
     if (!target) {
       return false;
     }
 
-    if (target.scope === "global") {
-      await this.codex.updateGlobalSettings({
-        approvalPolicy: preset.approvalPolicy,
-        sandboxPolicy: preset.sandboxPolicy
-      });
-    } else {
+    if (target.scope === "thread") {
       await this.codex.updateThreadSettings(target.session.codexThreadId!, {
         approvalPolicy: preset.approvalPolicy,
         sandboxPolicy: preset.sandboxPolicy
       });
+    } else {
+      await this.updateChatThreadSettingsDefaults(message.chatId, target.scope, {
+        approvalPolicy: preset.approvalPolicy,
+        sandboxPolicy: preset.sandboxPolicy
+      });
+      if (target.scope === "root" && target.session?.codexThreadId) {
+        await this.codex.updateThreadSettings(target.session.codexThreadId, {
+          approvalPolicy: preset.approvalPolicy,
+          sandboxPolicy: preset.sandboxPolicy
+        });
+      }
     }
     await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
-      text:
-        target.scope === "global"
-          ? `Global default permissions set to ${preset.label}`
-          : `Thread permissions set to ${preset.label}`
+      text: buildPermissionsUpdatedMessage(target.scope, preset.label)
     });
     return true;
   }
 
   private async handleSlashCallbackQuery(event: CallbackQueryEvent): Promise<void> {
-    const [, area, action, value, extra] = event.data.split(":");
-    if (area === "permissions" && action === "apply" && isCodexPermissionPresetId(value)) {
-      const updated = await this.applyPermissionsSelection({ chatId: event.chatId, topicId: event.topicId }, value);
+    const [, area, action, ...rest] = event.data.split(":");
+    if (area === "scope" && (action === "model" || action === "permissions")) {
+      const scope = rest[0];
+      if (scope !== "root" && scope !== "spawn") {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Unsupported callback"
+        });
+        return;
+      }
+
+      const opened =
+        action === "model"
+          ? await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, 0, scope)
+          : await this.openScopedPermissionsSelection({ chatId: event.chatId, topicId: event.topicId }, scope);
+      await this.telegram.answerCallbackQuery(
+        event.callbackQueryId,
+        opened ? undefined : {
+          text: `${action === "model" ? "Model" : "Permissions"} picker unavailable`
+        }
+      );
+      return;
+    }
+
+    if (area === "fast" && action === "apply") {
+      const [scope, fastAction] = rest;
+      if ((scope !== "root" && scope !== "spawn") || !isFastSelectionAction(fastAction)) {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Unsupported callback"
+        });
+        return;
+      }
+
+      const updated = await this.applyRootFastSelection(event.chatId, scope, fastAction);
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: updated ? "Fast mode updated" : "Fast mode not updated"
+      });
+      return;
+    }
+
+    if (area === "permissions" && action === "apply") {
+      const [maybeScope, maybePreset] = rest;
+      const scope = maybePreset ? maybeScope : "thread";
+      const presetId = maybePreset ?? maybeScope;
+      if ((scope !== "thread" && scope !== "root" && scope !== "spawn") || !isCodexPermissionPresetId(presetId)) {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Unsupported callback"
+        });
+        return;
+      }
+
+      const updated = await this.applyPermissionsSelection(
+        { chatId: event.chatId, topicId: event.topicId },
+        presetId,
+        scope
+      );
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: updated ? "Permissions updated" : "Permissions not updated"
       });
@@ -1242,7 +1479,7 @@ export class TelegramCodexBridge {
     }
 
     if (area === "model" && action === "page") {
-      const page = Number.parseInt(value ?? "", 10);
+      const page = Number.parseInt(rest[0] ?? "", 10);
       if (Number.isNaN(page)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model page"
@@ -1261,7 +1498,10 @@ export class TelegramCodexBridge {
     }
 
     if (area === "model" && action === "pick") {
-      const modelIndex = Number.parseInt(value ?? "", 10);
+      const [maybeScope, maybeModelIndex] = rest;
+      const scope = maybeModelIndex ? maybeScope : "thread";
+      const modelIndexText = maybeModelIndex ?? maybeScope;
+      const modelIndex = Number.parseInt(modelIndexText ?? "", 10);
       if (Number.isNaN(modelIndex)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model selection"
@@ -1269,7 +1509,18 @@ export class TelegramCodexBridge {
         return;
       }
 
-      const opened = await this.openModelReasoningSelection({ chatId: event.chatId, topicId: event.topicId }, modelIndex);
+      if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Invalid model selection"
+        });
+        return;
+      }
+
+      const opened = await this.openModelReasoningSelection(
+        { chatId: event.chatId, topicId: event.topicId },
+        modelIndex,
+        scope
+      );
       await this.telegram.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
@@ -1280,15 +1531,31 @@ export class TelegramCodexBridge {
     }
 
     if (area === "model" && action === "apply") {
-      const modelIndex = Number.parseInt(value ?? "", 10);
-      if (Number.isNaN(modelIndex) || !isReasoningEffort(extra)) {
+      const [first, second, third] = rest;
+      const scope = third ? first : "thread";
+      const modelIndexText = third ? second : first;
+      const reasoningEffort = third ?? second;
+      const modelIndex = Number.parseInt(modelIndexText ?? "", 10);
+      if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid reasoning selection"
         });
         return;
       }
 
-      const updated = await this.applyModelSelection({ chatId: event.chatId, topicId: event.topicId }, modelIndex, extra);
+      if (Number.isNaN(modelIndex) || !isReasoningEffort(reasoningEffort)) {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Invalid reasoning selection"
+        });
+        return;
+      }
+
+      const updated = await this.applyModelSelection(
+        { chatId: event.chatId, topicId: event.topicId },
+        modelIndex,
+        reasoningEffort,
+        scope
+      );
       await this.telegram.answerCallbackQuery(event.callbackQueryId, {
         text: updated ? "Model updated" : "Model not updated"
       });
@@ -1301,22 +1568,30 @@ export class TelegramCodexBridge {
   }
 
   private async startSessionFromRootMessage(message: UserTurnMessage): Promise<void> {
-    const title = deriveTopicTitle(message.text);
-    const forumTopic = await this.telegram.createForumTopic(
-      message.chatId,
-      title,
-      await this.#topicIconPicker.pickCreateForumTopicOptions()
-    );
-    await this.startSessionInTopic(
-      {
-        ...message,
-        topicId: forumTopic.message_thread_id
-      },
-      title,
-      {
-        initialPromptText: message.text
+    const pending = await this.database.createProvisioningSession({
+      telegramChatId: String(message.chatId),
+      surface: { kind: "root" }
+    });
+
+    try {
+      const rootSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.root);
+      const thread = await this.codex.createThread(DEFAULT_ROOT_SESSION_TITLE, {
+        settings: toCodexThreadSettingsOverride(rootSettings)
+      });
+      await this.database.activateSession(pending.id, thread.threadId);
+      const session = await this.database.getRootSessionByChat(message.chatId);
+      if (!session) {
+        throw new Error("Failed to load root session after activation");
       }
-    );
+
+      await this.sendTurnForSession(session, message);
+    } catch (error) {
+      await this.database.markSessionErrored(pending.id);
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        text: `Failed to create Codex session for "${DEFAULT_ROOT_SESSION_TITLE}": ${formatError(error)}`
+      });
+    }
   }
 
   private async startPlanSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
@@ -1347,55 +1622,32 @@ export class TelegramCodexBridge {
     );
   }
 
-  private async startSessionFromRootPath(message: UserTurnMessage, pathText: string): Promise<void> {
-    const trimmedPath = pathText.trim();
-    if (!trimmedPath) {
+  private async startThreadSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
+    const trimmedPrompt = promptText.trim();
+    if (!trimmedPrompt) {
       await this.#messenger.sendMessage({
         chatId: message.chatId,
-        text: START_USAGE_TEXT
+        text: THREAD_USAGE_TEXT
       });
       return;
     }
 
-    const effectiveSettings = await this.codex.readGlobalSettings();
-    const resolvedPath = resolveKirbotPath(trimmedPath, effectiveSettings.cwd);
-    let stats;
-    try {
-      stats = statSync(resolvedPath);
-    } catch {
-      await this.#messenger.sendMessage({
-        chatId: message.chatId,
-        text: `Directory not found: ${resolvedPath}`
-      });
-      return;
-    }
-
-    if (!stats.isDirectory()) {
-      await this.#messenger.sendMessage({
-        chatId: message.chatId,
-        text: `Not a directory: ${resolvedPath}`
-      });
-      return;
-    }
-
-    const title = basename(resolvedPath) || resolvedPath;
+    const title = deriveTopicTitle(trimmedPrompt);
     const forumTopic = await this.telegram.createForumTopic(
       message.chatId,
       title,
       await this.#topicIconPicker.pickCreateForumTopicOptions()
     );
 
-    await this.startSessionInTopic(
-      {
-        ...message,
-        topicId: forumTopic.message_thread_id
-      },
-      title,
-      {
-        startInitialTurn: false,
-        threadCwd: resolvedPath
-      }
-    );
+    const topicMessage = {
+      ...message,
+      topicId: forumTopic.message_thread_id
+    };
+
+    await this.startSessionInTopic(topicMessage, title, {
+      initialPromptText: trimmedPrompt,
+      firstTurnMessage: replaceMessageText(topicMessage, trimmedPrompt)
+    });
   }
 
   private async startSessionInExistingTopic(message: UserTurnMessage): Promise<void> {
@@ -1422,17 +1674,24 @@ export class TelegramCodexBridge {
     if (message.topicId === null) {
       throw new Error("Cannot start a session without a Telegram topic id");
     }
+    const topicId = message.topicId;
 
     const pending = await this.database.createProvisioningSession({
       telegramChatId: String(message.chatId),
-      telegramTopicId: message.topicId
+      telegramTopicId: topicId
     });
 
     try {
+      const spawnSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.spawn);
       const thread = await this.codex.createThread(title, {
-        ...(options?.threadCwd ? { cwd: options.threadCwd } : {})
+        ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
+        settings: toCodexThreadSettingsOverride(spawnSettings)
       });
-      let session = await this.database.activateSession(pending.id, thread.threadId);
+      await this.database.activateSession(pending.id, thread.threadId);
+      let session = await this.database.getSessionByTopic(message.chatId, topicId);
+      if (!session) {
+        throw new Error(`Failed to load topic session ${topicId} after activation`);
+      }
 
       if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
         session = await this.database.updateSessionPreferredMode(
@@ -1520,6 +1779,94 @@ export class TelegramCodexBridge {
     }
   }
 
+  private async getChatThreadSettingsDefaults(
+    chatId: number
+  ): Promise<{
+    root: PersistedThreadSettings;
+    spawn: PersistedThreadSettings;
+  }> {
+    const existing = await this.database.getChatThreadDefaults(String(chatId));
+    if (existing) {
+      return {
+        root: existing.root,
+        spawn: existing.spawn
+      };
+    }
+
+    const globalSettings = await this.codex.readGlobalSettings();
+    const defaults = toPersistedThreadSettings(globalSettings);
+    await this.database.upsertChatThreadDefaults(String(chatId), {
+      root: defaults,
+      spawn: defaults
+    });
+    return {
+      root: defaults,
+      spawn: defaults
+    };
+  }
+
+  private async updateChatThreadSettingsDefaults(
+    chatId: number,
+    scope: Exclude<SettingsSelectionScope, "thread">,
+    update: CodexThreadSettingsOverride
+  ): Promise<PersistedThreadSettings> {
+    const defaults = await this.getChatThreadSettingsDefaults(chatId);
+    const nextScopeSettings = mergePersistedThreadSettings(defaults[scope], update);
+    await this.database.upsertChatThreadDefaults(String(chatId), {
+      ...defaults,
+      [scope]: nextScopeSettings
+    });
+    return nextScopeSettings;
+  }
+
+  private async resolveThreadSettingsTarget(
+    message: { chatId: number; topicId: number | null },
+    scope: SettingsSelectionScope,
+    options?: {
+      rejectIfActiveTurn?: boolean;
+    }
+  ): Promise<ThreadSettingsTarget | null> {
+    if (scope === "thread") {
+      if (message.topicId === null) {
+        return null;
+      }
+
+      const resolved = await this.resolveCodexSettingsCommandTarget(message, options);
+      if (!resolved || resolved.scope !== "thread") {
+        return null;
+      }
+
+      return {
+        scope: "thread",
+        session: resolved.session,
+        settings: resolved.settings
+      };
+    }
+
+    const defaults = await this.getChatThreadSettingsDefaults(message.chatId);
+    if (scope === "root") {
+      const session = await this.database.getRootSessionByChat(message.chatId);
+      if (options?.rejectIfActiveTurn && this.findActiveTurnByTopic(message.chatId, null)) {
+        await this.sendScopedBridgeMessage({
+          chatId: message.chatId,
+          text: SETTINGS_CHANGE_REJECTED_TEXT
+        });
+        return null;
+      }
+
+      return {
+        scope: "root",
+        session: session ?? null,
+        settings: defaults.root
+      };
+    }
+
+    return {
+      scope: "spawn",
+      settings: defaults.spawn
+    };
+  }
+
   private async resolveCodexSettingsCommandTarget(
     location: {
       chatId: number;
@@ -1574,7 +1921,7 @@ export class TelegramCodexBridge {
   }
 
   private async sendTurnForSession(
-    session: TopicSession,
+    session: TopicSession | BridgeSession,
     message: UserTurnMessage,
     options?: {
       forceMode?: SessionMode;
@@ -1582,10 +1929,6 @@ export class TelegramCodexBridge {
   ): Promise<void> {
     if (!session.codexThreadId) {
       throw new Error(`Session ${session.id} has no Codex thread id`);
-    }
-
-    if (message.topicId === null) {
-      throw new Error("Cannot send a Codex turn without a Telegram topic id");
     }
 
     const effectiveSettings = await this.codex.ensureThreadLoaded(session.codexThreadId);
@@ -1855,7 +2198,7 @@ export class TelegramCodexBridge {
 
     await this.sendScopedBridgeMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
-      topicId: session.telegramTopicId,
+      topicId: session.surface.kind === "topic" ? session.surface.topicId : null,
       text: "Context compacted"
     });
   }
@@ -1889,7 +2232,7 @@ export class TelegramCodexBridge {
     }
   }
 
-  private findActiveTurnByTopic(chatId: number, topicId: number): TurnContext | undefined {
+  private findActiveTurnByTopic(chatId: number, topicId: number | null): TurnContext | undefined {
     return this.#lifecycle.getActiveTurnByTopic(chatId, topicId);
   }
 
@@ -1948,10 +2291,6 @@ export class TelegramCodexBridge {
   }
 
   private async trySteerTurn(activeTurn: TurnContext, message: UserTurnMessage): Promise<void> {
-    if (message.topicId === null) {
-      return;
-    }
-
     const pending = this.#lifecycle.queuePendingSteer(activeTurn.turnId, message);
     if (!pending) {
       return;
@@ -2015,8 +2354,8 @@ export class TelegramCodexBridge {
     }
   }
 
-  private async submitQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): Promise<void> {
-    const session = await this.database.getSessionByTopic(chatId, topicId);
+  private async submitQueuedFollowUp(chatId: number, topicId: number | null, message: UserTurnMessage): Promise<void> {
+    const session = await this.getSessionByLocation(chatId, topicId);
     if (!session?.codexThreadId) {
       return;
     }
@@ -2097,7 +2436,7 @@ export class TelegramCodexBridge {
     this.#queuePreviewMessageIds.set(key, message.messageId);
   }
 
-  private async maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void> {
+  private async maybeSendNextQueuedFollowUp(chatId: number, topicId: number | null): Promise<void> {
     if (this.findActiveTurnByTopic(chatId, topicId)) {
       return;
     }
@@ -2107,7 +2446,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const session = await this.database.getSessionByTopic(chatId, topicId);
+    const session = await this.getSessionByLocation(chatId, topicId);
     if (!session?.codexThreadId) {
       return;
     }
@@ -2115,6 +2454,12 @@ export class TelegramCodexBridge {
     await this.sendTurnForSession(session, nextMessage);
     this.#lifecycle.shiftNextQueuedFollowUp(chatId, topicId);
     await this.syncQueuePreview(this.#lifecycle.getQueueState(chatId, topicId));
+  }
+
+  private async getSessionByLocation(chatId: number, topicId: number | null): Promise<BridgeSession | undefined> {
+    return topicId === null
+      ? this.database.getRootSessionByChat(chatId)
+      : this.database.getSessionBySurface(chatId, { kind: "topic", topicId });
   }
 
 }
@@ -2209,8 +2554,8 @@ function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string):
   };
 }
 
-function topicKey(chatId: number, topicId: number): string {
-  return `${chatId}:${topicId}`;
+function topicKey(chatId: number, topicId: number | null): string {
+  return topicId === null ? `${chatId}:root` : `${chatId}:${topicId}`;
 }
 
 function buildFastStatusMessage(scope: "global" | "thread", serviceTier: ServiceTier | null): string {
@@ -2225,21 +2570,123 @@ function buildFastUpdatedMessage(scope: "global" | "thread", serviceTier: Servic
     : `Thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`;
 }
 
-function resolveKirbotPath(pathText: string, baseCwd: string): string {
-  const expandedPath = expandHomePath(pathText);
-  return isAbsolute(expandedPath) ? resolve(expandedPath) : resolve(baseCwd, expandedPath);
+type FastSelectionAction = "toggle" | "on" | "off" | "status";
+
+function isFastSelectionAction(value: string | undefined): value is FastSelectionAction {
+  return value === "toggle" || value === "on" || value === "off" || value === "status";
 }
 
-function expandHomePath(pathText: string): string {
-  if (pathText === "~") {
-    return homedir();
+function buildScopedFastStatusMessage(scope: Exclude<SettingsSelectionScope, "thread">, serviceTier: ServiceTier | null): string {
+  return scope === "root"
+    ? `Root thread fast mode is ${serviceTier === "fast" ? "on" : "off"}`
+    : `New thread default fast mode is ${serviceTier === "fast" ? "on" : "off"}`;
+}
+
+function buildScopedFastUpdatedMessage(scope: Exclude<SettingsSelectionScope, "thread">, serviceTier: ServiceTier | null): string {
+  return scope === "root"
+    ? `Root thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`
+    : `New thread default fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`;
+}
+
+function describeModelSelectionTitle(scope: SettingsSelectionScope): string {
+  switch (scope) {
+    case "thread":
+      return "Choose the model for this thread";
+    case "root":
+      return "Choose the model for the root thread";
+    case "spawn":
+      return "Choose the default model for new /thread topics";
+  }
+}
+
+function describePermissionsSelectionTitle(scope: SettingsSelectionScope): string {
+  switch (scope) {
+    case "thread":
+      return "Choose Codex permissions for this thread";
+    case "root":
+      return "Choose Codex permissions for the root thread";
+    case "spawn":
+      return "Choose default Codex permissions for new /thread topics";
+  }
+}
+
+function describePermissionsSelectionScope(scope: SettingsSelectionScope): string {
+  switch (scope) {
+    case "thread":
+      return "Your selection will apply only to this topic";
+    case "root":
+      return "Your selection will apply to the root thread";
+    case "spawn":
+      return "Your selection will apply to future /thread topics";
+  }
+}
+
+function buildModelUpdatedMessage(scope: SettingsSelectionScope, model: string, reasoningEffort: ReasoningEffort): string {
+  switch (scope) {
+    case "thread":
+      return `Thread model set to ${model} ${reasoningEffort}`;
+    case "root":
+      return `Root thread model set to ${model} ${reasoningEffort}`;
+    case "spawn":
+      return `New thread default model set to ${model} ${reasoningEffort}`;
+  }
+}
+
+function buildPermissionsUpdatedMessage(scope: SettingsSelectionScope, label: string): string {
+  switch (scope) {
+    case "thread":
+      return `Thread permissions set to ${label}`;
+    case "root":
+      return `Root thread permissions set to ${label}`;
+    case "spawn":
+      return `New thread default permissions set to ${label}`;
+  }
+}
+
+function toPersistedThreadSettings(settings: Pick<CodexThreadSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy">): PersistedThreadSettings {
+  return {
+    model: settings.model,
+    reasoningEffort: settings.reasoningEffort,
+    serviceTier: settings.serviceTier,
+    approvalPolicy: settings.approvalPolicy,
+    sandboxPolicy: settings.sandboxPolicy
+  };
+}
+
+function mergePersistedThreadSettings(
+  current: PersistedThreadSettings,
+  update: CodexThreadSettingsOverride
+): PersistedThreadSettings {
+  return {
+    model: update.model ?? current.model,
+    reasoningEffort: "reasoningEffort" in update ? update.reasoningEffort ?? null : current.reasoningEffort,
+    serviceTier: "serviceTier" in update ? update.serviceTier ?? null : current.serviceTier,
+    approvalPolicy: update.approvalPolicy ?? current.approvalPolicy,
+    sandboxPolicy: update.sandboxPolicy ?? current.sandboxPolicy
+  };
+}
+
+function toCodexThreadSettingsOverride(settings: PersistedThreadSettings): CodexThreadSettingsOverride {
+  return {
+    ...(settings.model ? { model: settings.model } : {}),
+    reasoningEffort: settings.reasoningEffort,
+    serviceTier: settings.serviceTier,
+    ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
+    ...(settings.sandboxPolicy ? { sandboxPolicy: settings.sandboxPolicy } : {})
+  };
+}
+
+function toPermissionDetectionSettings(
+  settings: PersistedThreadSettings | ThreadStartSettings
+): Pick<CodexThreadSettings, "approvalPolicy" | "sandboxPolicy"> | null {
+  if (!settings.approvalPolicy || !settings.sandboxPolicy) {
+    return null;
   }
 
-  if (pathText.startsWith("~/")) {
-    return `${homedir()}${pathText.slice(1)}`;
-  }
-
-  return pathText;
+  return {
+    approvalPolicy: settings.approvalPolicy,
+    sandboxPolicy: settings.sandboxPolicy
+  };
 }
 
 function looksLikeSlashCommand(text: string): boolean {

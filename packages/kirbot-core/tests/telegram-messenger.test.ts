@@ -124,6 +124,27 @@ describe("TelegramMessenger", () => {
     ]);
   });
 
+  it("sends root-surface messages without a thread id", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+
+    await messenger.sendMessage({
+      chatId: 1,
+      topicId: null,
+      text: "Root response"
+    });
+
+    expect(telegram.sentMessages).toEqual([
+      {
+        chatId: 1,
+        text: "Root response",
+        options: {
+          disable_notification: true
+        }
+      }
+    ]);
+  });
+
   it("allows persistent messages to notify when requested", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);

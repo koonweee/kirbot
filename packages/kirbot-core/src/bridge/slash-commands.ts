@@ -3,7 +3,7 @@ export type TelegramBotCommand = {
   description: string;
 };
 
-export type KirbotSlashCommand = "stop" | "plan" | "start" | "restart" | "implement" | "cmd";
+export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "implement" | "cmd";
 export type CodexSlashCommand = "model" | "fast" | "approvals" | "permissions";
 export type SlashCommandName = KirbotSlashCommand | CodexSlashCommand;
 export type SlashCommandKind = "kirbot" | "codex";
@@ -47,8 +47,8 @@ const SLASH_COMMAND_DEFINITIONS = [
     allowInTopic: true
   },
   {
-    command: "start",
-    description: "Start an empty session in a directory",
+    command: "thread",
+    description: "Start a new topic thread",
     kind: "kirbot",
     visible: true,
     allowInRoot: true,

@@ -48,10 +48,6 @@ export class TurnLifecycleCoordinator {
     serviceTier: ServiceTier | null = null,
     mode: SessionMode = "default"
   ): TurnContext {
-    if (message.topicId === null) {
-      throw new Error("Cannot create an active turn without a Telegram topic id");
-    }
-
     const startedAtMs = Date.now();
     const context: TurnContext = {
       chatId: message.chatId,
@@ -102,7 +98,7 @@ export class TurnLifecycleCoordinator {
     return this.#turns.get(turnId);
   }
 
-  getActiveTurnByTopic(chatId: number, topicId: number): TurnContext | undefined {
+  getActiveTurnByTopic(chatId: number, topicId: number | null): TurnContext | undefined {
     const runtimeTurn = this.deps.runtime.getActiveTurnByTopic(chatId, topicId);
     return runtimeTurn ? this.#turns.get(runtimeTurn.turnId) : undefined;
   }
@@ -121,7 +117,7 @@ export class TurnLifecycleCoordinator {
     return true;
   }
 
-  getQueueState(chatId: number, topicId: number): QueueStateSnapshot {
+  getQueueState(chatId: number, topicId: number | null): QueueStateSnapshot {
     return this.deps.runtime.getQueueState(chatId, topicId);
   }
 
@@ -129,7 +125,7 @@ export class TurnLifecycleCoordinator {
     return this.#turns.size;
   }
 
-  getActiveTopics(): Array<{ chatId: number; topicId: number }> {
+  getActiveTopics(): Array<{ chatId: number; topicId: number | null }> {
     return Array.from(this.#turns.values()).map((turn) => ({
       chatId: turn.chatId,
       topicId: turn.topicId
@@ -153,23 +149,23 @@ export class TurnLifecycleCoordinator {
     return this.deps.runtime.queuePendingSteer(runtimeTurn, message);
   }
 
-  movePendingSteerToQueued(chatId: number, topicId: number, localId: string): QueueStateSnapshot {
+  movePendingSteerToQueued(chatId: number, topicId: number | null, localId: string): QueueStateSnapshot {
     return this.deps.runtime.movePendingSteerToQueued(chatId, topicId, localId);
   }
 
-  dropPendingSteer(chatId: number, topicId: number, localId: string): QueueStateSnapshot {
+  dropPendingSteer(chatId: number, topicId: number | null, localId: string): QueueStateSnapshot {
     return this.deps.runtime.dropPendingSteer(chatId, topicId, localId);
   }
 
-  peekNextQueuedFollowUp(chatId: number, topicId: number): UserTurnMessage | undefined {
+  peekNextQueuedFollowUp(chatId: number, topicId: number | null): UserTurnMessage | undefined {
     return this.deps.runtime.peekNextQueuedFollowUp(chatId, topicId);
   }
 
-  shiftNextQueuedFollowUp(chatId: number, topicId: number): UserTurnMessage | undefined {
+  shiftNextQueuedFollowUp(chatId: number, topicId: number | null): UserTurnMessage | undefined {
     return this.deps.runtime.shiftNextQueuedFollowUp(chatId, topicId);
   }
 
-  prependQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): QueueStateSnapshot {
+  prependQueuedFollowUp(chatId: number, topicId: number | null, message: UserTurnMessage): QueueStateSnapshot {
     return this.deps.runtime.prependQueuedFollowUp(chatId, topicId, message);
   }
 
