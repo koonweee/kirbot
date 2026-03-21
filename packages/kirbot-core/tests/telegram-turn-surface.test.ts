@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
 import { createTelegramTurnSurface } from "../src/bridge/telegram-turn-surface";
-import type { AssistantRenderUpdate } from "../src/turn-runtime";
 import { TelegramMessenger, type TelegramApi, type TelegramCreateForumTopicOptions } from "../src/telegram-messenger";
 
 class FakeTelegram implements TelegramApi {
@@ -86,18 +85,6 @@ class FakeTelegram implements TelegramApi {
   }
 }
 
-function createAssistantUpdate(text: string): AssistantRenderUpdate {
-  return {
-    itemId: "agent-1",
-    itemText: text,
-    itemPhase: null,
-    draftText: text,
-    draftKind: "assistant",
-    finalText: text,
-    startedAssistantText: true
-  };
-}
-
 describe("Telegram turn surfaces", () => {
   it("uses a dedicated status bubble in the default mode", async () => {
     const telegram = new FakeTelegram();
@@ -121,7 +108,7 @@ describe("Telegram turn surfaces", () => {
     ]);
   });
 
-  it("ignores assistant streaming updates in the default mode", async () => {
+  it("does not expose assistant streaming updates in the default mode", async () => {
     const telegram = new FakeTelegram();
     const surface = createTelegramTurnSurface({
       messenger: new TelegramMessenger(telegram),
@@ -129,14 +116,7 @@ describe("Telegram turn surfaces", () => {
       topicId: 777
     });
 
-    await surface.updateStatus({ text: "thinking" }, true);
-    await surface.applyAssistantRenderUpdate(createAssistantUpdate("Hello world."), {
-      force: true,
-      commit: false
-    });
-
-    expect(telegram.sentMessages).toHaveLength(1);
-    expect(telegram.edits).toHaveLength(0);
+    expect("applyAssistantRenderUpdate" in surface).toBe(false);
   });
 
   it("sends a final assistant bubble and deletes the status bubble on success", async () => {
@@ -222,30 +202,5 @@ describe("Telegram turn surfaces", () => {
     expect(messageId).toBe(2);
     expect(telegram.sentMessages.map((entry) => entry.text)).toEqual(["thinking", "Final answer"]);
     expect(telegram.deletions).toHaveLength(0);
-  });
-
-  it("can still select the edit-streaming surface explicitly", async () => {
-    const telegram = new FakeTelegram();
-    const surface = createTelegramTurnSurface({
-      messenger: new TelegramMessenger(telegram),
-      chatId: -1001,
-      topicId: 777,
-      mode: "edit_streaming"
-    });
-
-    await surface.updateStatus({ text: "thinking" }, true);
-    await surface.applyAssistantRenderUpdate(createAssistantUpdate("Hello world."), {
-      force: true,
-      commit: false
-    });
-
-    expect(telegram.sentMessages).toHaveLength(1);
-    expect(telegram.edits).toEqual([
-      {
-        chatId: -1001,
-        messageId: 1,
-        text: "Hello world."
-      }
-    ]);
   });
 });

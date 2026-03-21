@@ -1,25 +1,17 @@
 import type { MessageEntity } from "grammy/types";
-import type { AssistantRenderUpdate } from "../turn-runtime";
 import type {
   InlineKeyboardMarkup,
   TelegramMessenger,
   TelegramRenderedMessage
 } from "../telegram-messenger";
-import { EditStreamingTurnSurface } from "./telegram-streaming";
 
 export type TelegramVisibleMessageRenderOptions = {
   disableNotification?: boolean;
   replyMarkup?: InlineKeyboardMarkup;
 };
 
-export type TelegramTurnSurfaceMode = "status_then_final_message" | "edit_streaming";
-
 export interface TelegramTurnSurface {
   updateStatus(rendered: TelegramRenderedMessage, force?: boolean): Promise<void>;
-  applyAssistantRenderUpdate(
-    update: AssistantRenderUpdate,
-    options?: { commit?: boolean; force?: boolean }
-  ): Promise<void>;
   publishFinalAssistantMessage(
     rendered: TelegramRenderedMessage,
     options?: TelegramVisibleMessageRenderOptions
@@ -32,16 +24,11 @@ export function createTelegramTurnSurface(input: {
   messenger: TelegramMessenger;
   chatId: number;
   topicId: number | null;
-  mode?: TelegramTurnSurfaceMode;
 }): TelegramTurnSurface {
-  if (input.mode === "edit_streaming") {
-    return new EditStreamingTurnSurface(input.messenger, input.chatId, input.topicId);
-  }
-
-  return new StatusThenFinalMessageTurnSurface(input.messenger, input.chatId, input.topicId);
+  return new TelegramStatusBubbleTurnSurface(input.messenger, input.chatId, input.topicId);
 }
 
-class StatusThenFinalMessageTurnSurface implements TelegramTurnSurface {
+class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
   #statusMessageId: number | null = null;
   #closed = false;
   #currentStatusMessage: TelegramRenderedMessage | null = null;
@@ -65,13 +52,6 @@ class StatusThenFinalMessageTurnSurface implements TelegramTurnSurface {
 
     this.#latestStatusMessage = rendered;
     await this.#runExclusive(() => this.#flushStatus(force));
-  }
-
-  async applyAssistantRenderUpdate(
-    _update: AssistantRenderUpdate,
-    _options?: { commit?: boolean; force?: boolean }
-  ): Promise<void> {
-    return;
   }
 
   async publishFinalAssistantMessage(

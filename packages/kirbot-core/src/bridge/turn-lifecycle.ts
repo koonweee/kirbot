@@ -15,7 +15,7 @@ import {
   renderTelegramStatusDraft,
   type TurnStatusDraft
 } from "./presentation";
-import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
+import { type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import { createTelegramTurnSurface } from "./telegram-turn-surface";
 import {
@@ -57,15 +57,12 @@ export class TurnLifecycleCoordinator {
       stopRequested: false,
       submitPendingSteersAfterInterrupt: false,
       startedAtMs,
-      surfaceMode: this.deps.telegramTurnSurfaceMode ?? "status_then_final_message",
-      draftMode: "status",
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: startedAtMs,
       visibleMessageHandle: createTelegramTurnSurface({
         messenger: this.deps.messenger,
         chatId: message.chatId,
-        topicId: message.topicId,
-        ...(this.deps.telegramTurnSurfaceMode ? { mode: this.deps.telegramTurnSurfaceMode } : {})
+        topicId: message.topicId
       }),
       statusElapsedTimer: null,
       compactionNoticeSent: false,
@@ -219,7 +216,7 @@ export class TurnLifecycleCoordinator {
 
   async publishCurrentStatus(turnId: string, force = true): Promise<void> {
     const context = this.#turns.get(turnId);
-    if (!context || context.phase !== "active" || !context.statusDraft || context.draftMode !== "status") {
+    if (!context || context.phase !== "active" || !context.statusDraft) {
       return;
     }
 
@@ -268,16 +265,7 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleAssistantDelta(turnId: string, itemId: string, delta: string): Promise<void> {
-    const context = this.#turns.get(turnId);
-    const update = this.deps.runtime.appendAssistantDelta(turnId, itemId, delta);
-    if (!context || !update) {
-      return;
-    }
-
-    await this.handleAssistantRenderUpdate(context, update, {
-      commit: false,
-      force: false
-    });
+    this.deps.runtime.appendAssistantDelta(turnId, itemId, delta);
   }
 
   async handleItemCompleted(turnId: string, item: ThreadItem): Promise<void> {
@@ -300,16 +288,7 @@ export class TurnLifecycleCoordinator {
     }
 
     if (item.type === "agentMessage") {
-      const context = this.#turns.get(turnId);
-      const update = this.deps.runtime.commitAssistantItem(turnId, item.id, item.text, item.phase);
-      if (!context || !update) {
-        return;
-      }
-
-      await this.handleAssistantRenderUpdate(context, update, {
-        commit: true,
-        force: true
-      });
+      this.deps.runtime.commitAssistantItem(turnId, item.id, item.text, item.phase);
       return;
     }
 
@@ -399,27 +378,6 @@ export class TurnLifecycleCoordinator {
     }
   }
 
-  private async handleAssistantRenderUpdate(
-    context: TurnContext,
-    update: AssistantRenderUpdate,
-    options?: { commit?: boolean; force?: boolean }
-  ): Promise<void> {
-    if (update.itemPhase === "commentary") {
-      return;
-    }
-
-    if (update.draftKind === "assistant") {
-      if (context.surfaceMode === "edit_streaming") {
-        context.draftMode = "assistant";
-        context.statusDraft = null;
-      }
-      await context.visibleMessageHandle.applyAssistantRenderUpdate(update, {
-        force: options?.force ?? false,
-        commit: options?.commit ?? false
-      });
-    }
-  }
-
   private async setStatusDraft(
     context: TurnContext,
     nextStatus: TurnStatusDraft,
@@ -436,10 +394,6 @@ export class TurnLifecycleCoordinator {
 
     context.statusDraft = nextStatus;
     context.lastStatusUpdateAt = now;
-    if (context.draftMode !== "status") {
-      return;
-    }
-
     const rendered = renderTelegramStatusDraft(nextStatus, Date.now() - context.startedAtMs);
     if (!rendered) {
       return;

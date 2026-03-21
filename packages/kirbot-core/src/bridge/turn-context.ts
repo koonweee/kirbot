@@ -3,12 +3,10 @@ import type { SessionMode } from "../domain";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
-import type { TelegramTurnSurface, TelegramTurnSurfaceMode } from "./telegram-turn-surface";
+import type { TelegramTurnSurface } from "./telegram-turn-surface";
 
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
 export type TerminalTurnStatus = Extract<TurnPhase, "completed" | "failed" | "interrupted">;
-
-export type TurnDraftMode = "status" | "assistant";
 
 export type TurnContext = {
   chatId: number;
@@ -19,8 +17,6 @@ export type TurnContext = {
   stopRequested: boolean;
   submitPendingSteersAfterInterrupt: boolean;
   startedAtMs: number;
-  surfaceMode: TelegramTurnSurfaceMode;
-  draftMode: TurnDraftMode;
   statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
   visibleMessageHandle: TelegramTurnSurface;
