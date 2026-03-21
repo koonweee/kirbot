@@ -34,8 +34,8 @@ export type TurnLifecycleDependencies = {
   releaseTurnFiles(turnId: string): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
-  maybeSendNextQueuedFollowUp(chatId: number, topicId: number): Promise<void>;
-  submitQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): Promise<void>;
+  maybeSendNextQueuedFollowUp(chatId: number, topicId: number | null): Promise<void>;
+  submitQueuedFollowUp(chatId: number, topicId: number | null, message: UserTurnMessage): Promise<void>;
 };
 
 type TurnFinalizerCallbacks = {

@@ -56,7 +56,7 @@ export type ActivityLogLabel =
 
 export type RuntimeTurn = {
   chatId: number;
-  topicId: number;
+  topicId: number | null;
   threadId: string;
   turnId: string;
   assistantItemOrder: string[];
@@ -82,7 +82,7 @@ type TopicState = {
 
 export type QueueStateSnapshot = {
   chatId: number;
-  topicId: number;
+  topicId: number | null;
   pendingSteers: string[];
   queuedFollowUps: string[];
 };
@@ -111,7 +111,7 @@ export class BridgeTurnRuntime {
 
   registerTurn(input: {
     chatId: number;
-    topicId: number;
+    topicId: number | null;
     threadId: string;
     turnId: string;
   }): RuntimeTurn {
@@ -138,7 +138,7 @@ export class BridgeTurnRuntime {
     return this.#turns.get(turnId);
   }
 
-  getActiveTurnByTopic(chatId: number, topicId: number): RuntimeTurn | undefined {
+  getActiveTurnByTopic(chatId: number, topicId: number | null): RuntimeTurn | undefined {
     const activeTurnId = this.#topicStates.get(topicKey(chatId, topicId))?.activeTurnId;
     return activeTurnId ? this.#turns.get(activeTurnId) : undefined;
   }
@@ -157,7 +157,7 @@ export class BridgeTurnRuntime {
     };
   }
 
-  movePendingSteerToQueued(chatId: number, topicId: number, localId: string): QueueStateSnapshot {
+  movePendingSteerToQueued(chatId: number, topicId: number | null, localId: string): QueueStateSnapshot {
     const pending = this.removePendingSteer(chatId, topicId, localId);
     if (pending) {
       this.ensureTopicState(chatId, topicId).queuedFollowUps.push(pending.message);
@@ -165,12 +165,12 @@ export class BridgeTurnRuntime {
     return this.getQueueState(chatId, topicId);
   }
 
-  dropPendingSteer(chatId: number, topicId: number, localId: string): QueueStateSnapshot {
+  dropPendingSteer(chatId: number, topicId: number | null, localId: string): QueueStateSnapshot {
     this.removePendingSteer(chatId, topicId, localId);
     return this.getQueueState(chatId, topicId);
   }
 
-  drainPendingSteers(chatId: number, topicId: number): PendingSteerDrain {
+  drainPendingSteers(chatId: number, topicId: number | null): PendingSteerDrain {
     const topicState = this.ensureTopicState(chatId, topicId);
     if (topicState.pendingSteers.length === 0) {
       return {
@@ -195,7 +195,7 @@ export class BridgeTurnRuntime {
     };
   }
 
-  movePendingSteersToQueued(chatId: number, topicId: number): QueueStateSnapshot {
+  movePendingSteersToQueued(chatId: number, topicId: number | null): QueueStateSnapshot {
     const topicState = this.ensureTopicState(chatId, topicId);
     if (topicState.pendingSteers.length === 0) {
       return this.getQueueState(chatId, topicId);
@@ -206,7 +206,7 @@ export class BridgeTurnRuntime {
     return this.getQueueState(chatId, topicId);
   }
 
-  private removePendingSteer(chatId: number, topicId: number, localId: string): PendingSteer | undefined {
+  private removePendingSteer(chatId: number, topicId: number | null, localId: string): PendingSteer | undefined {
     const topicState = this.ensureTopicState(chatId, topicId);
     const index = topicState.pendingSteers.findIndex((pending) => pending.localId === localId);
     if (index !== -1) {
@@ -360,7 +360,7 @@ export class BridgeTurnRuntime {
     return snapshot;
   }
 
-  getQueueState(chatId: number, topicId: number): QueueStateSnapshot {
+  getQueueState(chatId: number, topicId: number | null): QueueStateSnapshot {
     const topicState = this.#topicStates.get(topicKey(chatId, topicId));
     return {
       chatId,
@@ -370,23 +370,23 @@ export class BridgeTurnRuntime {
     };
   }
 
-  peekNextQueuedFollowUp(chatId: number, topicId: number): UserTurnMessage | undefined {
+  peekNextQueuedFollowUp(chatId: number, topicId: number | null): UserTurnMessage | undefined {
     return this.#topicStates.get(topicKey(chatId, topicId))?.queuedFollowUps[0];
   }
 
-  shiftNextQueuedFollowUp(chatId: number, topicId: number): UserTurnMessage | undefined {
+  shiftNextQueuedFollowUp(chatId: number, topicId: number | null): UserTurnMessage | undefined {
     const topicState = this.#topicStates.get(topicKey(chatId, topicId));
     const next = topicState?.queuedFollowUps.shift();
     this.cleanupTopicState(chatId, topicId);
     return next;
   }
 
-  prependQueuedFollowUp(chatId: number, topicId: number, message: UserTurnMessage): QueueStateSnapshot {
+  prependQueuedFollowUp(chatId: number, topicId: number | null, message: UserTurnMessage): QueueStateSnapshot {
     this.ensureTopicState(chatId, topicId).queuedFollowUps.unshift(message);
     return this.getQueueState(chatId, topicId);
   }
 
-  private ensureTopicState(chatId: number, topicId: number): TopicState {
+  private ensureTopicState(chatId: number, topicId: number | null): TopicState {
     const key = topicKey(chatId, topicId);
     const existing = this.#topicStates.get(key);
     if (existing) {
@@ -402,7 +402,7 @@ export class BridgeTurnRuntime {
     return created;
   }
 
-  private cleanupTopicState(chatId: number, topicId: number): void {
+  private cleanupTopicState(chatId: number, topicId: number | null): void {
     const key = topicKey(chatId, topicId);
     const topicState = this.#topicStates.get(key);
     if (!topicState) {
@@ -553,8 +553,8 @@ function renderAssistantText(items: AssistantItemState[]): string {
   return items.map((item) => item.text).join("\n\n");
 }
 
-function topicKey(chatId: number, topicId: number): string {
-  return `${chatId}:${topicId}`;
+function topicKey(chatId: number, topicId: number | null): string {
+  return topicId === null ? `${chatId}:root` : `${chatId}:${topicId}`;
 }
 
 function summarizeUserTurnMessage(message: UserTurnMessage): string {

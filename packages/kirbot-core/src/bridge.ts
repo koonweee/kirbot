@@ -252,7 +252,7 @@ export class TelegramCodexBridge {
     return this.#lifecycle.getActiveTurnCount();
   }
 
-  getActiveTopics(): Array<{ chatId: number; topicId: number }> {
+  getActiveTopics(): Array<{ chatId: number; topicId: number | null }> {
     return this.#lifecycle.getActiveTopics();
   }
 
@@ -1894,7 +1894,7 @@ export class TelegramCodexBridge {
     }
   }
 
-  private findActiveTurnByTopic(chatId: number, topicId: number): TurnContext | undefined {
+  private findActiveTurnByTopic(chatId: number, topicId: number | null): TurnContext | undefined {
     return this.#lifecycle.getActiveTurnByTopic(chatId, topicId);
   }
 
@@ -2214,8 +2214,8 @@ function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string):
   };
 }
 
-function topicKey(chatId: number, topicId: number): string {
-  return `${chatId}:${topicId}`;
+function topicKey(chatId: number, topicId: number | null): string {
+  return topicId === null ? `${chatId}:root` : `${chatId}:${topicId}`;
 }
 
 function buildFastStatusMessage(scope: "global" | "thread", serviceTier: ServiceTier | null): string {

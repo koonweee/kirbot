@@ -39,6 +39,24 @@ function message(text: string, updateId = 1): UserTurnMessage {
   };
 }
 
+function rootMessage(text: string, updateId = 1): UserTurnMessage {
+  return {
+    chatId: -1001,
+    topicId: null,
+    messageId: updateId,
+    updateId,
+    userId: 42,
+    text,
+    input: [
+      {
+        type: "text",
+        text,
+        text_elements: []
+      }
+    ]
+  };
+}
+
 function getInlineButtonTexts(entry: { options?: Record<string, unknown> } | undefined): string[] {
   return (
     ((entry?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)?.inline_keyboard
@@ -202,15 +220,15 @@ function createHarness(
   telegram: FakeTelegram;
   releasedTurnIds: string[];
   queueSyncs: QueueStateSnapshot[];
-  nextQueuedCalls: Array<{ chatId: number; topicId: number }>;
-  queuedFollowUps: Array<{ chatId: number; topicId: number; message: UserTurnMessage }>;
+  nextQueuedCalls: Array<{ chatId: number; topicId: number | null }>;
+  queuedFollowUps: Array<{ chatId: number; topicId: number | null; message: UserTurnMessage }>;
 } {
   const telegram = new FakeTelegram();
   const runtime = new BridgeTurnRuntime();
   const releasedTurnIds: string[] = [];
   const queueSyncs: QueueStateSnapshot[] = [];
-  const nextQueuedCalls: Array<{ chatId: number; topicId: number }> = [];
-  const queuedFollowUps: Array<{ chatId: number; topicId: number; message: UserTurnMessage }> = [];
+  const nextQueuedCalls: Array<{ chatId: number; topicId: number | null }> = [];
+  const queuedFollowUps: Array<{ chatId: number; topicId: number | null; message: UserTurnMessage }> = [];
   const snapshot =
     typeof resolvedSnapshot === "string"
       ? {
@@ -271,6 +289,15 @@ function createHarness(
 }
 
 describe("TurnLifecycleCoordinator", () => {
+  it("supports root-surface status drafts without a topic id", async () => {
+    const harness = createHarness();
+
+    harness.coordinator.activateTurn(rootMessage("Start"), "thread-root", "turn-root", "gpt-5.4-mini");
+    await harness.coordinator.publishCurrentStatus("turn-root", true);
+
+    expect(harness.telegram.drafts[0]?.options?.message_thread_id).toBeUndefined();
+  });
+
   it("finalizes completed turns through one shared terminal path", async () => {
     const harness = createHarness("Final answer");
     const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
