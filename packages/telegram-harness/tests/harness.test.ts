@@ -556,6 +556,16 @@ describe("Telegram harness", () => {
         actor: "bot",
         messageId: 502,
         text: "> done",
+        inlineButtons: [
+          [
+            {
+              text: "Response",
+              web_app: {
+                url: expect.stringContaining("https://example.com/mini-app/plan#")
+              }
+            }
+          ]
+        ],
         entities: [
           {
             type: "code",

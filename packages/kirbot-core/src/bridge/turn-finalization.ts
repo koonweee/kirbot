@@ -99,8 +99,8 @@ export class TurnFinalizer {
     const publishedFinalAssistantMessage =
       !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
     if (!publishesPlanOnly && publishedFinalAssistantMessage) {
-      await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
-      await this.publishCompletionNotification(context);
+      const publication = await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
+      await this.publishCompletionNotification(context, publication.replyMarkup);
     }
 
     if (responsePublication?.oversizeNoticeText) {
@@ -166,7 +166,7 @@ export class TurnFinalizer {
     text: string,
     commentaryPublication: PlannedArtifactPublication,
     responsePublication: PlannedArtifactPublication | null
-  ): Promise<number> {
+  ): Promise<{ messageId: number; replyMarkup?: ReturnType<typeof buildArtifactReplyMarkup> }> {
     const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
 
     const messageId = await context.visibleMessageHandle.finalize(
@@ -184,7 +184,10 @@ export class TurnFinalizer {
 
     await this.publishStandaloneAgentMessages(context, attachment.deferredMessages);
 
-    return messageId;
+    return {
+      messageId,
+      ...(attachment.replyMarkup ? { replyMarkup: attachment.replyMarkup } : {})
+    };
   }
 
   private buildCommentaryPublication(
@@ -254,12 +257,16 @@ export class TurnFinalizer {
     });
   }
 
-  private async publishCompletionNotification(context: TurnContext): Promise<void> {
+  private async publishCompletionNotification(
+    context: TurnContext,
+    replyMarkup?: ReturnType<typeof buildArtifactReplyMarkup>
+  ): Promise<void> {
     const rendered = buildRenderedCompletionNotification();
     await this.deps.messenger.sendMessage({
       chatId: context.chatId,
       topicId: context.topicId,
       text: rendered.text,
+      ...(replyMarkup ? { replyMarkup } : {}),
       ...(rendered.entities ? { entities: rendered.entities } : {}),
       disableNotification: false
     });

@@ -1072,6 +1072,7 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Final answer");
     expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
     expect(harness.telegram.sentMessages.at(-2)?.options?.disable_notification).toBeUndefined();
+    expect(getInlineButtonTexts(harness.telegram.sentMessages.at(-2))).toEqual(["Response"]);
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5-codex • <1s • 100% left • /workspace • main"
     );

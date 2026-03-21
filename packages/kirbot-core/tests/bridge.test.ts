@@ -3234,6 +3234,9 @@ describe("TelegramCodexBridge", () => {
     expect((answerMessage?.options as TelegramSendOptions | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
 
+    const completionPing = telegram.sentMessages.find((message) => message.text === "> done");
+    expect(getInlineButtonTexts(completionPing)).toEqual(["Response", "Commentary"]);
+
     const commentaryUrl = getWebAppUrlByButtonText(answerMessage, "Commentary");
     const commentaryEncoded = getEncodedMiniAppArtifactFromHash(new URL(commentaryUrl!).hash);
     expect(decodeMiniAppArtifact(commentaryEncoded!)).toEqual({
