@@ -539,7 +539,7 @@ describe("Telegram harness", () => {
       },
       {
         actor: "bot",
-        messageId: 501,
+        messageId: 502,
         text: "Harness reply",
         inlineButtons: [
           [
@@ -550,28 +550,6 @@ describe("Telegram harness", () => {
               }
             }
           ]
-        ]
-      },
-      {
-        actor: "bot",
-        messageId: 502,
-        text: "> done",
-        inlineButtons: [
-          [
-            {
-              text: "Response",
-              web_app: {
-                url: expect.stringContaining("https://example.com/mini-app/plan#")
-              }
-            }
-          ]
-        ],
-        entities: [
-          {
-            type: "code",
-            offset: 0,
-            length: 6
-          }
         ]
       },
       {
@@ -739,13 +717,23 @@ describe("Telegram harness", () => {
     expect(transcript.drafts).toEqual([]);
 
     const eventTexts = harness.getTelegramEvents().flatMap((event) => {
+      if (
+        event.type === "telegram.sendMessage"
+        || event.type === "telegram.sendMessageDraft"
+        || event.type === "telegram.editMessageText"
+      ) {
+        return [event.text];
+      }
+      return [];
+    });
+    const mutableEventTexts = harness.getTelegramEvents().flatMap((event) => {
       if (event.type === "telegram.sendMessageDraft" || event.type === "telegram.editMessageText") {
         return [event.text];
       }
       return [];
     });
     expect(eventTexts).toContain("Final answer");
-    expect(eventTexts).not.toContain("thinking · 0s");
+    expect(mutableEventTexts).not.toContain("thinking · 0s");
     expect(harness.getTelegramEvents().some((event) => event.type === "telegram.sendMessageDraft")).toBe(false);
   });
 

@@ -2835,7 +2835,7 @@ describe("TelegramCodexBridge", () => {
     expect(getFinalAnswerMessage(telegram)?.text).toContain("Codex error: vision failed");
   });
 
-  it("streams turn deltas and publishes the final completion message", async () => {
+  it("keeps status separate and only sends the final assistant message on completion", async () => {
     codex.reasoningEffort = "high";
 
     await bridge.handleUserTextMessage({
@@ -2874,13 +2874,15 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.some((draft) => draft.text === "Working on it")).toBe(true);
-    expect(telegram.deletions).toEqual([]);
+    expect(telegram.edits.some((edit) => edit.text === "Working on it")).toBe(false);
+    expect(telegram.deletions).toHaveLength(1);
+    expect(telegram.deletions[0]?.chatId).toBe(-1001);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
     expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex high • <1s • 100% left • /workspace • main");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
       preformattedEntities("gpt-5-codex high • <1s • 100% left • /workspace • main", "status")
     );
+    expect(telegram.sentMessages.some((message) => message.text === "> done")).toBe(false);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
   });
 
@@ -3234,9 +3236,6 @@ describe("TelegramCodexBridge", () => {
     expect((answerMessage?.options as TelegramSendOptions | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
 
-    const completionPing = telegram.sentMessages.find((message) => message.text === "> done");
-    expect(getInlineButtonTexts(completionPing)).toEqual(["Response", "Commentary"]);
-
     const commentaryUrl = getWebAppUrlByButtonText(answerMessage, "Commentary");
     const commentaryEncoded = getEncodedMiniAppArtifactFromHash(new URL(commentaryUrl!).hash);
     expect(decodeMiniAppArtifact(commentaryEncoded!)).toEqual({
@@ -3495,7 +3494,7 @@ describe("TelegramCodexBridge", () => {
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
   });
 
-  it("truncates oversized streaming draft previews", async () => {
+  it("keeps oversized assistant deltas out of the visible status bubble", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -3514,11 +3513,10 @@ describe("TelegramCodexBridge", () => {
         delta: longText("chunked draft preview content", 180)
       }
     });
-    await waitForCondition(() => telegram.drafts.some((draft) => draft.text.includes("[preview truncated]")), 2_000);
+    await waitForAsyncNotifications();
 
-    const previewDraft = telegram.drafts.find((draft) => draft.text.includes("[preview truncated]"));
-    expect(previewDraft).toBeTruthy();
-    expect(previewDraft?.text.length).toBeLessThanOrEqual(3500);
+    expect(telegram.drafts.some((draft) => draft.text.includes("[preview truncated]"))).toBe(false);
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
   });
 
   it("does not fold oversized commentary into the live status draft", async () => {
@@ -4047,109 +4045,7 @@ describe("TelegramCodexBridge", () => {
     ).toBe(true);
   });
 
-  it("flushes the latest draft after fast consecutive deltas", async () => {
-    await bridge.handleUserTextMessage({
-      chatId: -1001,
-      topicId: 777,
-      messageId: 10,
-      updateId: 20,
-      userId: 42,
-      text: "Explain the fix"
-    });
-
-    codex.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        delta: "Hello"
-      }
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    codex.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        delta: " world"
-      }
-    });
-    await waitForCondition(() => telegram.appliedDrafts.some((draft) => draft.text === "Hello world"), 4_000);
-
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "Hello world")).toBe(true);
-  });
-
-  it("does not let a stale delayed draft overwrite a newer one", async () => {
-    await bridge.handleUserTextMessage({
-      chatId: -1001,
-      topicId: 777,
-      messageId: 10,
-      updateId: 20,
-      userId: 42,
-      text: "Explain the fix"
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    codex.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        delta: "Hello"
-      }
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    codex.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        delta: " world"
-      }
-    });
-    await waitForCondition(() => telegram.appliedDrafts.some((draft) => draft.text === "Hello world"), 4_000);
-
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "Hello world")).toBe(true);
-  });
-
-  it("retries the latest draft after a retry-after response", async () => {
-    telegram.nextEditMessageTextError = {
-      error_code: 429,
-      parameters: {
-        retry_after: 0
-      }
-    } as unknown as Error;
-
-    await bridge.handleUserTextMessage({
-      chatId: -1001,
-      topicId: 777,
-      messageId: 10,
-      updateId: 20,
-      userId: 42,
-      text: "Explain the fix"
-    });
-
-    codex.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        delta: "Retry me"
-      }
-    });
-    await waitForCondition(() => telegram.appliedDrafts.some((draft) => draft.text === "Retry me"), 4_000);
-
-    expect(telegram.appliedDrafts.some((draft) => draft.text === "Retry me")).toBe(true);
-  });
-
-  it("sends the final persisted message by editing the assistant message", async () => {
+  it("sends the final persisted message as a separate assistant bubble and deletes the status bubble", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -4168,7 +4064,7 @@ describe("TelegramCodexBridge", () => {
         delta: "Hello"
       }
     });
-    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "Hello"), 3_000);
+    await waitForAsyncNotifications();
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -4179,7 +4075,7 @@ describe("TelegramCodexBridge", () => {
         delta: " world"
       }
     });
-    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "Hello world"), 3_000);
+    await waitForAsyncNotifications();
 
     codex.emitNotification({
       method: "turn/completed",
@@ -4195,8 +4091,10 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.drafts.some((draft) => draft.text === "Hello")).toBe(true);
-    expect(telegram.drafts.some((draft) => draft.text === "Hello world")).toBe(true);
+    expect(telegram.edits.some((edit) => edit.text === "Hello")).toBe(false);
+    expect(telegram.edits.some((edit) => edit.text === "Hello world")).toBe(false);
+    expect(telegram.deletions).toHaveLength(1);
+    expect(telegram.deletions[0]?.chatId).toBe(-1001);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello world");
   });
 

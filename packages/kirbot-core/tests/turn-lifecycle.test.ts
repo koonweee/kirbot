@@ -321,14 +321,37 @@ describe("TurnLifecycleCoordinator", () => {
   it("finalizes completed turns through one shared terminal path", async () => {
     const harness = createHarness("Final answer");
     const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.publishCurrentStatus("turn-1", true);
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
     expect(context.phase).toBe("completed");
-    expect(harness.telegram.sentMessages.some((entry) => entry.text === "Final answer")).toBe(true);
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toEqual([
+      "thinking · 0s",
+      "Final answer",
+      "gpt-5-codex • <1s • 100% left • /workspace • main"
+    ]);
+    expect(harness.telegram.deletions).toEqual([{ chatId: -1001, messageId: 1 }]);
+    expect(harness.telegram.sentMessages.some((entry) => entry.text === "> done")).toBe(false);
     expect(harness.releasedTurnIds).toEqual(["turn-1"]);
     expect(harness.nextQueuedCalls).toEqual([{ chatId: -1001, topicId: 777 }]);
     expect(harness.coordinator.getTurn("turn-1")).toBeUndefined();
+  });
+
+  it("keeps the status bubble for completed plan-only turns", async () => {
+    const harness = createHarness({
+      text: "1. Draft the rollout",
+      assistantText: "",
+      planText: "1. Draft the rollout"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.publishCurrentStatus("turn-1", true);
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("thinking · 0s");
+    expect(harness.telegram.edits.at(-1)?.text).toBe("completed");
+    expect(harness.telegram.deletions).toEqual([]);
   });
 
   it("ignores duplicate terminal notifications once a turn has been finalized", async () => {
@@ -1050,14 +1073,13 @@ describe("TurnLifecycleCoordinator", () => {
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Final answer");
-    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5 high • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
     );
   });
 
-  it("sends a notified completion ping before the completion footer", async () => {
+  it("sends the final answer directly before the completion footer", async () => {
     const harness = createHarness({
       text: "Final answer",
       changedFiles: 0,
@@ -1069,9 +1091,8 @@ describe("TurnLifecycleCoordinator", () => {
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Final answer");
-    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
-    expect(harness.telegram.sentMessages.at(-2)?.options?.disable_notification).toBeUndefined();
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
+    expect((harness.telegram.sentMessages.at(-2)?.options as Record<string, unknown> | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(harness.telegram.sentMessages.at(-2))).toEqual(["Response"]);
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5-codex • <1s • 100% left • /workspace • main"
@@ -1116,8 +1137,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Plan ready");
-    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Plan ready");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5-codex • <1s • 100% left • /workspace • main • planning"
     );
