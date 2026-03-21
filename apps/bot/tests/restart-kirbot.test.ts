@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,8 @@ vi.mock("node:child_process", () => ({
 import { spawn } from "node:child_process";
 
 import { restartKirbotProductionSession } from "../src/restart-kirbot";
+
+const expectedRepoRoot = resolve(__dirname, "..", "..", "..");
 
 type FakeChildProcess = ChildProcess & {
   stdout: PassThrough;
@@ -71,11 +74,11 @@ describe("restartKirbotProductionSession", () => {
       ["npm run start:tmux:restart"]
     ]);
     expect(spawnMock.mock.calls).toEqual([
-      ["git", ["checkout", "master"], { cwd: "/home/dev/kirbot", stdio: ["ignore", "pipe", "pipe"] }],
-      ["git", ["fetch", "origin"], { cwd: "/home/dev/kirbot", stdio: ["ignore", "pipe", "pipe"] }],
-      ["git", ["reset", "--hard", "origin/master"], { cwd: "/home/dev/kirbot", stdio: ["ignore", "pipe", "pipe"] }],
-      ["npm", ["run", "build"], { cwd: "/home/dev/kirbot", stdio: ["ignore", "pipe", "pipe"] }],
-      ["npm", ["run", "start:tmux:restart"], { cwd: "/home/dev/kirbot", stdio: ["ignore", "pipe", "pipe"] }]
+      ["git", ["checkout", "master"], { cwd: expectedRepoRoot, stdio: ["ignore", "pipe", "pipe"] }],
+      ["git", ["fetch", "origin"], { cwd: expectedRepoRoot, stdio: ["ignore", "pipe", "pipe"] }],
+      ["git", ["reset", "--hard", "origin/master"], { cwd: expectedRepoRoot, stdio: ["ignore", "pipe", "pipe"] }],
+      ["npm", ["run", "build"], { cwd: expectedRepoRoot, stdio: ["ignore", "pipe", "pipe"] }],
+      ["npm", ["run", "start:tmux:restart"], { cwd: expectedRepoRoot, stdio: ["ignore", "pipe", "pipe"] }]
     ]);
   });
 
