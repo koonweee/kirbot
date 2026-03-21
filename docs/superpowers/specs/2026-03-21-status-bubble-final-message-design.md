@@ -97,6 +97,7 @@ Selection:
 - create the chosen surface in `TurnLifecycleCoordinator.activateTurn()`
 - default to `StatusThenFinalMessageTurnSurface`
 - keep `EditStreamingTurnSurface` wired as an alternate internal mode
+- choose the implementation through one internal factory/helper so production code, tests, and harness coverage all exercise the same selection path
 
 ## Data Flow
 
@@ -143,6 +144,13 @@ For the final assistant surface step, the finalizer delegates to the selected su
   - after success, best-effort delete the status bubble
 - on completion with no publishable assistant message:
   - preserve visible terminal state via the status bubble
+
+A publishable assistant message means the same condition the current finalizer already uses for final assistant output:
+
+- `publishesPlanOnly` is false, and
+- either the final text is non-empty after trimming, or `publishWhenEmpty` is true and a fallback final text such as `(no assistant output)` has been produced
+
+Oversized response/commentary artifacts do not make the assistant message non-publishable. They only affect which buttons can be attached directly versus deferred into standalone follow-up messages.
 
 ### Non-Success Terminal States
 
