@@ -557,7 +557,8 @@ describe("Telegram harness", () => {
         replyKeyboard: [
           ["/stop", "/plan"],
           ["/implement", "/model"],
-          ["/fast", "/permissions"]
+          ["/fast", "/compact"],
+          ["/permissions"]
         ]
       }
     ]);
@@ -799,7 +800,8 @@ describe("Telegram harness", () => {
     expect(footer?.replyKeyboard).toEqual([
       ["/stop", "/plan"],
       ["/implement", "/model"],
-      ["/fast", "/permissions"]
+      ["/fast", "/compact"],
+      ["/permissions"]
     ]);
     expect(footer?.inlineButtons).toBeUndefined();
   });
