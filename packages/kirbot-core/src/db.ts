@@ -95,6 +95,10 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function isSqliteUniqueConstraintError(error: unknown): error is { code: string } {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "SQLITE_CONSTRAINT_UNIQUE";
+}
+
 function mapSession(row: Selectable<SessionsTable>): BridgeSession {
   if (row.surface_kind === "topic" && row.telegram_topic_id === null) {
     throw new Error("Topic session row is missing telegram_topic_id");
@@ -275,16 +279,51 @@ export class BridgeDatabase {
   }): Promise<TopicSession | BridgeSession> {
     const surface: SessionSurface = input.surface ?? { kind: "topic", topicId: input.telegramTopicId! };
     const sessionRow = sessionSurfaceToRow(surface);
-    await this.kysely
-      .insertInto("sessions")
-      .values({
-        telegram_chat_id: input.telegramChatId,
-        ...sessionRow,
-        codex_thread_id: null,
-        status: "provisioning",
-        preferred_mode: "default"
-      })
-      .execute();
+    try {
+      await this.kysely
+        .insertInto("sessions")
+        .values({
+          telegram_chat_id: input.telegramChatId,
+          ...sessionRow,
+          codex_thread_id: null,
+          status: "provisioning",
+          preferred_mode: "default"
+        })
+        .execute();
+    } catch (error) {
+      if (!isSqliteUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      const existing = await this.getSessionBySurfaceAnyStatus(input.telegramChatId, surface);
+      if (!existing) {
+        throw error;
+      }
+
+      if (existing.status !== "provisioning" && existing.status !== "active") {
+        await this.kysely
+          .updateTable("sessions")
+          .set({
+            codex_thread_id: null,
+            status: "provisioning"
+          })
+          .where("id", "=", existing.id)
+          .execute();
+
+        const reclaimed = await this.getSessionById(existing.id);
+        if (surface.kind === "topic" && !input.surface) {
+          return this.requireTopicSession(reclaimed);
+        }
+
+        return reclaimed;
+      }
+
+      if (surface.kind === "topic" && !input.surface) {
+        return this.requireTopicSession(existing);
+      }
+
+      return existing;
+    }
 
     const created = await this.getSessionBySurface(input.telegramChatId, surface);
     if (!created) {
@@ -335,21 +374,7 @@ export class BridgeDatabase {
   }
 
   async getSessionBySurface(chatId: number | string, surface: SessionSurface): Promise<BridgeSession | undefined> {
-    let query = this.kysely
-      .selectFrom("sessions")
-      .selectAll()
-      .where("telegram_chat_id", "=", String(chatId))
-      .where("surface_kind", "=", surface.kind)
-      .where("status", "in", ["provisioning", "active"]);
-
-    if (surface.kind === "root") {
-      query = query.where("telegram_topic_id", "is", null);
-    } else {
-      query = query.where("telegram_topic_id", "=", surface.topicId);
-    }
-
-    const row = await query.executeTakeFirst();
-    return row ? mapSession(row) : undefined;
+    return this.#getSessionBySurface(chatId, surface, ["provisioning", "active"]);
   }
 
   async getRootSessionByChat(chatId: number | string): Promise<BridgeSession | undefined> {
@@ -359,6 +384,35 @@ export class BridgeDatabase {
   async getSessionByTopic(chatId: number, topicId: number): Promise<TopicSession | undefined> {
     const session = await this.getSessionBySurface(chatId, { kind: "topic", topicId });
     return session ? this.requireTopicSession(session) : undefined;
+  }
+
+  async getSessionBySurfaceAnyStatus(chatId: number | string, surface: SessionSurface): Promise<BridgeSession | undefined> {
+    return this.#getSessionBySurface(chatId, surface);
+  }
+
+  async #getSessionBySurface(
+    chatId: number | string,
+    surface: SessionSurface,
+    statuses?: SessionStatus[]
+  ): Promise<BridgeSession | undefined> {
+    let query = this.kysely
+      .selectFrom("sessions")
+      .selectAll()
+      .where("telegram_chat_id", "=", String(chatId))
+      .where("surface_kind", "=", surface.kind);
+
+    if (statuses) {
+      query = query.where("status", "in", statuses);
+    }
+
+    if (surface.kind === "root") {
+      query = query.where("telegram_topic_id", "is", null);
+    } else {
+      query = query.where("telegram_topic_id", "=", surface.topicId);
+    }
+
+    const row = await query.executeTakeFirst();
+    return row ? mapSession(row) : undefined;
   }
 
   async archiveSessionBySurface(chatId: number | string, surface: SessionSurface): Promise<BridgeSession | undefined> {

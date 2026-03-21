@@ -1030,6 +1030,84 @@ describe("TelegramCodexBridge", () => {
     ]);
   });
 
+  it("keeps root bootstrap fail-open when two first root messages race", async () => {
+    const originalGetRootSessionByChat = database.getRootSessionByChat.bind(database);
+    const firstTwoLookupsReached = deferred<void>();
+    const releaseFirstTwoLookups = deferred<void>();
+    let heldLookupCount = 0;
+
+    database.getRootSessionByChat = vi.fn(async (chatId: number | string) => {
+      if (heldLookupCount < 2) {
+        heldLookupCount += 1;
+        if (heldLookupCount === 2) {
+          firstTwoLookupsReached.resolve();
+        }
+        await releaseFirstTwoLookups.promise;
+      }
+
+      return originalGetRootSessionByChat(chatId);
+    });
+
+    const firstMessagePromise = bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "Inspect repo"
+    });
+    const secondMessagePromise = bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "Continue"
+    });
+
+    await firstTwoLookupsReached.promise;
+    releaseFirstTwoLookups.resolve();
+
+    await expect(Promise.all([firstMessagePromise, secondMessagePromise])).resolves.toEqual([undefined, undefined]);
+
+    expect(codex.createdThreads).toEqual(["Root Chat"]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("The root Codex session is still provisioning. Try again in a moment");
+
+    const session = await database.getRootSessionByChat(-1001);
+    expect(session?.status).toBe("active");
+    expect(session?.codexThreadId).toBe("thread-1");
+  });
+
+  it("recovers the root session after a prior provisioning failure left it errored", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+    await database.markSessionErrored(pending.id);
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "Try root again"
+    });
+
+    expect(codex.createdThreads).toEqual(["Root Chat"]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "Try root again",
+        turnId: "turn-1"
+      }
+    ]);
+
+    const session = await database.getRootSessionByChat(-1001);
+    expect(session?.status).toBe("active");
+    expect(session?.codexThreadId).toBe("thread-1");
+  });
+
   it("rebuilds and restarts kirbot from root /restart", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
