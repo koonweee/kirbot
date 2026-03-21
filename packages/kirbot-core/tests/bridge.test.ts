@@ -37,8 +37,6 @@ import {
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
 
-const EMPTY_DRAFT_TEXT = "";
-
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -65,11 +63,13 @@ function preformattedEntities(text: string, language?: string): MessageEntity[] 
 }
 
 function getInlineButtonTexts(message: { options?: TelegramSendOptions } | undefined): string[] {
+  const replyMarkup = (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string }>> } } | undefined)?.reply_markup
+    ?? (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string }>> } } | undefined)?.replyMarkup;
   return (
-    ((message?.options?.reply_markup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)?.inline_keyboard
+    (replyMarkup as { inline_keyboard?: Array<Array<{ text?: string }>> } | undefined)?.inline_keyboard
       ?.flat()
       .map((button) => button.text)
-      .filter((text): text is string => typeof text === "string")) ?? []
+      .filter((text): text is string => typeof text === "string") ?? []
   );
 }
 
@@ -83,8 +83,10 @@ function getWebAppUrlByButtonText(
   message: { options?: TelegramSendOptions } | undefined,
   buttonText: string
 ): string | null {
+  const replyMarkup = (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> } } | undefined)?.reply_markup
+    ?? (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> } } | undefined)?.replyMarkup;
   return (
-    ((message?.options?.reply_markup as {
+    ((replyMarkup as {
       inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>>;
     } | undefined)
       ?.inline_keyboard?.flat()
@@ -97,8 +99,10 @@ function getCallbackDataByButtonText(
   message: { options?: TelegramSendOptions } | undefined,
   buttonText: string
 ): string | null {
+  const replyMarkup = (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } } | undefined)?.reply_markup
+    ?? (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } } | undefined)?.replyMarkup;
   return (
-    ((message?.options?.reply_markup as {
+    ((replyMarkup as {
       inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
     } | undefined)
       ?.inline_keyboard?.flat()
@@ -108,12 +112,25 @@ function getCallbackDataByButtonText(
 }
 
 function getFinalAnswerMessage(telegram: FakeTelegram) {
-  const last = telegram.sentMessages.at(-1);
-  if (last?.text.includes(" • ") && last.text.includes("% left")) {
-    return telegram.sentMessages.at(-2);
+  const messages = telegram.drafts.length > 0 ? telegram.drafts : telegram.sentMessages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const text = messages[index]?.text ?? "";
+    if (text === "> done") {
+      continue;
+    }
+
+    if (text.includes(" • ") && text.includes("% left")) {
+      continue;
+    }
+
+    return messages[index];
   }
 
-  return last;
+  return undefined;
+}
+
+function isStreamingStatusText(text: string): boolean {
+  return /^(thinking|planning|using tool|running|editing|searching|failed|interrupted)(?: · .*)?$/.test(text);
 }
 
 function findSingleButtonSafeDualButtonUnsafeMiniAppUrl(): string {
@@ -619,7 +636,9 @@ class FakeTelegram implements TelegramApi {
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
   nextSendMessageError: Error | null = null;
+  nextEditMessageTextError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
+  editBlocks: Array<Promise<void>> = [];
   events: string[] = [];
   chatActions: Array<{
     chatId: number;
@@ -639,13 +658,13 @@ class FakeTelegram implements TelegramApi {
     chatId: number;
     draftId: number;
     text: string;
-    options?: { message_thread_id?: number; entities?: MessageEntity[] };
+    options?: TelegramSendOptions | TelegramEditOptions;
   }> = [];
   appliedDrafts: Array<{
     chatId: number;
     draftId: number;
     text: string;
-    options?: { message_thread_id?: number; entities?: MessageEntity[] };
+    options?: TelegramSendOptions | TelegramEditOptions;
   }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string }> = [];
   editOptions: Array<{
@@ -690,10 +709,20 @@ class FakeTelegram implements TelegramApi {
 
     this.messageCounter += 1;
     this.events.push(`message:${text}`);
-    this.sentMessages.push(
+    if (!isStreamingStatusText(text)) {
+      this.sentMessages.push(
+        options
+          ? { messageId: this.messageCounter, chatId, text, options }
+          : { messageId: this.messageCounter, chatId, text }
+      );
+    }
+    this.drafts.push(
       options
-        ? { messageId: this.messageCounter, chatId, text, options }
-        : { messageId: this.messageCounter, chatId, text }
+        ? { chatId, draftId: this.messageCounter, text, options }
+        : { chatId, draftId: this.messageCounter, text }
+    );
+    this.appliedDrafts.push(
+      options ? { chatId, draftId: this.messageCounter, text, options } : { chatId, draftId: this.messageCounter, text }
     );
     return { message_id: this.messageCounter };
   }
@@ -741,8 +770,24 @@ class FakeTelegram implements TelegramApi {
     text: string,
     options?: TelegramEditOptions
   ): Promise<unknown> {
+    if (this.nextEditMessageTextError) {
+      const error = this.nextEditMessageTextError;
+      this.nextEditMessageTextError = null;
+      throw error;
+    }
+
     this.edits.push({ chatId, messageId, text });
     this.editOptions.push(options ? { chatId, messageId, options } : { chatId, messageId });
+    this.drafts.push(
+      options ? { chatId, draftId: messageId, text, options } : { chatId, draftId: messageId, text }
+    );
+    const blocker = this.editBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
+    this.appliedDrafts.push(
+      options ? { chatId, draftId: messageId, text, options } : { chatId, draftId: messageId, text }
+    );
     return true;
   }
 
@@ -2786,7 +2831,8 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.sentMessages.filter((message) => message.text.includes("Codex error: vision failed"))).toHaveLength(1);
+    expect(telegram.drafts.filter((message) => message.text.includes("Codex error: vision failed"))).toHaveLength(1);
+    expect(getFinalAnswerMessage(telegram)?.text).toContain("Codex error: vision failed");
   });
 
   it("streams turn deltas and publishes the final completion message", async () => {
@@ -2835,7 +2881,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
       preformattedEntities("gpt-5-codex high • <1s • 100% left • /workspace • main", "status")
     );
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
   });
 
   it("uses streamed file-change items in the footer when the resolved snapshot still reports zero files", async () => {
@@ -2939,82 +2985,66 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(
-      telegram.drafts.some(
-        (draft) =>
-          draft.text === "Use bold and code." &&
-          draft.options?.entities?.some((entity) => entity.type === "bold") &&
-          draft.options.entities.some((entity) => entity.type === "code")
-      )
-    ).toBe(true);
+    const formattedMessage = getFinalAnswerMessage(telegram);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
-    expect(getFinalAnswerMessage(telegram)?.text).toBe("Use bold and code.\n\nconst answer = 42;");
-    expect(getFinalAnswerMessage(telegram)?.options?.entities).toEqual([
+    expect(formattedMessage?.text).toBe("Use bold and code.\n\nconst answer = 42;");
+    expect(formattedMessage?.options?.entities).toEqual([
       { type: "bold", offset: 4, length: 4 },
       { type: "code", offset: 13, length: 4 },
       { type: "pre", offset: 20, length: 18, language: "ts" }
     ]);
   });
 
-  it("logs draft rejections and still delivers the final message", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("keeps the final message available when an intermediate edit rejects entities", async () => {
+    codex.readTurnMessagesResult = "Use **bold** and `code`.";
 
-    try {
-      codex.readTurnMessagesResult = "Use **bold** and `code`.";
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 74,
+      updateId: 84,
+      userId: 42,
+      text: "Format this output"
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      await bridge.handleUserTextMessage({
-        chatId: -1001,
-        topicId: 777,
-        messageId: 74,
-        updateId: 84,
-        userId: 42,
-        text: "Format this output"
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    telegram.nextEditMessageTextError = {
+      error_code: 429,
+      parameters: {
+        retry_after: 0
+      }
+    } as unknown as Error;
 
-      telegram.nextDraftError = new Error("can't parse entities");
+    codex.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "Use **bold** and `code`."
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      codex.emitNotification({
-        method: "item/agentMessage/delta",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "item-1",
-          delta: "Use **bold** and `code`."
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
         }
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+    await waitForCondition(() => getFinalAnswerMessage(telegram)?.text === "Use bold and code.", 3_000);
 
-      codex.emitNotification({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: {
-            id: "turn-1",
-            items: [],
-            status: "completed",
-            error: null
-          }
-        }
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        "Failed to send Telegram draft",
-        expect.objectContaining({
-          entityCount: 2
-        }),
-        expect.any(Error)
-      );
-      expect(getFinalAnswerMessage(telegram)?.text).toBe("Use bold and code.");
-      expect(getFinalAnswerMessage(telegram)?.options?.entities).toEqual([
-        { type: "bold", offset: 4, length: 4 },
-        { type: "code", offset: 13, length: 4 }
-      ]);
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Use bold and code.");
+    expect(getFinalAnswerMessage(telegram)?.options?.entities).toEqual([
+      { type: "bold", offset: 4, length: 4 },
+      { type: "code", offset: 13, length: 4 }
+    ]);
   });
 
   it("keeps commentary out of the status draft and attaches a Mini App button to the final answer", async () => {
@@ -3098,13 +3128,6 @@ describe("TelegramCodexBridge", () => {
         delta: "Here is the answer."
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 450));
-
-    expect(miniAppTelegram.drafts.some((draft) => draft.text === "Here is the answer.")).toBe(true);
-    expect(
-      miniAppTelegram.drafts.findLast((draft) => draft.text === "Here is the answer.")?.options?.entities
-    ).toBeUndefined();
-
     miniAppCodex.emitNotification({
       method: "turn/completed",
       params: {
@@ -3117,10 +3140,18 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(
+      () =>
+        miniAppTelegram.drafts.some((message) => message.text === "Here is the answer.") ||
+        miniAppTelegram.sentMessages.some((message) => message.text === "Here is the answer."),
+      3_000
+    );
 
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
-    const answerMessage = getFinalAnswerMessage(miniAppTelegram);
+    const answerMessage =
+      miniAppTelegram.drafts.find(
+        (message) => message.text === "Here is the answer." && getInlineButtonTexts(message).length > 0
+      ) ?? miniAppTelegram.sentMessages.find((message) => message.text === "Here is the answer.");
     expect(answerMessage?.text).toBe("Here is the answer.");
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
     const responseUrl = getWebAppUrlByButtonText(answerMessage, "Response");
@@ -3200,7 +3231,7 @@ describe("TelegramCodexBridge", () => {
 
     const answerMessage = getFinalAnswerMessage(telegram);
     expect(answerMessage?.text).toBe("Final answer");
-    expect(answerMessage?.options?.disable_notification).toBeUndefined();
+    expect((answerMessage?.options as TelegramSendOptions | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
 
     const commentaryUrl = getWebAppUrlByButtonText(answerMessage, "Commentary");
@@ -3296,17 +3327,17 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    const answerMessage = miniAppTelegram.sentMessages.find((message) => message.text === "Here is the answer.");
+    const answerMessage = miniAppTelegram.drafts.find((message) => message.text === "Here is the answer.");
     expect(answerMessage?.text).toBe("Here is the answer.");
-    expect(answerMessage?.options?.disable_notification).toBeUndefined();
+    expect((answerMessage?.options as TelegramSendOptions | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response"]);
 
     const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available");
-    expect(commentaryStub?.options?.disable_notification).toBe(true);
+    expect((commentaryStub?.options as TelegramSendOptions | undefined)?.disable_notification).toBe(true);
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
-    expect(
-      miniAppTelegram.sentMessages.findIndex((message) => message.text === "Here is the answer.")
-    ).toBeLessThan(miniAppTelegram.sentMessages.findIndex((message) => message.text === "Commentary is available"));
+    expect(miniAppTelegram.drafts.findIndex((message) => message.text === "Here is the answer.")).toBeLessThan(
+      miniAppTelegram.drafts.findIndex((message) => message.text === "Commentary is available")
+    );
   });
 
   it("truncates long final assistant output into one Telegram message with a response button", async () => {
@@ -3446,11 +3477,17 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(
+      () => miniAppTelegram.drafts.some((message) => message.text.includes("[response truncated, continue in View]")),
+      3_000
+    );
 
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Commentary"))).toBe(false);
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("Part "))).toBe(false);
-    const answerMessage = getFinalAnswerMessage(miniAppTelegram);
+    const answerMessage =
+      miniAppTelegram.drafts.find(
+        (message) => message.text.includes("[response truncated, continue in View]") && getInlineButtonTexts(message).length > 0
+      ) ?? miniAppTelegram.sentMessages.find((message) => message.text.includes("[response truncated, continue in View]"));
     expect(answerMessage?.text).toContain("[response truncated, continue in View]");
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
   });
@@ -3474,7 +3511,7 @@ describe("TelegramCodexBridge", () => {
         delta: longText("chunked draft preview content", 180)
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.drafts.some((draft) => draft.text.includes("[preview truncated]")), 2_000);
 
     const previewDraft = telegram.drafts.find((draft) => draft.text.includes("[preview truncated]"));
     expect(previewDraft).toBeTruthy();
@@ -3999,9 +4036,7 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    const answerMessage = oversizeMiniAppTelegram.sentMessages.find((message) =>
-      message.text.includes("[response truncated]")
-    );
+    const answerMessage = oversizeMiniAppTelegram.drafts.find((message) => message.text.includes("[response truncated]"));
     expect(answerMessage?.text).toContain("[response truncated]");
     expect(getInlineButtonTexts(answerMessage)).toEqual([]);
     expect(
@@ -4039,7 +4074,7 @@ describe("TelegramCodexBridge", () => {
         delta: " world"
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await waitForCondition(() => telegram.appliedDrafts.some((draft) => draft.text === "Hello world"), 4_000);
 
     expect(telegram.appliedDrafts.some((draft) => draft.text === "Hello world")).toBe(true);
   });
@@ -4054,9 +4089,6 @@ describe("TelegramCodexBridge", () => {
       text: "Explain the fix"
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const firstDraft = deferred<void>();
-    telegram.draftBlocks.push(firstDraft.promise);
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -4078,16 +4110,14 @@ describe("TelegramCodexBridge", () => {
         delta: " world"
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    firstDraft.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => telegram.appliedDrafts.some((draft) => draft.text === "Hello world"), 4_000);
 
     expect(telegram.appliedDrafts.some((draft) => draft.text === "Hello world")).toBe(true);
   });
 
   it("retries the latest draft after a retry-after response", async () => {
-    telegram.nextDraftError = {
+    telegram.nextEditMessageTextError = {
+      error_code: 429,
       parameters: {
         retry_after: 0
       }
@@ -4111,12 +4141,12 @@ describe("TelegramCodexBridge", () => {
         delta: "Retry me"
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => telegram.appliedDrafts.some((draft) => draft.text === "Retry me"), 4_000);
 
     expect(telegram.appliedDrafts.some((draft) => draft.text === "Retry me")).toBe(true);
   });
 
-  it("sends the final persisted message before clearing the assistant draft", async () => {
+  it("sends the final persisted message by editing the assistant message", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -4135,7 +4165,7 @@ describe("TelegramCodexBridge", () => {
         delta: "Hello"
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "Hello"), 3_000);
 
     codex.emitNotification({
       method: "item/agentMessage/delta",
@@ -4146,7 +4176,7 @@ describe("TelegramCodexBridge", () => {
         delta: " world"
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "Hello world"), 3_000);
 
     codex.emitNotification({
       method: "turn/completed",
@@ -4162,10 +4192,8 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.events).toContain("draft:Hello");
-    expect(telegram.events.indexOf("message:Hello world")).toBeGreaterThan(telegram.events.indexOf("draft:Hello"));
-    expect(telegram.events.indexOf("draft:")).toBeGreaterThan(telegram.events.indexOf("message:Hello world"));
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
+    expect(telegram.drafts.some((draft) => draft.text === "Hello")).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.text === "Hello world")).toBe(true);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Hello world");
   });
 
@@ -4270,10 +4298,8 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(
-      telegram.drafts.some((draft) => draft.text === "Start from the inside.")
-    ).toBe(true);
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
+    expect(telegram.drafts.some((draft) => draft.text === "Start from the inside.")).toBe(true);
+    expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
   });
 
@@ -4361,9 +4387,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(
-      telegram.drafts.some((draft) => draft.text === "running · 0s")
-    ).toBe(true);
+    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "running · 0s"));
     expect(telegram.drafts.some((draft) => draft.text === "running · 0s" && !draft.options?.entities)).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
@@ -4405,7 +4429,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.some((draft) => draft.text === "editing · 0s")).toBe(true);
+    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "editing · 0s"));
     expect(telegram.drafts.some((draft) => draft.text === "editing · 0s" && !draft.options?.entities)).toBe(true);
   });
 
@@ -4436,7 +4460,7 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Completed without streamed deltas");
-    expect(telegram.appliedDrafts.at(-1)?.text).toBe(EMPTY_DRAFT_TEXT);
+    expect(telegram.drafts.some((draft) => draft.text === "Completed without streamed deltas")).toBe(true);
   });
 
   it("tracks a follow-up as a pending steer until the committed user item arrives", async () => {

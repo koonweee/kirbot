@@ -555,6 +555,19 @@ describe("Telegram harness", () => {
       {
         actor: "bot",
         messageId: 502,
+        text: "> done",
+        entities: [
+          {
+            type: "pre",
+            offset: 0,
+            length: 6,
+            language: "status"
+          }
+        ]
+      },
+      {
+        actor: "bot",
+        messageId: 503,
         text: "gpt-5-codex • <1s • 100% left • /workspace • main",
         entities: [
           {
@@ -716,11 +729,15 @@ describe("Telegram harness", () => {
     const transcript = harness.getTranscript();
     expect(transcript.drafts).toEqual([]);
 
-    const draftEvents = harness
-      .getTelegramEvents()
-      .filter((event) => event.type === "telegram.sendMessageDraft")
-      .map((event) => event.text);
-    expect(draftEvents).toEqual(["thinking · 0s", ""]);
+    const eventTexts = harness.getTelegramEvents().flatMap((event) => {
+      if (event.type === "telegram.sendMessageDraft" || event.type === "telegram.editMessageText") {
+        return [event.text];
+      }
+      return [];
+    });
+    expect(eventTexts).toContain("Final answer");
+    expect(eventTexts).not.toContain("thinking · 0s");
+    expect(harness.getTelegramEvents().some((event) => event.type === "telegram.sendMessageDraft")).toBe(false);
   });
 
   it("shows codex-cli-aligned context left in the harness transcript footer", async () => {

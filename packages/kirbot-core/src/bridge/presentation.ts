@@ -403,6 +403,10 @@ export function buildRenderedCompletionFooter(details: CompletionFooterDetails):
   return renderPreformattedText(buildCompletionFooterText(details), "status");
 }
 
+export function buildRenderedCompletionNotification(): TelegramRenderedMessage {
+  return renderPreformattedText("> done", "status");
+}
+
 export function buildRenderedThreadStartFooter(details: Pick<
   CompletionFooterDetails,
   "mode" | "model" | "reasoningEffort" | "serviceTier" | "cwd" | "branch"

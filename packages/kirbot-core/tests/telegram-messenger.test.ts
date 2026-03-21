@@ -4,27 +4,35 @@ import type { MessageEntity } from "grammy/types";
 import {
   TELEGRAM_FORUM_TOPIC_ICON_COLORS,
   TelegramMessenger,
+  type InlineKeyboardMarkup,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
-  type TelegramDraftOptions,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
 
-const EMPTY_DRAFT_TEXT = "";
+type TelegramError = Error & {
+  error_code?: number;
+  parameters?: {
+    retry_after?: number;
+  };
+};
 
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
-  rejectEmptyDrafts = false;
-  rejectEntityDrafts = false;
-  events: string[] = [];
+  nextSendMessageError: TelegramError | null = null;
+  nextEditMessageTextError: TelegramError | null = null;
   sentMessages: Array<{ chatId: number; text: string; options?: TelegramSendOptions }> = [];
-  drafts: Array<{ chatId: number; draftId: number; text: string; options?: TelegramDraftOptions }> = [];
+  edits: Array<{
+    chatId: number;
+    messageId: number;
+    text: string;
+    options?: { reply_markup?: InlineKeyboardMarkup; entities?: MessageEntity[] };
+  }> = [];
   chatActions: Array<{
     chatId: number;
     action: "typing" | "upload_document";
     options?: { message_thread_id?: number };
   }> = [];
-  nextChatActionError: Error | null = null;
 
   async getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>> {
     return [{ custom_emoji_id: "emoji-1" }];
@@ -39,26 +47,23 @@ class FakeTelegram implements TelegramApi {
   }
 
   async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }> {
+    if (this.nextSendMessageError) {
+      const error = this.nextSendMessageError;
+      this.nextSendMessageError = null;
+      throw error;
+    }
+
     this.messageCounter += 1;
-    this.events.push(`message:${text}`);
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
     return { message_id: this.messageCounter };
   }
 
   async sendMessageDraft(
-    chatId: number,
-    draftId: number,
-    text: string,
-    options?: TelegramDraftOptions
+    _chatId: number,
+    _draftId: number,
+    _text: string,
+    _options?: { message_thread_id?: number; entities?: MessageEntity[] }
   ): Promise<true> {
-    this.events.push(`draft:${text}`);
-    this.drafts.push(options ? { chatId, draftId, text, options } : { chatId, draftId, text });
-    if (this.rejectEmptyDrafts && text === "") {
-      throw new Error("text must be non-empty");
-    }
-    if (this.rejectEntityDrafts && options?.entities?.length) {
-      throw new Error("can't parse entities");
-    }
     return true;
   }
 
@@ -68,15 +73,22 @@ class FakeTelegram implements TelegramApi {
     options?: { message_thread_id?: number }
   ): Promise<true> {
     this.chatActions.push(options ? { chatId, action, options } : { chatId, action });
-    if (this.nextChatActionError) {
-      const error = this.nextChatActionError;
-      this.nextChatActionError = null;
-      throw error;
-    }
     return true;
   }
 
-  async editMessageText(): Promise<unknown> {
+  async editMessageText(
+    chatId: number,
+    messageId: number,
+    text: string,
+    options?: { reply_markup?: InlineKeyboardMarkup; entities?: MessageEntity[] }
+  ): Promise<unknown> {
+    if (this.nextEditMessageTextError) {
+      const error = this.nextEditMessageTextError;
+      this.nextEditMessageTextError = null;
+      throw error;
+    }
+
+    this.edits.push(options ? { chatId, messageId, text, options } : { chatId, messageId, text });
     return true;
   }
 
@@ -91,6 +103,13 @@ class FakeTelegram implements TelegramApi {
   async downloadFile(): Promise<{ bytes: Uint8Array; filePath?: string }> {
     return { bytes: new Uint8Array() };
   }
+}
+
+function rateLimitError(retryAfterSeconds: number): TelegramError {
+  const error = new Error("Too Many Requests") as TelegramError;
+  error.error_code = 429;
+  error.parameters = { retry_after: retryAfterSeconds };
+  return error;
 }
 
 describe("TelegramMessenger", () => {
@@ -145,26 +164,98 @@ describe("TelegramMessenger", () => {
     ]);
   });
 
-  it("allows persistent messages to notify when requested", async () => {
+  it("edits messages with markup and entities", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);
 
-    await messenger.sendMessage({
+    await messenger.editMessageText({
       chatId: 1,
-      topicId: 2,
-      text: "Need attention",
-      disableNotification: false
+      messageId: 99,
+      text: "Updated",
+      entities: [{ type: "italic", offset: 0, length: 7 }],
+      replyMarkup: {
+        inline_keyboard: [[{ text: "Open", callback_data: "open" }]]
+      }
     });
 
-    expect(telegram.sentMessages).toEqual([
+    expect(telegram.edits).toEqual([
       {
         chatId: 1,
-        text: "Need attention",
+        messageId: 99,
+        text: "Updated",
         options: {
-          message_thread_id: 2
+          entities: [{ type: "italic", offset: 0, length: 7 }],
+          reply_markup: {
+            inline_keyboard: [[{ text: "Open", callback_data: "open" }]]
+          }
         }
       }
     ]);
+  });
+
+  it("retries rate-limited sends using Telegram retry_after", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+      telegram.nextSendMessageError = rateLimitError(1);
+
+      const promise = messenger.sendMessage({
+        chatId: 1,
+        topicId: 2,
+        text: "Retry me"
+      });
+
+      await Promise.resolve();
+      expect(telegram.sentMessages).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(promise).resolves.toEqual({ messageId: 1 });
+      expect(telegram.sentMessages).toEqual([
+        {
+          chatId: 1,
+          text: "Retry me",
+          options: {
+            message_thread_id: 2,
+            disable_notification: true
+          }
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries rate-limited edits using Telegram retry_after", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const promise = messenger.editMessageText({
+        chatId: 1,
+        messageId: 7,
+        text: "Retry edit"
+      });
+
+      await Promise.resolve();
+      expect(telegram.edits).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(promise).resolves.toBe(true);
+      expect(telegram.edits).toEqual([
+        {
+          chatId: 1,
+          messageId: 7,
+          text: "Retry edit"
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends topic messages with reply keyboards", async () => {
@@ -199,230 +290,25 @@ describe("TelegramMessenger", () => {
     ]);
   });
 
-  it("does not send a clear draft for an unused stream", async () => {
+  it("allows persistent messages to notify when requested", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
+
+    await messenger.sendMessage({
       chatId: 1,
       topicId: 2,
-      draftId: 99
+      text: "Need attention",
+      disableNotification: false
     });
-
-    await stream.clear();
-
-    expect(telegram.drafts).toEqual([]);
-  });
-
-  it("streams draft content, finalizes a persistent message, and clears the draft", async () => {
-    const telegram = new FakeTelegram();
-    const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
-      chatId: 1,
-      topicId: 2,
-      draftId: 100
-    });
-
-    await stream.update({ text: "Working" }, true);
-    await stream.finalize({ text: "Done" });
-
-    expect(telegram.drafts).toEqual([
-      {
-        chatId: 1,
-        draftId: 100,
-        text: "Working",
-        options: {
-          message_thread_id: 2
-        }
-      },
-      {
-        chatId: 1,
-        draftId: 100,
-        text: EMPTY_DRAFT_TEXT,
-        options: {
-          message_thread_id: 2
-        }
-      }
-    ]);
-    expect(telegram.sentMessages).toEqual([
-      {
-        chatId: 1,
-        text: "Done",
-        options: {
-          message_thread_id: 2,
-          disable_notification: true
-        }
-      }
-    ]);
-    expect(telegram.events).toEqual(["draft:Working", "message:Done", "draft:"]);
-    expect(telegram.chatActions).toEqual([
-      {
-        chatId: 1,
-        action: "typing",
-        options: {
-          message_thread_id: 2
-        }
-      }
-    ]);
-  });
-
-  it("ignores draft clear failures after finalizing the persistent message", async () => {
-    const telegram = new FakeTelegram();
-    const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
-      chatId: 1,
-      topicId: 2,
-      draftId: 101
-    });
-
-    await stream.update({ text: "Working" }, true);
-    telegram.rejectEmptyDrafts = true;
-
-    await expect(stream.finalize({ text: "Done" })).resolves.toBe(1);
 
     expect(telegram.sentMessages).toEqual([
       {
         chatId: 1,
-        text: "Done",
-        options: {
-          message_thread_id: 2,
-          disable_notification: true
-        }
-      }
-    ]);
-  });
-
-  it("allows finalized stream messages to notify when requested", async () => {
-    const telegram = new FakeTelegram();
-    const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
-      chatId: 1,
-      topicId: 2,
-      draftId: 106
-    });
-
-    await stream.update({ text: "Working" }, true);
-    await stream.finalize({ text: "Plan is ready" }, { disableNotification: false });
-
-    expect(telegram.sentMessages).toEqual([
-      {
-        chatId: 1,
-        text: "Plan is ready",
+        text: "Need attention",
         options: {
           message_thread_id: 2
         }
       }
     ]);
-  });
-
-  it("clears a pending draft before publishing the final message", async () => {
-    const telegram = new FakeTelegram();
-    const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
-      chatId: 1,
-      topicId: 2,
-      draftId: 105
-    });
-
-    await stream.update({ text: "Working" }, true);
-    await stream.update({ text: "Working more" });
-    await stream.finalize({ text: "Done" });
-
-    expect(telegram.events).toEqual(["draft:Working", "message:Done", "draft:"]);
-    expect(telegram.drafts.at(-1)).toEqual({
-      chatId: 1,
-      draftId: 105,
-      text: EMPTY_DRAFT_TEXT,
-      options: {
-        message_thread_id: 2
-      }
-    });
-  });
-
-  it("throttles repeated chat actions for the same stream handle", async () => {
-    const telegram = new FakeTelegram();
-    const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
-      chatId: 1,
-      topicId: 2,
-      draftId: 102
-    });
-
-    await stream.update({ text: "First" }, true);
-    await stream.update({ text: "Second" }, true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(telegram.chatActions).toHaveLength(1);
-    expect(telegram.drafts.map((draft) => draft.text)).toEqual(["First", "Second"]);
-  });
-
-  it("does not fail draft delivery when chat action is rate limited", async () => {
-    const telegram = new FakeTelegram();
-    const messenger = new TelegramMessenger(telegram);
-    const status = messenger.statusDraft({
-      chatId: 1,
-      topicId: 2,
-      draftId: 103
-    });
-
-    telegram.nextChatActionError = {
-      parameters: {
-        retry_after: 4
-      }
-    } as unknown as Error;
-
-    await status.set({ text: "thinking" }, true);
-
-    expect(telegram.drafts).toEqual([
-      {
-        chatId: 1,
-        draftId: 103,
-        text: "thinking",
-        options: {
-          message_thread_id: 2
-        }
-      }
-    ]);
-    expect(telegram.chatActions).toHaveLength(1);
-  });
-
-  it("logs draft send failures instead of mutating the entity payload", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const telegram = new FakeTelegram();
-    telegram.rejectEntityDrafts = true;
-    const messenger = new TelegramMessenger(telegram);
-    const stream = messenger.streamMessage({
-      chatId: 1,
-      topicId: 2,
-      draftId: 104
-    });
-    const entities: MessageEntity[] = [{ type: "bold", offset: 4, length: 4 }];
-
-    try {
-      await stream.update({ text: "Use bold", entities }, true);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(telegram.drafts).toHaveLength(1);
-      expect(telegram.drafts[0]).toMatchObject({
-        chatId: 1,
-        draftId: 104,
-        text: "Use bold",
-        options: {
-          message_thread_id: 2,
-          entities
-        }
-      });
-      expect(warnSpy).toHaveBeenCalledWith(
-        "Failed to send Telegram draft",
-        expect.objectContaining({
-          chatId: 1,
-          topicId: 2,
-          draftId: 104,
-          entityCount: 1
-        }),
-        expect.any(Error)
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 });

@@ -5,6 +5,7 @@ import {
   buildCommentaryArtifactPublication,
   buildOversizeResponseArtifactMessage,
   buildRenderedAssistantMessage,
+  buildRenderedCompletionNotification,
   buildResponseArtifactPublication,
   buildOversizeCommentaryArtifactMessage,
   buildRenderedCompletionFooter,
@@ -99,6 +100,7 @@ export class TurnFinalizer {
       !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
     if (!publishesPlanOnly && publishedFinalAssistantMessage) {
       await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
+      await this.publishCompletionNotification(context);
     }
 
     if (responsePublication?.oversizeNoticeText) {
@@ -107,10 +109,6 @@ export class TurnFinalizer {
 
     if (policy.publishFooter) {
       await this.publishCompletionFooter(context, snapshot);
-    }
-
-    if (!publishedFinalAssistantMessage) {
-      await context.draftHandle.clear();
     }
 
     await this.deps.releaseTurnFiles(context.turnId);
@@ -171,12 +169,12 @@ export class TurnFinalizer {
   ): Promise<number> {
     const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
 
-    const messageId = await context.draftHandle.finalize(
+    const messageId = await context.visibleMessageHandle.finalize(
       buildRenderedAssistantMessage(text, {
         includeContinueInViewNote: attachment.includeContinueInViewNote
       }),
       {
-        ...(attachment.replyMarkup ? { firstMessageReplyMarkup: attachment.replyMarkup } : {}),
+        ...(attachment.replyMarkup ? { replyMarkup: attachment.replyMarkup } : {}),
         disableNotification: false
       }
     );
@@ -253,6 +251,17 @@ export class TurnFinalizer {
       text: rendered.text,
       ...(replyMarkup ? { replyMarkup } : {}),
       ...(rendered.entities ? { entities: rendered.entities } : {})
+    });
+  }
+
+  private async publishCompletionNotification(context: TurnContext): Promise<void> {
+    const rendered = buildRenderedCompletionNotification();
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text: rendered.text,
+      ...(rendered.entities ? { entities: rendered.entities } : {}),
+      disableNotification: false
     });
   }
 

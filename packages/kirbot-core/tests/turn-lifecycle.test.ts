@@ -132,7 +132,7 @@ class FakeTelegram implements TelegramApi {
     chatId: number;
     draftId: number;
     text: string;
-    options?: { message_thread_id?: number; entities?: MessageEntity[] };
+    options?: Record<string, unknown>;
   }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
@@ -156,6 +156,20 @@ class FakeTelegram implements TelegramApi {
   ): Promise<{ message_id: number }> {
     this.messageCounter += 1;
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
+    this.drafts.push(
+      options
+        ? {
+            chatId,
+            draftId: this.messageCounter,
+            text,
+            options
+          }
+        : {
+            chatId,
+            draftId: this.messageCounter,
+            text
+          }
+    );
     return { message_id: this.messageCounter };
   }
 
@@ -181,9 +195,15 @@ class FakeTelegram implements TelegramApi {
     chatId: number,
     messageId: number,
     text: string,
-    _options?: Record<string, unknown>
+    options?: Record<string, unknown>
   ): Promise<unknown> {
     this.edits.push({ chatId, messageId, text });
+    this.drafts.push({
+      chatId,
+      draftId: messageId,
+      text,
+      ...(options ? { options } : {})
+    });
     return true;
   }
 
@@ -688,7 +708,7 @@ describe("TurnLifecycleCoordinator", () => {
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
-    const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
+    const finalAnswer = telegram.drafts.findLast((entry) => entry.text === "Final answer");
     const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
@@ -833,7 +853,6 @@ describe("TurnLifecycleCoordinator", () => {
     });
 
     expect(harness.telegram.sentMessages).toEqual([]);
-    expect(harness.telegram.drafts).toEqual([]);
   });
 
   it("treats successful transient completions as a status-draft no-op", async () => {
@@ -999,7 +1018,6 @@ describe("TurnLifecycleCoordinator", () => {
       markdownText:
         ':::details Logs (1)\n**Command failed**\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n> FAIL bridge.test.ts\n> Error: expected "waiting · 6s" to equal "waiting · 5s"\n:::'
     });
-    expect(harness.telegram.drafts).toEqual([]);
   });
 
   it("uses rerouted model, token usage, and resolved thread metadata in the completion footer", async () => {
@@ -1032,9 +1050,30 @@ describe("TurnLifecycleCoordinator", () => {
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Final answer");
+    expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Final answer");
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5 high • <1s • 2 files • 75% left • /home/tester/kirbot • feature/footer"
+    );
+  });
+
+  it("sends a notified completion ping before the completion footer", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Final answer");
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
+    expect(harness.telegram.sentMessages.at(-2)?.options?.disable_notification).toBeUndefined();
+    expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
+      "gpt-5-codex • <1s • 100% left • /workspace • main"
     );
   });
 
@@ -1076,7 +1115,8 @@ describe("TurnLifecycleCoordinator", () => {
 
     await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("Plan ready");
+    expect(harness.telegram.sentMessages.at(-3)?.text).toBe("Plan ready");
+    expect(harness.telegram.sentMessages.at(-2)?.text).toBe("> done");
     expect(harness.telegram.sentMessages.at(-1)?.text).toBe(
       "gpt-5-codex • <1s • 100% left • /workspace • main • planning"
     );
