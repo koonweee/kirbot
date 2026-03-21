@@ -1494,11 +1494,11 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "gpt-5-codex high • <1s • 100% left • /workspace • main • planning",
+        text: "<1s • 100% left • /workspace • main • gpt-5-codex high • planning",
         options: {
           message_thread_id: 101,
           entities: preformattedEntities(
-            "gpt-5-codex high • <1s • 100% left • /workspace • main • planning",
+            "<1s • 100% left • /workspace • main • gpt-5-codex high • planning",
             "status"
           )
         }
@@ -1589,11 +1589,11 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "gpt-5-codex • <1s • 100% left • /workspace • main • planning",
+        text: "<1s • 100% left • /workspace • main • gpt-5-codex • planning",
         options: {
           message_thread_id: 101,
           entities: preformattedEntities(
-            "gpt-5-codex • <1s • 100% left • /workspace • main • planning",
+            "<1s • 100% left • /workspace • main • gpt-5-codex • planning",
             "status"
           )
         }
@@ -1845,7 +1845,7 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getSessionByTopic(-1001, 777);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
-    expect(telegram.sentMessages.at(0)?.text).toBe("gpt-5-codex • <1s • 100% left • /workspace • main");
+    expect(telegram.sentMessages.at(0)?.text).toBe("<1s • 100% left • /workspace • main • gpt-5-codex");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
@@ -2890,9 +2890,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.deletions).toHaveLength(1);
     expect(telegram.deletions[0]?.chatId).toBe(-1001);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
-    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex high • <1s • 100% left • /workspace • main");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("<1s • 100% left • /workspace • main • gpt-5-codex high");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
-      preformattedEntities("gpt-5-codex high • <1s • 100% left • /workspace • main", "status")
+      preformattedEntities("<1s • 100% left • /workspace • main • gpt-5-codex high", "status")
     );
     expect(telegram.sentMessages.some((message) => message.text === "> done")).toBe(false);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Working on it");
@@ -2956,9 +2956,9 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("gpt-5-codex • <1s • 2 files • 100% left • /workspace • main");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("<1s • 100% left • 2 files • /workspace • main • gpt-5-codex");
     expect(telegram.sentMessages.at(-1)?.options?.entities).toEqual(
-      preformattedEntities("gpt-5-codex • <1s • 2 files • 100% left • /workspace • main", "status")
+      preformattedEntities("<1s • 100% left • 2 files • /workspace • main • gpt-5-codex", "status")
     );
   });
 
@@ -4673,10 +4673,10 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "gpt-5-codex • <1s • 100% left • /workspace • main",
+        text: "<1s • 100% left • /workspace • main • gpt-5-codex",
         options: {
           message_thread_id: 777,
-          entities: preformattedEntities("gpt-5-codex • <1s • 100% left • /workspace • main", "status")
+          entities: preformattedEntities("<1s • 100% left • /workspace • main • gpt-5-codex", "status")
         }
       }
     ]);
