@@ -1475,6 +1475,19 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-1"
       }
     ]);
+    expect(codex.turnCollaborationModes).toEqual([
+      {
+        turnId: "turn-1",
+        collaborationMode: {
+          mode: "plan",
+          settings: {
+            model: "gpt-5-codex",
+            reasoning_effort: "high",
+            developer_instructions: null
+          }
+        }
+      }
+    ]);
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
@@ -1567,6 +1580,9 @@ describe("TelegramCodexBridge", () => {
     ]);
     expect(codex.createdThreads).toEqual(["New Plan Session"]);
     expect(codex.turns).toHaveLength(0);
+    expect(await database.getSessionByTopic(-1001, 101)).toMatchObject({
+      preferredMode: "plan"
+    });
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
@@ -4184,7 +4200,6 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
   });
 
