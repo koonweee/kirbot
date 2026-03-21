@@ -20,7 +20,7 @@ import type {
 } from "./domain";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 type SessionsTable = {
   id: Generated<number>;
@@ -30,6 +30,11 @@ type SessionsTable = {
   codex_thread_id: string | null;
   status: SessionStatus;
   preferred_mode: SessionMode;
+  model: string | null;
+  reasoning_effort: string | null;
+  service_tier: string | null;
+  approval_policy: string | null;
+  sandbox_policy_json: string | null;
 };
 
 type ChatThreadDefaultsTable = {
@@ -113,7 +118,14 @@ function mapSession(row: Selectable<SessionsTable>): BridgeSession {
     surface,
     codexThreadId: row.codex_thread_id,
     status: row.status,
-    preferredMode: row.preferred_mode
+    preferredMode: row.preferred_mode,
+    settings: mapPersistedThreadSettings({
+      model: row.model,
+      reasoningEffort: row.reasoning_effort,
+      serviceTier: row.service_tier,
+      approvalPolicyJson: row.approval_policy,
+      sandboxPolicyJson: row.sandbox_policy_json
+    })
   };
 }
 
@@ -239,8 +251,15 @@ export class BridgeDatabase {
       return;
     }
 
+    if (currentVersion === 5) {
+      this.#migrateFromV5ToV6();
+      this.#writeSchemaVersion(SCHEMA_VERSION);
+      return;
+    }
+
     if (currentVersion === 4) {
       this.#migrateFromV4ToV5();
+      this.#migrateFromV5ToV6();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -287,7 +306,12 @@ export class BridgeDatabase {
           ...sessionRow,
           codex_thread_id: null,
           status: "provisioning",
-          preferred_mode: "default"
+          preferred_mode: "default",
+          model: null,
+          reasoning_effort: null,
+          service_tier: null,
+          approval_policy: null,
+          sandbox_policy_json: null
         })
         .execute();
     } catch (error) {
@@ -305,7 +329,12 @@ export class BridgeDatabase {
           .updateTable("sessions")
           .set({
             codex_thread_id: null,
-            status: "provisioning"
+            status: "provisioning",
+            model: null,
+            reasoning_effort: null,
+            service_tier: null,
+            approval_policy: null,
+            sandbox_policy_json: null
           })
           .where("id", "=", existing.id)
           .execute();
@@ -351,6 +380,47 @@ export class BridgeDatabase {
       .execute();
 
     return this.getSessionById(id);
+  }
+
+  async updateSessionSettingsBySurface(
+    chatId: number | string,
+    surface: SessionSurface,
+    settings: PersistedThreadSettings
+  ): Promise<BridgeSession | undefined> {
+    const existing = await this.getSessionBySurface(chatId, surface);
+    if (!existing) {
+      return undefined;
+    }
+
+    await this.kysely
+      .updateTable("sessions")
+      .set({
+        model: settings.model,
+        reasoning_effort: settings.reasoningEffort,
+        service_tier: settings.serviceTier,
+        approval_policy: settings.approvalPolicy ? JSON.stringify(settings.approvalPolicy) : null,
+        sandbox_policy_json: settings.sandboxPolicy ? JSON.stringify(settings.sandboxPolicy) : null
+      })
+      .where("id", "=", existing.id)
+      .execute();
+
+    return this.getSessionById(existing.id);
+  }
+
+  async updateTopicSessionSettings(
+    chatId: number,
+    topicId: number,
+    settings: PersistedThreadSettings
+  ): Promise<TopicSession | undefined> {
+    const session = await this.updateSessionSettingsBySurface(chatId, { kind: "topic", topicId }, settings);
+    return session ? this.requireTopicSession(session) : undefined;
+  }
+
+  async updateRootSessionSettings(
+    chatId: number | string,
+    settings: PersistedThreadSettings
+  ): Promise<BridgeSession | undefined> {
+    return this.updateSessionSettingsBySurface(chatId, { kind: "root" }, settings);
   }
 
   async markSessionErrored(id: number): Promise<void> {
@@ -874,7 +944,8 @@ export class BridgeDatabase {
       telegramTopicId: session.surface.topicId,
       codexThreadId: session.codexThreadId,
       status: session.status,
-      preferredMode: session.preferredMode
+      preferredMode: session.preferredMode,
+      settings: session.settings
     };
   }
 
@@ -887,7 +958,12 @@ export class BridgeDatabase {
         telegram_topic_id INTEGER,
         codex_thread_id TEXT,
         status TEXT NOT NULL,
-        preferred_mode TEXT NOT NULL DEFAULT 'default'
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT
       );
 
       CREATE UNIQUE INDEX IF NOT EXISTS sessions_root_unique
@@ -974,10 +1050,28 @@ export class BridgeDatabase {
         telegram_topic_id INTEGER,
         codex_thread_id TEXT,
         status TEXT NOT NULL,
-        preferred_mode TEXT NOT NULL DEFAULT 'default'
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT
       );
 
-      INSERT INTO sessions (id, telegram_chat_id, surface_kind, telegram_topic_id, codex_thread_id, status, preferred_mode)
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      )
       SELECT
         ts.id,
         ts.telegram_chat_id,
@@ -985,7 +1079,12 @@ export class BridgeDatabase {
         ts.telegram_topic_id,
         ts.codex_thread_id,
         ts.status,
-        ts.preferred_mode
+        ts.preferred_mode,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
       FROM topic_sessions ts
       WHERE NOT EXISTS (
         SELECT 1 FROM sessions existing WHERE existing.id = ts.id
@@ -1091,6 +1190,20 @@ export class BridgeDatabase {
 
       CREATE INDEX IF NOT EXISTS pending_custom_command_adds_status_command_index
         ON pending_custom_command_adds (status, command);
+
+      COMMIT;
+    `);
+  }
+
+  #migrateFromV5ToV6(): void {
+    this.#sqlite.exec(`
+      BEGIN;
+
+      ALTER TABLE sessions ADD COLUMN model TEXT;
+      ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
+      ALTER TABLE sessions ADD COLUMN service_tier TEXT;
+      ALTER TABLE sessions ADD COLUMN approval_policy TEXT;
+      ALTER TABLE sessions ADD COLUMN sandbox_policy_json TEXT;
 
       COMMIT;
     `);

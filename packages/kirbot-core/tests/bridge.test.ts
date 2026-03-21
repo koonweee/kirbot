@@ -178,6 +178,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy?: AskForApproval;
     sandboxPolicy?: SandboxPolicy;
   }> = [];
+  compactThreadCalls: Array<{ threadId: string }> = [];
   threadSettingsUpdates: Array<{
     threadId: string;
     model?: string;
@@ -370,6 +371,10 @@ class FakeCodex implements BridgeCodexApi {
       approvalPolicy: this.threadApprovalPolicy ?? this.approvalPolicy,
       sandboxPolicy: this.threadSandboxPolicy ?? this.sandboxPolicy
     };
+  }
+
+  async compactThread(threadId: string): Promise<void> {
+    this.compactThreadCalls.push({ threadId });
   }
 
   async updateThreadSettings(threadId: string, update: {
@@ -885,8 +890,8 @@ describe("TelegramCodexBridge", () => {
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
       ["/stop", "/plan"],
       ["/implement", "/model"],
-      ["/fast", "/permissions"],
-      ["/standup"]
+      ["/fast", "/compact"],
+      ["/permissions", "/standup"]
     ]);
   });
 
@@ -1928,10 +1933,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode enabled");
-    expect(codex.threadSettingsUpdates.at(-1)).toEqual({
-      threadId: "thread-1",
-      serviceTier: "fast"
-    });
+    expect(codex.threadSettingsUpdates).toHaveLength(0);
     expect(codex.globalSettingsUpdates).toHaveLength(0);
 
     codex.readTurnSnapshotResult = {
@@ -1947,7 +1949,22 @@ describe("TelegramCodexBridge", () => {
       text: "Use fast mode"
     });
 
-    expect(codex.turnOverrides.at(-1)?.overrides).toBeNull();
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: "fast",
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
 
     codex.emitNotification({
       method: "turn/completed",
@@ -1964,6 +1981,60 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.sentMessages.at(-1)?.text).toContain("gpt-5-codex fast");
+  });
+
+  it("compacts the current thread and surfaces the compaction notice", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 10,
+      updateId: 32,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 11,
+      updateId: 33,
+      userId: 42,
+      text: "/compact"
+    });
+
+    expect(codex.compactThreadCalls).toEqual([{ threadId: "thread-1" }]);
+
+    codex.emitNotification({
+      method: "thread/compacted",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1"
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.edits.findLast((edit) => edit.text === "Context compacted")).toMatchObject({
+      chatId: -1001,
+      text: "Context compacted"
+    });
   });
 
   it("stores root model settings separately and uses them for the persistent root session", async () => {
@@ -2203,7 +2274,8 @@ describe("TelegramCodexBridge", () => {
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
       ["/stop", "/plan"],
       ["/implement", "/model"],
-      ["/fast", "/permissions"]
+      ["/fast", "/compact"],
+      ["/permissions"]
     ]);
   });
 
@@ -5680,7 +5752,7 @@ describe("TelegramCodexBridge", () => {
     ]);
   });
 
-  it("surfaces thread compaction as a durable Telegram message", async () => {
+  it("acks topic compaction and edits the ack to the final message", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -5688,6 +5760,39 @@ describe("TelegramCodexBridge", () => {
       updateId: 22,
       userId: 42,
       text: "Inspect the long thread"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/compact"
+    });
+
+    expect(codex.compactThreadCalls).toEqual([{ threadId: "thread-1" }]);
+    const compactingMessage = telegram.sentMessages.findLast((message) => message.text === "Compacting…");
+    expect(compactingMessage).toMatchObject({
+      chatId: -1001,
+      text: "Compacting…",
+      options: {
+        message_thread_id: 777
+      }
     });
 
     codex.emitNotification({
@@ -5699,16 +5804,70 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.sentMessages.at(-1)).toMatchObject({
+    expect(telegram.edits.findLast((edit) => edit.messageId === compactingMessage?.messageId)).toMatchObject({
       chatId: -1001,
+      messageId: compactingMessage?.messageId,
       text: "Context compacted",
-      options: {
-        message_thread_id: 777
-      }
     });
   });
 
-  it("deduplicates item-level compaction notices after a thread compaction notice", async () => {
+  it("acks root compaction and edits the ack to the final message", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "Inspect the long thread"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "/compact"
+    });
+
+    expect(codex.compactThreadCalls).toEqual([{ threadId: "thread-1" }]);
+    const compactingMessage = telegram.sentMessages.findLast((message) => message.text === "Compacting…");
+    expect(compactingMessage).toMatchObject({
+      chatId: -1001,
+      text: "Compacting…"
+    });
+
+    codex.emitNotification({
+      method: "thread/compacted",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1"
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.edits.findLast((edit) => edit.messageId === compactingMessage?.messageId)).toMatchObject({
+      chatId: -1001,
+      messageId: compactingMessage?.messageId,
+      text: "Context compacted"
+    });
+  });
+
+  it("deduplicates item-level compaction notices after the compact ack is edited", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -5716,6 +5875,29 @@ describe("TelegramCodexBridge", () => {
       updateId: 23,
       userId: 42,
       text: "Inspect the long thread"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "/compact"
     });
 
     codex.emitNotification({
@@ -5738,7 +5920,13 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
-    expect(telegram.sentMessages.filter((message) => message.text === "Context compacted")).toHaveLength(1);
+    expect(telegram.sentMessages.filter((message) => message.text === "Compacting…")).toHaveLength(1);
+    expect(
+      telegram.edits.filter(
+        (message) => message.messageId === telegram.sentMessages.find((sentMessage) => sentMessage.text === "Compacting…")?.messageId &&
+          message.text === "Context compacted"
+      )
+    ).toHaveLength(1);
   });
 
   it("ignores callback queries from users other than the configured Telegram user", async () => {

@@ -461,6 +461,44 @@ describe("CodexGateway", () => {
     });
   });
 
+  it("starts thread compaction with thread/compact/start", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const compactPromise = gateway.compactThread("thread-1");
+    await Promise.resolve();
+
+    expect(transport.sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "thread/compact/start",
+        id: 1,
+        params: {
+          threadId: "thread-1"
+        }
+      }
+    ]);
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {}
+    });
+
+    await expect(compactPromise).resolves.toBeUndefined();
+  });
+
   it("omits null reasoning effort from thread/start overrides", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
@@ -1203,92 +1241,6 @@ describe("CodexGateway", () => {
             path: "/tmp/test-image.png"
           }
         ]
-      }
-    });
-  });
-
-  it("updates thread settings through thread/resume overrides", async () => {
-    const transport = new FakeTransport();
-    const client = new CodexRpcClient(transport);
-    const gateway = new CodexGateway(client, {
-      defaultCwd: "/workspace",
-      model: undefined,
-      modelProvider: undefined,
-      sandbox: undefined,
-      approvalPolicy: undefined,
-      serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
-      developerInstructions: undefined,
-      config: undefined
-    });
-
-    const initializePromise = gateway.initialize();
-    await Promise.resolve();
-    transport.emitMessage({
-      jsonrpc: "2.0",
-      id: 1,
-      result: {
-        userAgent: "codex-test"
-      }
-    });
-    await initializePromise;
-
-    const settingsPromise = gateway.updateThreadSettings("thread-1", {
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      serviceTier: "fast",
-      approvalPolicy: "never",
-      sandboxPolicy: {
-        type: "dangerFullAccess"
-      }
-    });
-    await Promise.resolve();
-
-    expect(transport.sent.at(-1)).toEqual({
-      jsonrpc: "2.0",
-      method: "thread/resume",
-      id: 2,
-      params: {
-        threadId: "thread-1",
-        persistExtendedHistory: false,
-        model: "gpt-5.3-codex",
-        serviceTier: "fast",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        config: {
-          model_reasoning_effort: "high"
-        }
-      }
-    });
-
-    transport.emitMessage({
-      jsonrpc: "2.0",
-      id: 2,
-      result: {
-        thread: {
-          id: "thread-1"
-        },
-        model: "gpt-5.3-codex",
-        modelProvider: "openai",
-        serviceTier: "fast",
-        cwd: "/workspace",
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-        sandbox: {
-          type: "dangerFullAccess"
-        },
-        reasoningEffort: "high"
-      }
-    });
-
-    await expect(settingsPromise).resolves.toEqual({
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      serviceTier: "fast",
-      cwd: "/workspace",
-      approvalPolicy: "never",
-      sandboxPolicy: {
-        type: "dangerFullAccess"
       }
     });
   });

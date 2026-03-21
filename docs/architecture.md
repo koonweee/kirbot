@@ -88,6 +88,7 @@ Implements the transport and request/response plumbing for the app-server connec
 
 [`packages/kirbot-core/src/db.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/db.ts)
 Owns SQLite schema creation and all persistence operations used by the bridge.
+It is also the source of truth for persisted chat defaults and per-session thread settings.
 
 [`packages/kirbot-core/src/telegram-command-sync.ts`](/home/jtkw/kirbot/packages/kirbot-core/src/telegram-command-sync.ts)
 Keeps Telegram command menus aligned with the commands kirbot supports.
@@ -104,6 +105,7 @@ kirbot stores bridge state in SQLite, not Telegram metadata.
 - maps a Telegram chat/topic pair to one Codex thread
 - stores the topic title and preferred session mode
 - records whether a topic is provisioning, active, archived, or errored
+- stores the persisted thread settings Kirbot applies on future turns for that session
 
 `turn_messages`
 
@@ -136,6 +138,7 @@ These boundaries matter more than the exact implementation:
 - Keep reusable app startup in `packages/kirbot-core/src/runtime.ts`, not split between the Telegram entrypoint and harness code.
 - Prefer Telegram fail-open behavior when the extra UX affordance is optional. Session and turn delivery matter more than a copied message, deep link, or draft nicety.
 - Treat tests as the executable contract for user-visible behavior.
+- Treat app-server thread state as derived runtime state. Kirbot persistence owns the long-lived thread settings for existing sessions; `thread/resume` is only for cold reattachment and readback.
 
 ## Where To Look For Behavior
 

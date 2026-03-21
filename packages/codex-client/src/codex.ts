@@ -266,23 +266,6 @@ export class CodexGateway {
     return settings;
   }
 
-  async updateThreadSettings(threadId: string, update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
-    const resumeOverrides = buildThreadStartOverrides(update);
-    const response = await this.client.resumeThread({
-      threadId,
-      persistExtendedHistory: false,
-      ...(resumeOverrides.model !== undefined ? { model: resumeOverrides.model } : {}),
-      ...(resumeOverrides.serviceTier !== undefined ? { serviceTier: resumeOverrides.serviceTier } : {}),
-      ...(resumeOverrides.approvalPolicy !== undefined ? { approvalPolicy: resumeOverrides.approvalPolicy } : {}),
-      ...(resumeOverrides.sandbox !== undefined ? { sandbox: resumeOverrides.sandbox } : {}),
-      ...(resumeOverrides.config !== undefined ? { config: resumeOverrides.config } : {})
-    });
-    const settings = threadSettingsFromResponse(response);
-    this.#loadedThreads.add(threadId);
-    this.#threadSettings.set(threadId, settings);
-    return settings;
-  }
-
   async sendTurn(
     threadId: string,
     input: UserInput[],
@@ -331,6 +314,10 @@ export class CodexGateway {
     await this.client.archiveThread({ threadId });
     this.#loadedThreads.delete(threadId);
     this.#threadSettings.delete(threadId);
+  }
+
+  async compactThread(threadId: string): Promise<void> {
+    await this.client.threadCompactStart({ threadId });
   }
 
   async readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {

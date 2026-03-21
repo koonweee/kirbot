@@ -66,9 +66,8 @@ class FakeCodexApi implements BridgeCodexApi {
     return DEFAULT_SETTINGS;
   }
 
-  async updateThreadSettings(threadId: string): Promise<typeof DEFAULT_SETTINGS> {
+  async compactThread(threadId: string): Promise<void> {
     this.#assertThreadExists(threadId);
-    return DEFAULT_SETTINGS;
   }
 
   async sendTurn(

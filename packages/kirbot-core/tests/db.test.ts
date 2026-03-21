@@ -65,9 +65,107 @@ describe("BridgeDatabase", () => {
 
     const rootLookup = await database.getRootSessionByChat(-1001);
     expect(rootLookup?.codexThreadId).toBe("root-thread");
+    expect(rootLookup?.settings.model).toBeNull();
 
     const topicLookup = await database.getSessionByTopic(-1001, 22);
     expect(topicLookup?.codexThreadId).toBe("topic-thread");
+    expect(topicLookup?.settings.model).toBeNull();
+  });
+
+  it("stores per-session settings separately from chat defaults", async () => {
+    await database.upsertChatThreadDefaults("-1001", {
+      root: {
+        model: "gpt-5.4",
+        reasoningEffort: "medium",
+        serviceTier: null,
+        approvalPolicy: "on-request",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        }
+      },
+      spawn: {
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
+        serviceTier: "fast",
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "dangerFullAccess"
+        }
+      }
+    });
+
+    const pendingTopic = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 22 }
+    });
+    await database.activateSession(pendingTopic.id, "topic-thread");
+
+    const updatedTopic = await database.updateTopicSessionSettings(-1001, 22, {
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+
+    expect(updatedTopic?.settings).toEqual({
+      model: "gpt-5.3-codex-spark",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+
+    const defaults = await database.getChatThreadDefaults("-1001");
+    expect(defaults?.spawn).toEqual({
+      model: "gpt-5.4-mini",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+  });
+
+  it("stores root session settings", async () => {
+    const pendingRoot = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+    await database.activateSession(pendingRoot.id, "root-thread");
+
+    const updatedRoot = await database.updateRootSessionSettings("-1001", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    expect(updatedRoot?.settings.model).toBe("gpt-5.4-mini");
+    expect(updatedRoot?.settings.reasoningEffort).toBe("medium");
+    expect(updatedRoot?.settings.approvalPolicy).toBe("on-request");
   });
 
   it("returns the existing root provisioning session when creation races", async () => {
