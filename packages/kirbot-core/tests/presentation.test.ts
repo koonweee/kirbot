@@ -175,6 +175,7 @@ describe("topic command keyboard presentation", () => {
           { command: "model" },
           { command: "fast" },
           { command: "compact" },
+          { command: "clear" },
           { command: "permissions" },
           { command: "commands" }
         ],
@@ -188,8 +189,9 @@ describe("topic command keyboard presentation", () => {
         ["/stop", "/plan"],
         ["/implement", "/model"],
         ["/fast", "/compact"],
-        ["/permissions", "/commands"],
-        ["/standup", "/triage"]
+        ["/clear", "/permissions"],
+        ["/commands", "/standup"],
+        ["/triage"]
       ],
       is_persistent: true,
       resize_keyboard: true,

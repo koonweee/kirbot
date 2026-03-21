@@ -41,6 +41,11 @@ export type ThreadStartSettings = {
   sandboxPolicy: SandboxPolicy;
 };
 
+export type ThreadMetadata = {
+  name: string | null;
+  cwd: string;
+};
+
 export type ThreadSettingsOverride = Partial<ThreadStartSettings>;
 export type CreatedThread = {
   threadId: string;
@@ -264,6 +269,18 @@ export class CodexGateway {
     const settings = threadSettingsFromResponse(response);
     this.#threadSettings.set(threadId, settings);
     return settings;
+  }
+
+  async readThread(threadId: string): Promise<ThreadMetadata> {
+    const response = await this.client.readThread({
+      threadId,
+      includeTurns: false
+    });
+
+    return {
+      name: response.thread.name,
+      cwd: response.thread.cwd
+    };
   }
 
   async sendTurn(

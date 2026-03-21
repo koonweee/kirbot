@@ -104,6 +104,7 @@ export interface BridgeCodexApi {
   readGlobalSettings(): Promise<ThreadStartSettings>;
   updateGlobalSettings(update: CodexThreadSettingsOverride): Promise<ThreadStartSettings>;
   ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings>;
+  readThread(threadId: string): Promise<{ name: string | null; cwd: string }>;
   compactThread(threadId: string): Promise<void>;
   sendTurn(
     threadId: string,
@@ -165,6 +166,7 @@ const RESPONSE_ALREADY_FINISHING_TEXT = "This response is already finishing";
 const MODE_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing modes";
 const SETTINGS_CHANGE_REJECTED_TEXT = "Wait for the current response to finish or stop it first before changing settings";
 const COMPACT_COMMAND_REJECTED_TEXT = "Wait for the current response to finish or stop it first before compacting";
+const CLEAR_COMMAND_REJECTED_TEXT = "Wait for the current response to finish or stop it first before clearing";
 const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one";
 const COMPACT_COMMAND_REQUIRES_SESSION_TEXT = "This chat does not have a Codex session yet. Send a normal message first to start one";
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
@@ -591,6 +593,11 @@ export class TelegramCodexBridge {
       return;
     }
 
+    if (command.command === "clear") {
+      await this.clearCurrentThread(message);
+      return;
+    }
+
     if (command.command === "compact") {
       await this.compactCurrentThread(message);
       return;
@@ -618,6 +625,11 @@ export class TelegramCodexBridge {
         },
         command.argsText
       );
+      return;
+    }
+
+    if (command.command === "clear") {
+      await this.clearCurrentThread(message);
       return;
     }
 
@@ -1039,6 +1051,71 @@ export class TelegramCodexBridge {
     }
 
     return session;
+  }
+
+  private async requireClearCommandSession(message: UserTurnMessage): Promise<BridgeSession | TopicSession | null> {
+    const session = await this.getSessionByLocation(message.chatId, message.topicId);
+    if (!session) {
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+        text: message.topicId === null ? COMPACT_COMMAND_REQUIRES_SESSION_TEXT : MODE_COMMAND_REQUIRES_SESSION_TEXT
+      });
+      return null;
+    }
+
+    if (!session.codexThreadId) {
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+        text: message.topicId === null ? ROOT_SESSION_PROVISIONING_TEXT : "This topic is still provisioning a Codex session. Try again in a moment"
+      });
+      return null;
+    }
+
+    const activeTurn = this.findActiveTurnByTopic(message.chatId, message.topicId);
+    const queueState = this.#lifecycle.getQueueState(message.chatId, message.topicId);
+    if (activeTurn || queueState.pendingSteers.length > 0 || queueState.queuedFollowUps.length > 0) {
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+        text: CLEAR_COMMAND_REJECTED_TEXT
+      });
+      return null;
+    }
+
+    return session;
+  }
+
+  private async clearCurrentThread(message: UserTurnMessage): Promise<void> {
+    const session = await this.requireClearCommandSession(message);
+    if (!session) {
+      return;
+    }
+
+    try {
+      const hydratedSession = await this.ensurePersistedSessionSettings(session);
+      const loaded = await this.codex.ensureThreadLoaded(hydratedSession.codexThreadId!);
+      const thread = await this.codex.readThread(hydratedSession.codexThreadId!);
+      const title = thread.name ?? (isRootBridgeSession(hydratedSession) ? DEFAULT_ROOT_SESSION_TITLE : "Fresh Codex Thread");
+      const freshThread = await this.codex.createThread(title, {
+        cwd: loaded.cwd,
+        settings: toCodexThreadSettingsOverride(hydratedSession.settings)
+      });
+      await this.database.activateSession(hydratedSession.id, freshThread.threadId);
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+        text: "Started a fresh Codex thread"
+      });
+    } catch (error) {
+      this.logger.error("Failed to clear thread", error);
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+        text: `Failed to start a fresh thread: ${formatError(error)}`
+      });
+    }
   }
 
   private async stopActiveTurn(message: UserTurnMessage): Promise<void> {
