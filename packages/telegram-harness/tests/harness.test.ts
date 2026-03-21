@@ -558,10 +558,9 @@ describe("Telegram harness", () => {
         text: "> done",
         entities: [
           {
-            type: "pre",
+            type: "code",
             offset: 0,
-            length: 6,
-            language: "status"
+            length: 6
           }
         ]
       },

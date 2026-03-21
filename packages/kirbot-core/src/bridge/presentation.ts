@@ -404,7 +404,7 @@ export function buildRenderedCompletionFooter(details: CompletionFooterDetails):
 }
 
 export function buildRenderedCompletionNotification(): TelegramRenderedMessage {
-  return renderPreformattedText("> done", "status");
+  return renderCodeText("> done");
 }
 
 export function buildRenderedThreadStartFooter(details: Pick<
