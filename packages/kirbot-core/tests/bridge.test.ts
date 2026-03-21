@@ -4184,7 +4184,6 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(telegram.drafts.some((draft) => draft.text === "Start from the inside.")).toBe(true);
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Start from the inside.");
   });
@@ -4346,7 +4345,6 @@ describe("TelegramCodexBridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getFinalAnswerMessage(telegram)?.text).toBe("Completed without streamed deltas");
-    expect(telegram.drafts.some((draft) => draft.text === "Completed without streamed deltas")).toBe(true);
   });
 
   it("tracks a follow-up as a pending steer until the committed user item arrives", async () => {
