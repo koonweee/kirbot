@@ -1,4 +1,6 @@
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,9 +12,9 @@ import { spawn } from "node:child_process";
 
 import { restartKirbotProductionSession } from "../src/restart-kirbot";
 
-type FakeChildProcess = EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+type FakeChildProcess = ChildProcess & {
+  stdout: PassThrough;
+  stderr: PassThrough;
 };
 
 function createCompletedChild(options?: {
@@ -20,17 +22,17 @@ function createCompletedChild(options?: {
   signal?: NodeJS.Signals | null;
   stdout?: string;
   stderr?: string;
-}): FakeChildProcess {
+}): ChildProcess {
   const child = new EventEmitter() as FakeChildProcess;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
 
   setTimeout(() => {
     if (options?.stdout) {
-      child.stdout.emit("data", options.stdout);
+      child.stdout.write(options.stdout);
     }
     if (options?.stderr) {
-      child.stderr.emit("data", options.stderr);
+      child.stderr.write(options.stderr);
     }
     child.emit("close", options?.code ?? 0, options?.signal ?? null);
   }, 0);
