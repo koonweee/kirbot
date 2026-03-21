@@ -173,6 +173,7 @@ const RESTART_NOT_CONFIGURED_TEXT = "Restart is not configured for this kirbot d
 const RESTARTING_KIRBOT_TEXT = "Rebuilding kirbot and restarting the production session…";
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled";
 const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
+const COMMANDS_KEYBOARD_TEXT = "Commands";
 const DEFAULT_ROOT_SESSION_TITLE = "Root Chat";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
@@ -211,7 +212,6 @@ export class TelegramCodexBridge {
       messenger: this.#messenger,
       telegram,
       planArtifactPublicUrl: config.telegram.miniApp.publicUrl,
-      buildTopicCommandReplyMarkup: this.buildTopicCommandReplyMarkup.bind(this),
       releaseTurnFiles: (turnId) => this.mediaStore.releaseTurnFiles(turnId),
       resolveTurnSnapshot: this.resolveTurnSnapshot.bind(this),
       syncQueuePreview: this.syncQueuePreview.bind(this),
@@ -543,6 +543,11 @@ export class TelegramCodexBridge {
       return;
     }
 
+    if (command.command === "commands") {
+      await this.showCommandKeyboard(message);
+      return;
+    }
+
     if (command.command === "cmd") {
       await this.handleCustomCommandManager(message, command.argsText);
       return;
@@ -569,6 +574,11 @@ export class TelegramCodexBridge {
 
     if (command.command === "implement") {
       await this.implementLatestPlan(message, command.argsText);
+      return;
+    }
+
+    if (command.command === "commands") {
+      await this.showCommandKeyboard(message);
       return;
     }
 
@@ -2381,6 +2391,16 @@ export class TelegramCodexBridge {
     );
   }
 
+  private async showCommandKeyboard(message: UserTurnMessage): Promise<void> {
+    const replyMarkup = await this.buildTopicCommandReplyMarkup();
+    await this.sendScopedBridgeMessage({
+      chatId: message.chatId,
+      ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+      text: COMMANDS_KEYBOARD_TEXT,
+      ...(replyMarkup ? { replyMarkup } : {})
+    });
+  }
+
   private async sendScopedBridgeMessage(input: {
     chatId: number;
     topicId?: number | null;
@@ -2390,16 +2410,9 @@ export class TelegramCodexBridge {
     replyMarkup?: TelegramReplyMarkup;
     disableNotification?: boolean;
   }): Promise<{ messageId: number }> {
-    const replyMarkup =
-      input.replyMarkup ?? (
-        input.topicId !== null && input.topicId !== undefined
-          ? await this.buildTopicCommandReplyMarkup()
-          : undefined
-      );
-
     return this.#messenger.sendMessage({
       ...input,
-      ...(replyMarkup ? { replyMarkup } : {})
+      ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {})
     });
   }
 

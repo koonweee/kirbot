@@ -126,6 +126,10 @@ describe("TelegramCommandSync", () => {
           {
             command: "permissions",
             description: "Set default or thread permissions"
+          },
+          {
+            command: "commands",
+            description: "Show the command keyboard"
           }
         ],
         options: {
@@ -175,6 +179,10 @@ describe("TelegramCommandSync", () => {
           {
             command: "permissions",
             description: "Set default or thread permissions"
+          },
+          {
+            command: "commands",
+            description: "Show the command keyboard"
           }
         ],
         options: {

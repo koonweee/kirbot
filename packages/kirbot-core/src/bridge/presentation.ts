@@ -270,10 +270,10 @@ export function buildTopicCommandKeyboard(
 
   return {
     keyboard: chunkReplyKeyboardButtons(commands, 2),
-    is_persistent: false,
+    is_persistent: true,
     resize_keyboard: true,
-    one_time_keyboard: true,
-    input_field_placeholder: "Thread commands"
+    one_time_keyboard: false,
+    input_field_placeholder: "Commands"
   };
 }
 

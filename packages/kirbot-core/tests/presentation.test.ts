@@ -174,7 +174,9 @@ describe("topic command keyboard presentation", () => {
           { command: "implement" },
           { command: "model" },
           { command: "fast" },
-          { command: "permissions" }
+          { command: "compact" },
+          { command: "permissions" },
+          { command: "commands" }
         ],
         [
           { command: "standup" },
@@ -185,13 +187,14 @@ describe("topic command keyboard presentation", () => {
       keyboard: [
         ["/stop", "/plan"],
         ["/implement", "/model"],
-        ["/fast", "/permissions"],
+        ["/fast", "/compact"],
+        ["/permissions", "/commands"],
         ["/standup", "/triage"]
       ],
-      is_persistent: false,
+      is_persistent: true,
       resize_keyboard: true,
-      one_time_keyboard: true,
-      input_field_placeholder: "Thread commands"
+      one_time_keyboard: false,
+      input_field_placeholder: "Commands"
     });
   });
 });

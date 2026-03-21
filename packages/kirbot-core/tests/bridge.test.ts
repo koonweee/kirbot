@@ -854,7 +854,7 @@ describe("TelegramCodexBridge", () => {
     expect(defaults?.spawn.model).toBeNull();
   });
 
-  it("adds shared custom commands to the root completion footer keyboard", async () => {
+  it("does not attach the command keyboard to a completion footer unless requested", async () => {
     await database.createCustomCommand({
       command: "standup",
       prompt: "Draft the status update."
@@ -887,11 +887,44 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
+    expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([]);
+  });
+
+  it.each([
+    {
+      title: "root",
+      topicId: null
+    },
+    {
+      title: "topic",
+      topicId: 777
+    }
+  ])("shows the command keyboard when /commands is requested in $title scope", async ({ topicId }) => {
+    await database.createCustomCommand({
+      command: "standup",
+      prompt: "Draft the status update."
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 11,
+      updateId: 21,
+      userId: 42,
+      text: "/commands"
+    });
+
+    expect(telegram.sentMessages.at(-1)).toMatchObject({
+      chatId: -1001,
+      ...(topicId !== null ? { options: { message_thread_id: topicId } } : {}),
+      text: "Commands"
+    });
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
       ["/stop", "/plan"],
       ["/implement", "/model"],
       ["/fast", "/compact"],
-      ["/permissions", "/standup"]
+      ["/permissions", "/commands"],
+      ["/standup"]
     ]);
   });
 
@@ -2271,12 +2304,7 @@ describe("TelegramCodexBridge", () => {
       }
     });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
-    expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
-      ["/stop", "/plan"],
-      ["/implement", "/model"],
-      ["/fast", "/compact"],
-      ["/permissions"]
-    ]);
+    expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([]);
   });
 
   it("preserves image attachments for topic /plan turns started from an image caption", async () => {
