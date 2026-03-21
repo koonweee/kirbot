@@ -555,6 +555,19 @@ describe("Telegram harness", () => {
       {
         actor: "bot",
         messageId: 502,
+        text: "> done",
+        entities: [
+          {
+            type: "pre",
+            offset: 0,
+            length: 6,
+            language: "status"
+          }
+        ]
+      },
+      {
+        actor: "bot",
+        messageId: 503,
         text: "gpt-5-codex • <1s • 100% left • /workspace • main",
         entities: [
           {
