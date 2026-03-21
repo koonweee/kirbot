@@ -41,7 +41,6 @@ export type TurnStatusState =
   | "running"
   | "editing"
   | "searching"
-  | "streaming"
   | "waiting"
   | "failed"
   | "interrupted";

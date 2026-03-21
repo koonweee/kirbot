@@ -1,5 +1,4 @@
 import type { MessageEntity } from "grammy/types";
-import type { AssistantRenderUpdate } from "../turn-runtime";
 import type {
   InlineKeyboardMarkup,
   TelegramMessenger,
@@ -13,10 +12,6 @@ export type TelegramVisibleMessageRenderOptions = {
 
 export interface TelegramTurnSurface {
   updateStatus(rendered: TelegramRenderedMessage, force?: boolean): Promise<void>;
-  applyAssistantRenderUpdate(
-    update: AssistantRenderUpdate,
-    options?: { commit?: boolean; force?: boolean }
-  ): Promise<void>;
   publishFinalAssistantMessage(
     rendered: TelegramRenderedMessage,
     options?: TelegramVisibleMessageRenderOptions
@@ -57,13 +52,6 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
 
     this.#latestStatusMessage = rendered;
     await this.#runExclusive(() => this.#flushStatus(force));
-  }
-
-  async applyAssistantRenderUpdate(
-    _update: AssistantRenderUpdate,
-    _options?: { commit?: boolean; force?: boolean }
-  ): Promise<void> {
-    return;
   }
 
   async publishFinalAssistantMessage(
