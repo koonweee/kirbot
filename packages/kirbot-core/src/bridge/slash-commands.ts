@@ -3,7 +3,7 @@ export type TelegramBotCommand = {
   description: string;
 };
 
-export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "implement" | "cmd";
+export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "implement" | "cmd" | "commands";
 export type CodexSlashCommand = "model" | "fast" | "compact" | "approvals" | "permissions";
 export type SlashCommandName = KirbotSlashCommand | CodexSlashCommand;
 export type SlashCommandKind = "kirbot" | "codex";
@@ -106,6 +106,14 @@ const SLASH_COMMAND_DEFINITIONS = [
     command: "permissions",
     description: "Set default or thread permissions",
     kind: "codex",
+    visible: true,
+    allowInRoot: true,
+    allowInTopic: true
+  },
+  {
+    command: "commands",
+    description: "Show the command keyboard",
+    kind: "kirbot",
     visible: true,
     allowInRoot: true,
     allowInTopic: true

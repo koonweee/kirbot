@@ -554,12 +554,6 @@ describe("Telegram harness", () => {
             language: "status"
           }
         ],
-        replyKeyboard: [
-          ["/stop", "/plan"],
-          ["/implement", "/model"],
-          ["/fast", "/compact"],
-          ["/permissions"]
-        ]
       }
     ]);
     expect(transcript.topics).toHaveLength(0);
@@ -797,12 +791,7 @@ describe("Telegram harness", () => {
 
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
     const footer = topicMessages[0];
-    expect(footer?.replyKeyboard).toEqual([
-      ["/stop", "/plan"],
-      ["/implement", "/model"],
-      ["/fast", "/compact"],
-      ["/permissions"]
-    ]);
+    expect(footer?.replyKeyboard).toBeUndefined();
     expect(footer?.inlineButtons).toBeUndefined();
   });
 });
