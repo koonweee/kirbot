@@ -2458,6 +2458,9 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
     expect(codex.turns).toHaveLength(1);
+    expect(await database.getSessionByTopic(-1001, 781)).toMatchObject({
+      preferredMode: "plan"
+    });
   });
 
   it("starts a plan-mode turn immediately when /plan includes a prompt", async () => {
@@ -2498,6 +2501,12 @@ describe("TelegramCodexBridge", () => {
       threadId: "thread-1",
       text: "sketch the migration",
       turnId: "turn-2"
+    });
+    expect(codex.turnCollaborationModes.at(-1)).toMatchObject({
+      turnId: "turn-2",
+      collaborationMode: {
+        mode: "plan"
+      }
     });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([]);
@@ -4933,6 +4942,9 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.turns.at(-1)?.text).toBe(["Implement the plan.", "", "Additional instructions:", "and keep the diff small"].join("\n"));
+    expect(await database.getSessionByTopic(-1001, 784)).toMatchObject({
+      preferredMode: "default"
+    });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
   });
 
@@ -4971,6 +4983,12 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.turns).toHaveLength(2);
     expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
+    expect(codex.turnCollaborationModes.at(-1)).toMatchObject({
+      turnId: "turn-2",
+      collaborationMode: {
+        mode: "default"
+      }
+    });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
   });
 
