@@ -896,7 +896,7 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
   const contextLeft =
     typeof details.contextLeftPercent === "number" ? `${details.contextLeftPercent}% left` : "100% left";
   const cwd = shortenHomePath(details.cwd);
-  const branch = details.branch?.trim() ? details.branch : "no-branch";
+  const branch = details.branch?.trim() ? details.branch : null;
   const model = details.model?.trim() ? details.model : "unknown-model";
   const modelLabel =
     details.serviceTier === "fast"
@@ -908,12 +908,12 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
     details.changedFiles > 0 ? `${details.changedFiles} ${details.changedFiles === 1 ? "file" : "files"}` : null;
 
   return [
-    modelLabel,
     formatElapsedDuration(details.durationMs, true),
-    changedFilesLabel,
     contextLeft,
+    changedFilesLabel,
     cwd,
     branch,
+    modelLabel,
     ...(details.mode === "plan" ? ["planning"] : [])
   ]
     .filter((part): part is string => part !== null)

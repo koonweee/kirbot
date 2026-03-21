@@ -101,12 +101,12 @@ describe("status presentation", () => {
         branch: "main"
       })
     ).toEqual({
-      text: "gpt-5 • 1m 0s • 100% left • /workspace • main",
+      text: "1m 0s • 100% left • /workspace • main • gpt-5",
       entities: [
         {
           type: "pre",
           offset: 0,
-          length: "gpt-5 • 1m 0s • 100% left • /workspace • main".length,
+          length: "1m 0s • 100% left • /workspace • main • gpt-5".length,
           language: "status"
         }
       ]
@@ -127,12 +127,38 @@ describe("status presentation", () => {
         branch: "main"
       })
     ).toEqual({
-      text: "gpt-5 high • 2s • 1 file • 88% left • /workspace • main • planning",
+      text: "2s • 88% left • 1 file • /workspace • main • gpt-5 high • planning",
       entities: [
         {
           type: "pre",
           offset: 0,
-          length: "gpt-5 high • 2s • 1 file • 88% left • /workspace • main • planning".length,
+          length: "2s • 88% left • 1 file • /workspace • main • gpt-5 high • planning".length,
+          language: "status"
+        }
+      ]
+    });
+  });
+
+  it("omits missing branches and orders footer metadata as time, context, files, path, branch, model", () => {
+    expect(
+      buildRenderedCompletionFooter({
+        mode: "default",
+        model: "gpt-5",
+        reasoningEffort: "high",
+        serviceTier: null,
+        durationMs: 60_000,
+        changedFiles: 2,
+        contextLeftPercent: 75,
+        cwd: "/workspace",
+        branch: null
+      })
+    ).toEqual({
+      text: "1m 0s • 75% left • 2 files • /workspace • gpt-5 high",
+      entities: [
+        {
+          type: "pre",
+          offset: 0,
+          length: "1m 0s • 75% left • 2 files • /workspace • gpt-5 high".length,
           language: "status"
         }
       ]
