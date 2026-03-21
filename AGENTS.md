@@ -117,6 +117,8 @@ belongs in `packages/telegram-format/src`.
   user-visible before/after behavior, not just the internal refactor.
 - If harness verification was part of the investigation, summarize the repro
   and the post-fix harness result in the PR description.
+- Before opening a PR, run the full repository test suite with `npm test`.
+  Do not open the PR if the full suite is failing.
 
 ## Documentation Maintenance
 

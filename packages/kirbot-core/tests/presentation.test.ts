@@ -205,13 +205,16 @@ describe("plan artifact presentation", () => {
 });
 
 describe("topic command keyboard presentation", () => {
-  it("builds a reply keyboard with built-in topic commands followed by custom commands", () => {
+  it("builds a reply keyboard with all visible built-in commands followed by custom commands", () => {
     expect(
       buildTopicCommandKeyboard(
         [
           { command: "stop" },
           { command: "plan" },
+          { command: "thread" },
+          { command: "restart" },
           { command: "implement" },
+          { command: "cmd" },
           { command: "model" },
           { command: "fast" },
           { command: "compact" },
@@ -227,11 +230,48 @@ describe("topic command keyboard presentation", () => {
     ).toEqual({
       keyboard: [
         ["/stop", "/plan"],
-        ["/implement", "/model"],
-        ["/fast", "/compact"],
-        ["/clear", "/permissions"],
-        ["/commands", "/standup"],
-        ["/triage"]
+        ["/thread", "/restart"],
+        ["/implement", "/cmd"],
+        ["/model", "/fast"],
+        ["/compact", "/clear"],
+        ["/permissions", "/commands"],
+        ["/standup", "/triage"]
+      ],
+      is_persistent: true,
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      input_field_placeholder: "Commands"
+    });
+  });
+
+  it("keeps custom commands appended after an odd number of visible built-ins", () => {
+    expect(
+      buildTopicCommandKeyboard(
+        [
+          { command: "stop" },
+          { command: "plan" },
+          { command: "thread" },
+          { command: "restart" },
+          { command: "implement" },
+          { command: "cmd" },
+          { command: "model" },
+          { command: "fast" },
+          { command: "compact" },
+          { command: "clear" },
+          { command: "permissions" },
+          { command: "commands" }
+        ],
+        [{ command: "standup" }]
+      )
+    ).toEqual({
+      keyboard: [
+        ["/stop", "/plan"],
+        ["/thread", "/restart"],
+        ["/implement", "/cmd"],
+        ["/model", "/fast"],
+        ["/compact", "/clear"],
+        ["/permissions", "/commands"],
+        ["/standup"]
       ],
       is_persistent: true,
       resize_keyboard: true,

@@ -37,7 +37,7 @@ export type CreateKirbotRuntimeOptions = {
   logTarget?: AppLogTarget;
   fallbackLogger?: LoggerLike;
   codexApi?: BridgeCodexApi;
-  restartKirbot?: () => Promise<void>;
+  restartKirbot?: (reportStep: (command: string) => Promise<void>) => Promise<void>;
 };
 
 const CODEX_INITIALIZE_TIMEOUT_MS = 10_000;

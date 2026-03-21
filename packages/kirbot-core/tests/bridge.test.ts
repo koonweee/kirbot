@@ -79,6 +79,19 @@ function getReplyKeyboardRows(message: { options?: TelegramSendOptions } | undef
   );
 }
 
+function buildRunningMessage(command: string): { text: string; entities: MessageEntity[] } {
+  return {
+    text: `Running: ${command}`,
+    entities: [
+      {
+        type: "code",
+        offset: "Running: ".length,
+        length: command.length
+      }
+    ]
+  };
+}
+
 function getWebAppUrlByButtonText(
   message: { options?: TelegramSendOptions } | undefined,
   buttonText: string
@@ -854,7 +867,7 @@ describe("TelegramCodexBridge", () => {
 
     mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
     await mediaStore.cleanupStaleFiles();
-    restartKirbot = vi.fn(async () => undefined);
+    restartKirbot = vi.fn(async (_reportStep?: (command: string) => Promise<void>) => undefined);
     bridge = new TelegramCodexBridge(config, database, telegram, codex, mediaStore, console, {
       restartKirbot
     });
@@ -982,10 +995,12 @@ describe("TelegramCodexBridge", () => {
     });
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
       ["/stop", "/plan"],
-      ["/implement", "/model"],
-      ["/fast", "/compact"],
-      ["/clear", "/permissions"],
-      ["/commands", "/standup"]
+      ["/thread", "/restart"],
+      ["/implement", "/cmd"],
+      ["/model", "/fast"],
+      ["/compact", "/clear"],
+      ["/permissions", "/commands"],
+      ["/standup"]
     ]);
   });
 
@@ -1365,6 +1380,18 @@ describe("TelegramCodexBridge", () => {
   });
 
   it("rebuilds and restarts kirbot from root /restart", async () => {
+    restartKirbot.mockImplementationOnce(async (reportStep?: (command: string) => Promise<void>) => {
+      for (const command of [
+        "git checkout master",
+        "git fetch origin",
+        "git reset --hard origin/master",
+        "npm run build",
+        "npm run start:tmux:restart"
+      ]) {
+        await reportStep?.(command);
+      }
+    });
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -1377,11 +1404,31 @@ describe("TelegramCodexBridge", () => {
     expect(restartKirbot).toHaveBeenCalledTimes(1);
     expect(telegram.createdTopics).toHaveLength(0);
     expect(codex.createdThreads).toHaveLength(0);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Rebuilding kirbot and restarting the production session…");
+    expect(
+      telegram.sentMessages.map((message) => ({
+        text: message.text,
+        entities: message.options?.entities
+      }))
+    ).toEqual([
+      buildRunningMessage("git checkout master"),
+      buildRunningMessage("git fetch origin"),
+      buildRunningMessage("git reset --hard origin/master"),
+      buildRunningMessage("npm run build"),
+      buildRunningMessage("npm run start:tmux:restart"),
+      {
+        text: "Kirbot production session restarted.",
+        entities: undefined
+      }
+    ]);
   });
 
   it("surfaces restart failures from root /restart", async () => {
-    restartKirbot.mockRejectedValueOnce(new Error("npm run build exited with code 1"));
+    restartKirbot.mockImplementationOnce(async (reportStep?: (command: string) => Promise<void>) => {
+      await reportStep?.("git checkout master");
+      await reportStep?.("git fetch origin");
+      await reportStep?.("git reset --hard origin/master");
+      throw new Error("git reset --hard origin/master exited with code 1");
+    });
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1393,9 +1440,19 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(restartKirbot).toHaveBeenCalledTimes(1);
-    expect(telegram.sentMessages.slice(-2).map((message) => message.text)).toEqual([
-      "Rebuilding kirbot and restarting the production session…",
-      "Failed to rebuild or restart kirbot: npm run build exited with code 1"
+    expect(
+      telegram.sentMessages.map((message) => ({
+        text: message.text,
+        entities: message.options?.entities
+      }))
+    ).toEqual([
+      buildRunningMessage("git checkout master"),
+      buildRunningMessage("git fetch origin"),
+      buildRunningMessage("git reset --hard origin/master"),
+      {
+        text: "Failed to rebuild or restart kirbot: git reset --hard origin/master exited with code 1",
+        entities: undefined
+      }
     ]);
   });
 

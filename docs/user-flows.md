@@ -108,7 +108,7 @@ Verified by:
 User experience:
 
 - `/stop` interrupts the active turn for the current topic.
-- Topic footer and command-confirmation messages refresh a reply keyboard that exposes the thread-valid slash commands without relying on Telegram's chat-scoped command menu.
+- Topic footer and command-confirmation messages refresh a reply keyboard that exposes all visible built-in slash commands plus saved custom commands without relying on Telegram's chat-scoped command menu.
 - If the turn is already finishing, the user gets a clear response instead of a duplicate interrupt.
 - Pending steer instructions can be submitted right after the interrupt completes.
 
@@ -126,7 +126,7 @@ Verified by:
 User experience:
 
 - `/model`, `/fast`, and `/permissions` in the root chat first ask whether to update the live root thread or the defaults for future `/thread` topics.
-- `/restart` in the lobby rebuilds kirbot and restarts the detached production tmux session.
+- `/restart` in the lobby reports each deployment step in Telegram, then checks out `master`, fetches `origin`, hard-resets to `origin/master`, rebuilds kirbot, and restarts the detached production tmux session.
 - The same commands inside a topic change only that topic's existing Codex thread settings.
 - Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
 - Existing topic threads do not follow later root-level spawn-default changes automatically.
