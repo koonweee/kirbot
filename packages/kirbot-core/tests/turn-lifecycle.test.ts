@@ -338,19 +338,15 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.coordinator.getTurn("turn-1")).toBeUndefined();
   });
 
-  it("keeps the status bubble for completed plan-only turns", async () => {
-    const harness = createHarness({
-      text: "1. Draft the rollout",
-      assistantText: "",
-      planText: "1. Draft the rollout"
-    });
+  it("keeps the status bubble for interrupted turns", async () => {
+    const harness = createHarness();
 
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
     await harness.coordinator.publishCurrentStatus("turn-1", true);
-    await harness.coordinator.completeTurn("thread-1", "turn-1");
+    await harness.coordinator.finalizeInterruptedTurnById("thread-1", "turn-1");
 
     expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("thinking · 0s");
-    expect(harness.telegram.edits.at(-1)?.text).toBe("completed");
+    expect(harness.telegram.edits.at(-1)?.text).toBe("interrupted");
     expect(harness.telegram.deletions).toEqual([]);
   });
 

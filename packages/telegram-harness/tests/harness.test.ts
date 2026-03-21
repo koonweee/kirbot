@@ -571,6 +571,7 @@ describe("Telegram harness", () => {
     const eventTypes = harness.getTelegramEvents().map((event) => event.type);
     expect(eventTypes).toContain("telegram.sendChatAction");
     expect(eventTypes).toContain("telegram.sendMessage");
+    expect(eventTypes).toContain("telegram.deleteMessage");
   });
 
   it("supports root image sends and forwards them to Codex as local images", async () => {

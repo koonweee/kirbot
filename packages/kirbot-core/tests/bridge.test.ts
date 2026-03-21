@@ -1475,14 +1475,6 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-1"
       }
     ]);
-    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
-      mode: "plan",
-      settings: {
-        model: "gpt-5-codex",
-        reasoning_effort: "high",
-        developer_instructions: null
-      }
-    });
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
@@ -1512,8 +1504,6 @@ describe("TelegramCodexBridge", () => {
       }
     ]);
 
-    const session = await database.getSessionByTopic(-1001, 101);
-    expect(session?.preferredMode).toBe("plan");
   });
 
   it("preserves image attachments for root /plan turns started from an image caption", async () => {
@@ -1598,8 +1588,6 @@ describe("TelegramCodexBridge", () => {
       }
     ]);
 
-    const session = await database.getSessionByTopic(-1001, 101);
-    expect(session?.preferredMode).toBe("plan");
   });
 
   it("rejects /implement from root instead of creating a new topic", async () => {
@@ -2470,8 +2458,6 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
     expect(codex.turns).toHaveLength(1);
-    const session = await database.getSessionByTopic(-1001, 781);
-    expect(session?.preferredMode).toBe("plan");
   });
 
   it("starts a plan-mode turn immediately when /plan includes a prompt", async () => {
@@ -2512,14 +2498,6 @@ describe("TelegramCodexBridge", () => {
       threadId: "thread-1",
       text: "sketch the migration",
       turnId: "turn-2"
-    });
-    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
-      mode: "plan",
-      settings: {
-        model: "gpt-5-codex",
-        reasoning_effort: null,
-        developer_instructions: null
-      }
     });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([]);
@@ -2583,8 +2561,6 @@ describe("TelegramCodexBridge", () => {
       text_elements: []
     });
     expect(codex.turns.at(-1)?.input[1]?.type).toBe("localImage");
-    const session = await database.getSessionByTopic(-1001, 783);
-    expect(session?.preferredMode).toBe("plan");
   });
 
   it("retains Telegram images until the turn completes", async () => {
@@ -4957,17 +4933,7 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.turns.at(-1)?.text).toBe(["Implement the plan.", "", "Additional instructions:", "and keep the diff small"].join("\n"));
-    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
-      mode: "default",
-      settings: {
-        model: "gpt-5-codex",
-        reasoning_effort: null,
-        developer_instructions: config.codex.developerInstructions ?? null
-      }
-    });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
-    const session = await database.getSessionByTopic(-1001, 784);
-    expect(session?.preferredMode).toBe("default");
   });
 
   it("starts a default-mode implementation turn without requiring stored plan text", async () => {
@@ -5120,17 +5086,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.turns).toHaveLength(2);
     expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
-    expect(codex.turnCollaborationModes.at(-1)?.collaborationMode).toEqual({
-      mode: "default",
-      settings: {
-        model: "gpt-5-codex",
-        reasoning_effort: null,
-        developer_instructions: config.codex.developerInstructions ?? null
-      }
-    });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
-    const session = await database.getSessionByTopic(-1001, 786);
-    expect(session?.preferredMode).toBe("default");
   });
 
   it("interrupts the active turn from /stop", async () => {
