@@ -24,14 +24,12 @@ import {
   transitionTurnPhase
 } from "./turn-context";
 import { formatError } from "./error-handling";
-import type { TelegramTurnSurfaceMode } from "./telegram-turn-surface";
 
 export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
   messenger: TelegramMessenger;
   telegram: TelegramApi;
   planArtifactPublicUrl: string;
-  telegramTurnSurfaceMode?: TelegramTurnSurfaceMode;
   buildTopicCommandReplyMarkup?(): Promise<ReplyKeyboardMarkup | undefined>;
   releaseTurnFiles(turnId: string): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;

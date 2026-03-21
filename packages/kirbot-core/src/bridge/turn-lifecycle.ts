@@ -57,15 +57,13 @@ export class TurnLifecycleCoordinator {
       stopRequested: false,
       submitPendingSteersAfterInterrupt: false,
       startedAtMs,
-      surfaceMode: this.deps.telegramTurnSurfaceMode ?? "status_then_final_message",
       draftMode: "status",
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: startedAtMs,
       visibleMessageHandle: createTelegramTurnSurface({
         messenger: this.deps.messenger,
         chatId: message.chatId,
-        topicId: message.topicId,
-        ...(this.deps.telegramTurnSurfaceMode ? { mode: this.deps.telegramTurnSurfaceMode } : {})
+        topicId: message.topicId
       }),
       statusElapsedTimer: null,
       compactionNoticeSent: false,
@@ -409,10 +407,6 @@ export class TurnLifecycleCoordinator {
     }
 
     if (update.draftKind === "assistant") {
-      if (context.surfaceMode === "edit_streaming") {
-        context.draftMode = "assistant";
-        context.statusDraft = null;
-      }
       await context.visibleMessageHandle.applyAssistantRenderUpdate(update, {
         force: options?.force ?? false,
         commit: options?.commit ?? false

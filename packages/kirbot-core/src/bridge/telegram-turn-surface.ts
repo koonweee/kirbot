@@ -5,14 +5,11 @@ import type {
   TelegramMessenger,
   TelegramRenderedMessage
 } from "../telegram-messenger";
-import { EditStreamingTurnSurface } from "./telegram-streaming";
 
 export type TelegramVisibleMessageRenderOptions = {
   disableNotification?: boolean;
   replyMarkup?: InlineKeyboardMarkup;
 };
-
-export type TelegramTurnSurfaceMode = "status_then_final_message" | "edit_streaming";
 
 export interface TelegramTurnSurface {
   updateStatus(rendered: TelegramRenderedMessage, force?: boolean): Promise<void>;
@@ -32,16 +29,11 @@ export function createTelegramTurnSurface(input: {
   messenger: TelegramMessenger;
   chatId: number;
   topicId: number | null;
-  mode?: TelegramTurnSurfaceMode;
 }): TelegramTurnSurface {
-  if (input.mode === "edit_streaming") {
-    return new EditStreamingTurnSurface(input.messenger, input.chatId, input.topicId);
-  }
-
-  return new StatusThenFinalMessageTurnSurface(input.messenger, input.chatId, input.topicId);
+  return new TelegramStatusBubbleTurnSurface(input.messenger, input.chatId, input.topicId);
 }
 
-class StatusThenFinalMessageTurnSurface implements TelegramTurnSurface {
+class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
   #statusMessageId: number | null = null;
   #closed = false;
   #currentStatusMessage: TelegramRenderedMessage | null = null;

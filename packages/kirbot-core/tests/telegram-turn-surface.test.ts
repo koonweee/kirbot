@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { MessageEntity } from "grammy/types";
 
 import { createTelegramTurnSurface } from "../src/bridge/telegram-turn-surface";
@@ -224,28 +226,8 @@ describe("Telegram turn surfaces", () => {
     expect(telegram.deletions).toHaveLength(0);
   });
 
-  it("can still select the edit-streaming surface explicitly", async () => {
-    const telegram = new FakeTelegram();
-    const surface = createTelegramTurnSurface({
-      messenger: new TelegramMessenger(telegram),
-      chatId: -1001,
-      topicId: 777,
-      mode: "edit_streaming"
-    });
-
-    await surface.updateStatus({ text: "thinking" }, true);
-    await surface.applyAssistantRenderUpdate(createAssistantUpdate("Hello world."), {
-      force: true,
-      commit: false
-    });
-
-    expect(telegram.sentMessages).toHaveLength(1);
-    expect(telegram.edits).toEqual([
-      {
-        chatId: -1001,
-        messageId: 1,
-        text: "Hello world."
-      }
-    ]);
+  it("does not retain the legacy Telegram streaming implementation module", async () => {
+    const legacyModulePath = join(process.cwd(), "packages/kirbot-core/src/bridge/telegram-streaming.ts");
+    expect(existsSync(legacyModulePath)).toBe(false);
   });
 });
