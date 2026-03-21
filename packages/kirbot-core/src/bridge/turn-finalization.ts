@@ -109,10 +109,6 @@ export class TurnFinalizer {
       await this.publishCompletionFooter(context, snapshot);
     }
 
-    if (!publishedFinalAssistantMessage) {
-      await context.draftHandle.clear();
-    }
-
     await this.deps.releaseTurnFiles(context.turnId);
 
     const queueState = this.deps.runtime.finalizeTurn(context.turnId);
@@ -171,12 +167,12 @@ export class TurnFinalizer {
   ): Promise<number> {
     const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
 
-    const messageId = await context.draftHandle.finalize(
+    const messageId = await context.visibleMessageHandle.finalize(
       buildRenderedAssistantMessage(text, {
         includeContinueInViewNote: attachment.includeContinueInViewNote
       }),
       {
-        ...(attachment.replyMarkup ? { firstMessageReplyMarkup: attachment.replyMarkup } : {}),
+        ...(attachment.replyMarkup ? { replyMarkup: attachment.replyMarkup } : {}),
         disableNotification: false
       }
     );

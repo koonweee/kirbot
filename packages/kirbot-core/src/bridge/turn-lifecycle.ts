@@ -9,16 +9,15 @@ import {
   buildActivityLogEntryForItemCompleted,
   buildPlanArtifactMessages,
   buildOversizePlanArtifactMessage,
-  buildStableDraftId,
   buildStatusDraft,
   buildStatusDraftForItem,
   isSameStatusDraft,
-  renderTelegramAssistantDraft,
   renderTelegramStatusDraft,
   type TurnStatusDraft
 } from "./presentation";
 import { type AssistantRenderUpdate, type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
+import { TelegramTurnStream } from "./telegram-streaming";
 import {
   type TurnLifecycleDependencies,
   TurnFinalizer
@@ -61,11 +60,7 @@ export class TurnLifecycleCoordinator {
       draftMode: "status",
       statusDraft: buildStatusDraft("thinking"),
       lastStatusUpdateAt: startedAtMs,
-      draftHandle: this.deps.messenger.streamMessage({
-        chatId: message.chatId,
-        topicId: message.topicId,
-        draftId: buildStableDraftId(`${turnId}:draft`)
-      }),
+      visibleMessageHandle: new TelegramTurnStream(this.deps.messenger, message.chatId, message.topicId),
       statusElapsedTimer: null,
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
@@ -227,7 +222,7 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    await context.draftHandle.update(rendered, force);
+    await context.visibleMessageHandle.updateStatus(rendered, force);
   }
 
   async handleTurnStarted(turnId: string): Promise<void> {
@@ -273,7 +268,10 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    await this.handleAssistantRenderUpdate(context, update, update.startedAssistantText);
+    await this.handleAssistantRenderUpdate(context, update, {
+      commit: false,
+      force: false
+    });
   }
 
   async handleItemCompleted(turnId: string, item: ThreadItem): Promise<void> {
@@ -302,7 +300,10 @@ export class TurnLifecycleCoordinator {
         return;
       }
 
-      await this.handleAssistantRenderUpdate(context, update, true);
+      await this.handleAssistantRenderUpdate(context, update, {
+        commit: true,
+        force: true
+      });
       return;
     }
 
@@ -395,7 +396,7 @@ export class TurnLifecycleCoordinator {
   private async handleAssistantRenderUpdate(
     context: TurnContext,
     update: AssistantRenderUpdate,
-    forceDraft = false
+    options?: { commit?: boolean; force?: boolean }
   ): Promise<void> {
     if (update.itemPhase === "commentary") {
       return;
@@ -404,7 +405,10 @@ export class TurnLifecycleCoordinator {
     if (update.draftKind === "assistant") {
       context.draftMode = "assistant";
       context.statusDraft = null;
-      await context.draftHandle.update(renderTelegramAssistantDraft(update.draftText || "…"), forceDraft);
+      await context.visibleMessageHandle.applyAssistantRenderUpdate(update, {
+        force: options?.force ?? false,
+        commit: options?.commit ?? false
+      });
     }
   }
 
@@ -433,7 +437,7 @@ export class TurnLifecycleCoordinator {
       return;
     }
 
-    await context.draftHandle.update(rendered, force);
+    await context.visibleMessageHandle.updateStatus(rendered, force);
   }
 
   private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {
