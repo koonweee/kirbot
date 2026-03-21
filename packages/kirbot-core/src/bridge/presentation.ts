@@ -26,7 +26,6 @@ import {
 } from "../mini-app/url";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
-const TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT = 3500;
 const COMMAND_FAILURE_OUTPUT_CHAR_LIMIT = 1200;
 const FILE_CHANGE_PATH_PREVIEW_LIMIT = 8;
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
@@ -77,16 +76,6 @@ export type ArtifactPublication = {
 
 export function deriveTopicTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
-}
-
-export function buildStableDraftId(seed: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return (hash >>> 1) || 1;
 }
 
 export function buildStatusDraft(state: TurnStatusState): TurnStatusDraft {
@@ -282,10 +271,6 @@ export function renderTelegramStatusDraft(
   elapsedMs: number | null = null
 ): TelegramRenderedMessage | null {
   return statusDraft ? buildRenderedStatusText(statusDraft, elapsedMs) : null;
-}
-
-export function renderTelegramAssistantDraft(text: string): TelegramRenderedMessage {
-  return renderMarkdownToFormattedText(buildDraftPreviewWithLimit(text, TELEGRAM_DRAFT_PREVIEW_CHAR_LIMIT));
 }
 
 export function buildCommentaryArtifactButton(publicUrl: string, entries: ActivityLogEntry[]): TelegramInlineKeyboardButton {
@@ -531,10 +516,6 @@ function summarizeFileChanges(changes: Array<{ path: string }>): string | null {
   }
 
   return `${first ?? changes.length} (+${summary.additionalCount} more)`;
-}
-
-function buildDraftPreviewWithLimit(text: string, limit: number): string {
-  return buildTruncatedPreview(text, limit, "…\n", "\n\n[preview truncated]");
 }
 
 export function buildActivityLogEntryForItemCompleted(item: ThreadItem): ActivityLogEntry | null {

@@ -8,8 +8,6 @@ import type { TelegramTurnSurface } from "./telegram-turn-surface";
 export type TurnPhase = "submitting" | "active" | "finalizing" | "completed" | "failed" | "interrupted";
 export type TerminalTurnStatus = Extract<TurnPhase, "completed" | "failed" | "interrupted">;
 
-export type TurnDraftMode = "status" | "assistant";
-
 export type TurnContext = {
   chatId: number;
   topicId: number | null;
@@ -19,7 +17,6 @@ export type TurnContext = {
   stopRequested: boolean;
   submitPendingSteersAfterInterrupt: boolean;
   startedAtMs: number;
-  draftMode: TurnDraftMode;
   statusDraft: TurnStatusDraft | null;
   lastStatusUpdateAt: number;
   visibleMessageHandle: TelegramTurnSurface;
