@@ -2645,7 +2645,7 @@ function buildPermissionsUpdatedMessage(scope: SettingsSelectionScope, label: st
 
 function toPersistedThreadSettings(settings: Pick<CodexThreadSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy">): PersistedThreadSettings {
   return {
-    model: settings.model,
+    model: normalizePersistedModel(settings.model),
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     approvalPolicy: settings.approvalPolicy,
@@ -2667,13 +2667,23 @@ function mergePersistedThreadSettings(
 }
 
 function toCodexThreadSettingsOverride(settings: PersistedThreadSettings): CodexThreadSettingsOverride {
+  const model = normalizePersistedModel(settings.model);
+
   return {
-    ...(settings.model ? { model: settings.model } : {}),
+    ...(model ? { model } : {}),
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
     ...(settings.sandboxPolicy ? { sandboxPolicy: settings.sandboxPolicy } : {})
   };
+}
+
+function normalizePersistedModel(model: string | null): string | null {
+  if (!model || model === "unknown-model") {
+    return null;
+  }
+
+  return model;
 }
 
 function toPermissionDetectionSettings(

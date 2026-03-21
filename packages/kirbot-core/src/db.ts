@@ -179,7 +179,7 @@ function mapPersistedThreadSettings(input: {
   sandboxPolicyJson: string | null;
 }): PersistedThreadSettings {
   return {
-    model: input.model,
+    model: normalizePersistedModel(input.model),
     reasoningEffort: input.reasoningEffort as PersistedThreadSettings["reasoningEffort"],
     serviceTier: input.serviceTier as PersistedThreadSettings["serviceTier"],
     approvalPolicy: input.approvalPolicyJson
@@ -187,6 +187,14 @@ function mapPersistedThreadSettings(input: {
       : null,
     sandboxPolicy: input.sandboxPolicyJson ? (JSON.parse(input.sandboxPolicyJson) as PersistedThreadSettings["sandboxPolicy"]) : null
   };
+}
+
+function normalizePersistedModel(model: string | null): string | null {
+  if (!model || model === "unknown-model") {
+    return null;
+  }
+
+  return model;
 }
 
 function sessionSurfaceToRow(surface: SessionSurface): Pick<SessionsTable, "surface_kind" | "telegram_topic_id"> {

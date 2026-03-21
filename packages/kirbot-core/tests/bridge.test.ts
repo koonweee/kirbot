@@ -825,6 +825,30 @@ describe("TelegramCodexBridge", () => {
     expect(session?.codexThreadId).toBe("thread-1");
   });
 
+  it("does not persist or reuse the unknown-model sentinel for root defaults", async () => {
+    codex.model = "unknown-model";
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20,
+      userId: 42,
+      text: "Fix the failing deployment tests"
+    });
+
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "Root Chat",
+      settings: expect.not.objectContaining({
+        model: "unknown-model"
+      })
+    });
+
+    const defaults = await database.getChatThreadDefaults("-1001");
+    expect(defaults?.root.model).toBeNull();
+    expect(defaults?.spawn.model).toBeNull();
+  });
+
   it("adds shared custom commands to the root completion footer keyboard", async () => {
     await database.createCustomCommand({
       command: "standup",
