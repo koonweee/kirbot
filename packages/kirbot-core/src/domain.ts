@@ -42,6 +42,7 @@ export type TopicSession = {
   codexThreadId: string | null;
   status: SessionStatus;
   preferredMode: SessionMode;
+  settings: PersistedThreadSettings;
 };
 
 export type BridgeSession = {
@@ -51,6 +52,7 @@ export type BridgeSession = {
   codexThreadId: string | null;
   status: SessionStatus;
   preferredMode: SessionMode;
+  settings: PersistedThreadSettings;
 };
 
 export type PendingServerRequest = {

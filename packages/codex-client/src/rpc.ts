@@ -11,6 +11,8 @@ import type { ServerNotification } from "./generated/codex/ServerNotification";
 import type { ServerRequest } from "./generated/codex/ServerRequest";
 import type { ThreadArchiveParams } from "./generated/codex/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "./generated/codex/v2/ThreadArchiveResponse";
+import type { ThreadCompactStartParams } from "./generated/codex/v2/ThreadCompactStartParams";
+import type { ThreadCompactStartResponse } from "./generated/codex/v2/ThreadCompactStartResponse";
 import type { ThreadReadParams } from "./generated/codex/v2/ThreadReadParams";
 import type { ThreadReadResponse } from "./generated/codex/v2/ThreadReadResponse";
 import type { ThreadResumeParams } from "./generated/codex/v2/ThreadResumeParams";
@@ -72,6 +74,10 @@ type SupportedMethodMap = {
   "thread/archive": {
     params: ThreadArchiveParams;
     result: ThreadArchiveResponse;
+  };
+  "thread/compact/start": {
+    params: ThreadCompactStartParams;
+    result: ThreadCompactStartResponse;
   };
   "thread/name/set": {
     params: ThreadSetNameParams;
@@ -374,6 +380,10 @@ export class CodexRpcClient extends EventEmitter {
 
   async archiveThread(params: ThreadArchiveParams): Promise<ThreadArchiveResponse> {
     return this.call("thread/archive", params);
+  }
+
+  async threadCompactStart(params: ThreadCompactStartParams): Promise<ThreadCompactStartResponse> {
+    return this.call("thread/compact/start", params);
   }
 
   async setThreadName(params: ThreadSetNameParams): Promise<ThreadSetNameResponse> {

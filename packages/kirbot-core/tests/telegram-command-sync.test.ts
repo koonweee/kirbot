@@ -120,6 +120,10 @@ describe("TelegramCommandSync", () => {
             description: "Toggle default or thread fast mode"
           },
           {
+            command: "compact",
+            description: "Compact the current thread"
+          },
+          {
             command: "permissions",
             description: "Set default or thread permissions"
           }
@@ -163,6 +167,10 @@ describe("TelegramCommandSync", () => {
           {
             command: "fast",
             description: "Toggle default or thread fast mode"
+          },
+          {
+            command: "compact",
+            description: "Compact the current thread"
           },
           {
             command: "permissions",

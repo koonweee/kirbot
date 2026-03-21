@@ -130,6 +130,8 @@ User experience:
 - The same commands inside a topic change only that topic's existing Codex thread settings.
 - Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
 - Existing topic threads do not follow later root-level spawn-default changes automatically.
+- Existing root and topic sessions persist their own thread settings in Kirbot, and every real turn start applies those stored settings explicitly.
+- `thread/resume` is no longer treated as the write path for thread settings; it is used only to reattach a persisted thread to a cold app-server process.
 - `/approvals` remains an alias for `/permissions`.
 
 Owned by:

@@ -53,8 +53,8 @@ export class RoutedCodexApi implements BridgeCodexApi {
     return this.#runThreadOperation(threadId, (gateway) => gateway.ensureThreadLoaded(threadId));
   }
 
-  async updateThreadSettings(threadId: string, update: CodexThreadSettingsOverride) {
-    return this.#runThreadOperation(threadId, (gateway) => gateway.updateThreadSettings(threadId, update));
+  async compactThread(threadId: string) {
+    return this.#runThreadOperation(threadId, (gateway) => gateway.compactThread(threadId));
   }
 
   async sendTurn(
