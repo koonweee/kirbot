@@ -5,6 +5,7 @@ import {
   buildCommentaryArtifactPublication,
   buildOversizeResponseArtifactMessage,
   buildRenderedAssistantMessage,
+  buildRenderedCompletionNotification,
   buildResponseArtifactPublication,
   buildOversizeCommentaryArtifactMessage,
   buildRenderedCompletionFooter,
@@ -99,6 +100,7 @@ export class TurnFinalizer {
       !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
     if (!publishesPlanOnly && publishedFinalAssistantMessage) {
       await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
+      await this.publishCompletionNotification(context);
     }
 
     if (responsePublication?.oversizeNoticeText) {
@@ -249,6 +251,17 @@ export class TurnFinalizer {
       text: rendered.text,
       ...(replyMarkup ? { replyMarkup } : {}),
       ...(rendered.entities ? { entities: rendered.entities } : {})
+    });
+  }
+
+  private async publishCompletionNotification(context: TurnContext): Promise<void> {
+    const rendered = buildRenderedCompletionNotification();
+    await this.deps.messenger.sendMessage({
+      chatId: context.chatId,
+      topicId: context.topicId,
+      text: rendered.text,
+      ...(rendered.entities ? { entities: rendered.entities } : {}),
+      disableNotification: false
     });
   }
 

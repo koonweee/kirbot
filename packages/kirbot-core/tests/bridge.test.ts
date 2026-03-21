@@ -112,12 +112,21 @@ function getCallbackDataByButtonText(
 }
 
 function getFinalAnswerMessage(telegram: FakeTelegram) {
-  const last = telegram.drafts.at(-1) ?? telegram.sentMessages.at(-1);
-  if (last?.text.includes(" • ") && last.text.includes("% left")) {
-    return telegram.drafts.at(-2) ?? telegram.sentMessages.at(-2);
+  const messages = telegram.drafts.length > 0 ? telegram.drafts : telegram.sentMessages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const text = messages[index]?.text ?? "";
+    if (text === "> done") {
+      continue;
+    }
+
+    if (text.includes(" • ") && text.includes("% left")) {
+      continue;
+    }
+
+    return messages[index];
   }
 
-  return last;
+  return undefined;
 }
 
 function isStreamingStatusText(text: string): boolean {
