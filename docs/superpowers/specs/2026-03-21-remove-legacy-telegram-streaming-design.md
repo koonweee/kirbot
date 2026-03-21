@@ -89,6 +89,12 @@ Remove:
 
 The remaining implementation should be renamed to something neutral, such as `TelegramTurnMessageSurface`, so the code reflects that there is now only one supported Telegram turn UX.
 
+Expected API cleanup:
+
+- `createTelegramTurnSurface(...)` should stop accepting any mode/selector input and always return the single supported implementation
+- `TurnLifecycleDependencies` should drop any Telegram surface mode selection field
+- turn context should no longer store a Telegram surface mode value
+
 ## Data Flow
 
 ### Turn Activation
@@ -150,6 +156,8 @@ As part of cleanup, verify there are no remaining code or test references to:
 - `surfaceMode`
 - `EditStreamingTurnSurface`
 - `TelegramTurnStream`
+
+Also verify there are no leftover compatibility shims or re-exports that still expose the removed legacy path indirectly.
 
 ## Out of Scope
 
