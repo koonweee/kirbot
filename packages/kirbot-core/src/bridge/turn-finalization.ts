@@ -12,6 +12,7 @@ import {
   type CompletionFooterDetails
 } from "./presentation";
 import type {
+  ReplyKeyboardMarkup,
   TelegramApi,
   TelegramMessenger
 } from "../telegram-messenger";
@@ -29,6 +30,7 @@ export type TurnLifecycleDependencies = {
   messenger: TelegramMessenger;
   telegram: TelegramApi;
   planArtifactPublicUrl: string;
+  buildTopicCommandReplyMarkup?(): Promise<ReplyKeyboardMarkup | undefined>;
   releaseTurnFiles(turnId: string): Promise<void>;
   resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   syncQueuePreview(queueState: QueueStateSnapshot): Promise<void>;
@@ -244,10 +246,12 @@ export class TurnFinalizer {
 
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {
     const rendered = buildRenderedCompletionFooter(this.buildCompletionFooterDetails(context, snapshot));
+    const replyMarkup = await this.deps.buildTopicCommandReplyMarkup?.();
     await this.deps.messenger.sendMessage({
       chatId: context.chatId,
       topicId: context.topicId,
       text: rendered.text,
+      ...(replyMarkup ? { replyMarkup } : {}),
       ...(rendered.entities ? { entities: rendered.entities } : {})
     });
   }
