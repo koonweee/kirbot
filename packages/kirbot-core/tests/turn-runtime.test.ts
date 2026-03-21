@@ -137,7 +137,7 @@ describe("BridgeTurnRuntime", () => {
     });
   });
 
-  it("keeps commentary out of the assistant draft while reserving final output for final-answer items", () => {
+  it("keeps commentary out of final output while reserving final text for final-answer items", () => {
     const runtime = new BridgeTurnRuntime();
     runtime.registerTurn({
       chatId: -1001,
@@ -147,35 +147,12 @@ describe("BridgeTurnRuntime", () => {
     });
 
     runtime.registerAssistantItem("turn-1", "item-1", "commentary");
-    const commentary = runtime.appendAssistantDelta("turn-1", "item-1", "Inspecting the repo");
-
-    expect(commentary).toEqual({
-      itemId: "item-1",
-      itemText: "Inspecting the repo",
-      itemPhase: "commentary",
-      draftText: "",
-      draftKind: null,
-      finalText: "",
-      startedAssistantText: true
-    });
+    runtime.appendAssistantDelta("turn-1", "item-1", "Inspecting the repo");
     expect(runtime.renderCommentaryItems("turn-1")).toEqual(["Inspecting the repo"]);
+    expect(runtime.renderAssistantItems("turn-1")).toBe("");
 
     runtime.registerAssistantItem("turn-1", "item-2", "final_answer");
-    const finalAnswer = runtime.appendAssistantDelta("turn-1", "item-2", "Here is the fix.");
-
-    expect(finalAnswer).toEqual({
-      itemId: "item-2",
-      itemText: "Here is the fix.",
-      itemPhase: "final_answer",
-      draftText: "Here is the fix.",
-      draftKind: "assistant",
-      finalText: "Here is the fix.",
-      startedAssistantText: false
-    });
-    expect(runtime.renderAssistantDraft("turn-1")).toEqual({
-      text: "Here is the fix.",
-      kind: "assistant"
-    });
+    runtime.appendAssistantDelta("turn-1", "item-2", "Here is the fix.");
     expect(runtime.renderAssistantItems("turn-1")).toBe("Here is the fix.");
     expect(runtime.renderActivityLogEntries("turn-1")).toEqual([
       {
@@ -242,10 +219,6 @@ describe("BridgeTurnRuntime", () => {
     runtime.appendAssistantDelta("turn-1", "item-1", "First part");
     runtime.appendAssistantDelta("turn-1", "item-2", "Second part");
 
-    expect(runtime.renderAssistantDraft("turn-1")).toEqual({
-      text: "First part\n\nSecond part",
-      kind: "assistant"
-    });
     expect(runtime.renderAssistantItems("turn-1")).toBe("First part\n\nSecond part");
   });
 

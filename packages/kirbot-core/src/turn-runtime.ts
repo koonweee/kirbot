@@ -65,7 +65,6 @@ export type RuntimeTurn = {
   planItems: Map<string, PlanItemState>;
   activityLogEntries: ActivityLogEntry[];
   commentaryActivityEntryIndexes: Map<string, number>;
-  hasAssistantText: boolean;
 };
 
 type PendingSteer = {
@@ -92,18 +91,6 @@ export type PendingSteerDrain = {
   queueState: QueueStateSnapshot;
 };
 
-export type AssistantDraftKind = "assistant";
-
-export type AssistantRenderUpdate = {
-  itemId: string;
-  itemText: string;
-  itemPhase: MessagePhase | null;
-  draftText: string;
-  draftKind: AssistantDraftKind | null;
-  finalText: string;
-  startedAssistantText: boolean;
-};
-
 export class BridgeTurnRuntime {
   readonly #turns = new Map<string, RuntimeTurn>();
   readonly #topicStates = new Map<string, TopicState>();
@@ -125,8 +112,7 @@ export class BridgeTurnRuntime {
       planItemOrder: [],
       planItems: new Map<string, PlanItemState>(),
       activityLogEntries: [],
-      commentaryActivityEntryIndexes: new Map<string, number>(),
-      hasAssistantText: false
+      commentaryActivityEntryIndexes: new Map<string, number>()
     };
 
     this.#turns.set(input.turnId, turn);
@@ -257,19 +243,15 @@ export class BridgeTurnRuntime {
     ensurePlanItem(turn, itemId);
   }
 
-  appendAssistantDelta(turnId: string, itemId: string, delta: string): AssistantRenderUpdate | null {
+  appendAssistantDelta(turnId: string, itemId: string, delta: string): void {
     const turn = this.#turns.get(turnId);
     if (!turn) {
-      return null;
+      return;
     }
 
-    const startedAssistantText = !turn.hasAssistantText;
-    turn.hasAssistantText = true;
     const item = ensureAssistantItem(turn, itemId);
     item.text = `${item.text}${delta}`;
     syncCommentaryActivityEntry(turn, itemId, item.phase, item.text);
-
-    return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
 
   commitAssistantItem(
@@ -277,20 +259,16 @@ export class BridgeTurnRuntime {
     itemId: string,
     text: string,
     phase: MessagePhase | null
-  ): AssistantRenderUpdate | null {
+  ): void {
     const turn = this.#turns.get(turnId);
     if (!turn) {
-      return null;
+      return;
     }
 
-    const startedAssistantText = !turn.hasAssistantText;
-    turn.hasAssistantText = true;
     const item = ensureAssistantItem(turn, itemId);
     item.phase = phase;
     item.text = text;
     syncCommentaryActivityEntry(turn, itemId, phase, text);
-
-    return buildAssistantRenderUpdate(turn, itemId, startedAssistantText);
   }
 
   commitPlanItem(turnId: string, itemId: string, text: string): void {
@@ -335,11 +313,6 @@ export class BridgeTurnRuntime {
   getLatestPlanItemId(turnId: string): string | null {
     const turn = this.#turns.get(turnId);
     return turn?.planItemOrder.at(-1) ?? null;
-  }
-
-  renderAssistantDraft(turnId: string): { text: string; kind: AssistantDraftKind | null } {
-    const turn = this.#turns.get(turnId);
-    return turn ? renderAssistantDraft(turn) : { text: "", kind: null };
   }
 
   finalizeTurn(turnId: string): QueueStateSnapshot | null {
@@ -473,42 +446,6 @@ function syncCommentaryActivityEntry(
   if (entry.kind === "commentary") {
     entry.text = text;
   }
-}
-
-function buildAssistantRenderUpdate(turn: RuntimeTurn, itemId: string, startedAssistantText: boolean): AssistantRenderUpdate {
-  const item = turn.assistantItems.get(itemId);
-  const draft = renderAssistantDraft(turn);
-  return {
-    itemId,
-    itemText: item?.text ?? "",
-    itemPhase: item?.phase ?? null,
-    draftText: draft.text,
-    draftKind: draft.kind,
-    finalText: renderFinalAssistantText(turn),
-    startedAssistantText
-  };
-}
-
-function renderAssistantDraft(turn: RuntimeTurn): { text: string; kind: AssistantDraftKind | null } {
-  const items = getAssistantItemsWithText(turn);
-  if (items.some((item) => item.phase === "final_answer")) {
-    return {
-      text: renderAssistantText(items.filter((item) => item.phase === "final_answer")),
-      kind: "assistant"
-    };
-  }
-
-  if (items.some((item) => item.phase === null)) {
-    return {
-      text: renderAssistantText(items),
-      kind: "assistant"
-    };
-  }
-
-  return {
-    text: "",
-    kind: null
-  };
 }
 
 function renderFinalAssistantText(turn: RuntimeTurn): string {
