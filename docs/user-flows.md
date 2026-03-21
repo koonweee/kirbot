@@ -12,17 +12,13 @@ Each flow has three lenses:
 - which module owns the behavior
 - which tests lock the behavior down
 
-## 1. Start A Session From The Lobby
+## 1. Continue The Root Session Or Spawn A Topic
 
 User experience:
 
-- The user sends a normal message in the root private chat or lobby.
-- kirbot creates a Telegram topic with a random icon for that request.
-- kirbot creates a new Codex thread for that topic.
-- kirbot posts a startup footer in the topic before any other topic message.
-- kirbot mirrors the initial prompt into the new topic in a labeled preformatted block when there is prompt text to show.
-- The first Codex turn starts immediately in the new topic.
-- The user can also run `/start <path>` from the lobby to create a new empty topic and Codex thread in that directory without sending an initial turn.
+- A normal message in the root private chat continues one persistent Codex thread in that same root chat.
+- `/thread <prompt>` creates a Telegram topic with a random icon, creates a new Codex thread for that topic, mirrors the initial prompt into the topic, and starts the first turn there immediately.
+- Root `/plan [prompt]` still creates a new plan-oriented topic instead of switching the root session into plan mode.
 
 Owned by:
 
@@ -32,7 +28,7 @@ Owned by:
 
 Verified by:
 
-- lobby startup and initial-prompt mirroring behavior in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- root-session persistence and `/thread` topic-spawn behavior in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
 ## 2. Start A Session Inside An Existing Topic
 
@@ -125,15 +121,15 @@ Verified by:
 
 - stop and stale-interrupt tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
-## 6. Change Global Codex Settings And Restart Kirbot
+## 6. Change Root Or Spawn Defaults And Restart Kirbot
 
 User experience:
 
-- `/model`, `/fast`, and `/permissions` in the lobby change global Codex defaults for future topics.
+- `/model`, `/fast`, and `/permissions` in the root chat first ask whether to update the live root thread or the defaults for future `/thread` topics.
 - `/restart` in the lobby rebuilds kirbot and restarts the detached production tmux session.
 - The same commands inside a topic change only that topic's existing Codex thread settings.
 - Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
-- Existing threads do not follow later root-level global changes automatically.
+- Existing topic threads do not follow later root-level spawn-default changes automatically.
 - `/approvals` remains an alias for `/permissions`.
 
 Owned by:
@@ -145,18 +141,18 @@ Owned by:
 
 Verified by:
 
-- global settings command and callback tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- root-scope and topic-scope settings command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
 
-## 7. Manage Custom Thread Commands
+## 7. Manage Shared Custom Commands
 
 User experience:
 
 - `/cmd` in the lobby shows a short help blurb for `add`, `update`, and `delete`.
 - `/cmd add <command> <prompt>` validates the command name and prompt, then sends a confirmation message in the lobby with `Add` and `Cancel` buttons instead of creating the command immediately.
 - `/cmd update <command> <prompt>` and `/cmd delete <command>` update the saved command set immediately after validation.
-- Confirmed custom commands are not added to Telegram’s built-in slash-command picker, but they do appear on the topic reply keyboard that kirbot refreshes on topic-owned status and command messages.
-- A custom command can be invoked only inside topics. When invoked, kirbot expands it to the stored prompt text plus any extra trailing text and routes it like a normal user message, including session bootstrap in an unmapped topic and steer or queue behavior during an active turn.
+- Confirmed custom commands are not added to Telegram’s built-in slash-command picker, but they do appear on reply keyboards that kirbot refreshes on both root and topic completion footers.
+- A custom command can be invoked from the root chat or from a topic. kirbot expands it to the stored prompt text plus any extra trailing text and routes it like a normal user message in the current session, including root-session bootstrap, topic-session bootstrap in an unmapped topic, and steer or queue behavior during an active turn.
 
 Owned by:
 
@@ -194,7 +190,7 @@ Verified by:
 
 User experience:
 
-- When Codex asks for command approval, file approval, or structured user input, kirbot presents that request inside the same Telegram topic.
+- When Codex asks for command approval, file approval, or structured user input, kirbot presents that request back on the same Telegram surface that owns the session: root or topic.
 - Command approvals render as structured cards with the command in a code block,
   `CWD` in inline code, clearer scope wording, and explicit approval button
   labels.
