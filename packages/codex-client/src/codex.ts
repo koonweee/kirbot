@@ -177,10 +177,10 @@ export class CodexGateway {
       settings?: ThreadSettingsOverride | null;
     }
   ): Promise<CreatedThread> {
-    const threadStartOverrides = buildThreadStartOverrides(
+    const threadStartOverrides = omitNullReasoningEffortForThreadStart(buildThreadStartOverrides(
       options?.settings ?? null,
       options?.settings ? sanitizeThreadStartConfig(this.config.config) : null
-    );
+    ), options?.settings);
     const response = await this.client.startThread({
       cwd: options?.cwd ?? this.config.defaultCwd,
       model: threadStartOverrides.model ?? null,
@@ -521,6 +521,23 @@ function buildThreadStartOverrides(
     approvalPolicy: "approvalPolicy" in (update ?? {}) ? update?.approvalPolicy ?? null : baseConfig ? null : undefined,
     sandbox: baseConfig ? null : undefined,
     config: Object.keys(config).length > 0 ? config : baseConfig ? null : undefined
+  };
+}
+
+function omitNullReasoningEffortForThreadStart(
+  overrides: ReturnType<typeof buildThreadStartOverrides>,
+  settings: ThreadSettingsOverride | null | undefined
+): ReturnType<typeof buildThreadStartOverrides> {
+  if (!("reasoningEffort" in (settings ?? {})) || settings?.reasoningEffort !== null || overrides.config === undefined || overrides.config === null) {
+    return overrides;
+  }
+
+  const nextConfig = { ...overrides.config };
+  delete nextConfig.model_reasoning_effort;
+
+  return {
+    ...overrides,
+    config: Object.keys(nextConfig).length > 0 ? nextConfig : null
   };
 }
 

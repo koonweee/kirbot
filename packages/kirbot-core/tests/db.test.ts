@@ -70,6 +70,38 @@ describe("BridgeDatabase", () => {
     expect(topicLookup?.codexThreadId).toBe("topic-thread");
   });
 
+  it("returns the existing root provisioning session when creation races", async () => {
+    const first = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+
+    const second = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+
+    expect(second).toEqual(first);
+  });
+
+  it("reclaims an errored root session when provisioning is retried", async () => {
+    const first = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+
+    await database.markSessionErrored(first.id);
+
+    const retried = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "root" }
+    });
+
+    expect(retried.id).toBe(first.id);
+    expect(retried.status).toBe("provisioning");
+    expect(retried.codexThreadId).toBeNull();
+  });
+
   it("stores separate root and spawn defaults", async () => {
     await database.upsertChatThreadDefaults("-1001", {
       root: {

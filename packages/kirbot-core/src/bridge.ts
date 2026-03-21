@@ -180,6 +180,7 @@ const ROOT_SESSION_PROVISIONING_TEXT = "The root Codex session is still provisio
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
   readonly #notificationChains = new Map<string, Promise<void>>();
+  readonly #sessionProvisioningBySurface = new Map<string, Promise<void>>();
   readonly #stagedTurnEvents = new Map<string, AppServerEvent[]>();
   readonly #stagedTurnEventTimers = new Map<string, NodeJS.Timeout>();
   readonly #turnsAwaitingActivation = new Set<string>();
@@ -1568,30 +1569,37 @@ export class TelegramCodexBridge {
   }
 
   private async startSessionFromRootMessage(message: UserTurnMessage): Promise<void> {
-    const pending = await this.database.createProvisioningSession({
-      telegramChatId: String(message.chatId),
-      surface: { kind: "root" }
-    });
-
-    try {
-      const rootSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.root);
-      const thread = await this.codex.createThread(DEFAULT_ROOT_SESSION_TITLE, {
-        settings: toCodexThreadSettingsOverride(rootSettings)
-      });
-      await this.database.activateSession(pending.id, thread.threadId);
-      const session = await this.database.getRootSessionByChat(message.chatId);
-      if (!session) {
-        throw new Error("Failed to load root session after activation");
-      }
-
-      await this.sendTurnForSession(session, message);
-    } catch (error) {
-      await this.database.markSessionErrored(pending.id);
+    await this.runSessionProvisioning(message.chatId, null, async () => {
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
-        text: `Failed to create Codex session for "${DEFAULT_ROOT_SESSION_TITLE}": ${formatError(error)}`
+        text: ROOT_SESSION_PROVISIONING_TEXT
       });
-    }
+    }, async () => {
+      const pending = await this.database.createProvisioningSession({
+        telegramChatId: String(message.chatId),
+        surface: { kind: "root" }
+      });
+
+      try {
+        const rootSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.root);
+        const thread = await this.codex.createThread(DEFAULT_ROOT_SESSION_TITLE, {
+          settings: toCodexThreadSettingsOverride(rootSettings)
+        });
+        await this.database.activateSession(pending.id, thread.threadId);
+        const session = await this.database.getRootSessionByChat(message.chatId);
+        if (!session) {
+          throw new Error("Failed to load root session after activation");
+        }
+
+        await this.sendTurnForSession(session, message);
+      } catch (error) {
+        await this.database.markSessionErrored(pending.id);
+        await this.sendScopedBridgeMessage({
+          chatId: message.chatId,
+          text: `Failed to create Codex session for "${DEFAULT_ROOT_SESSION_TITLE}": ${formatError(error)}`
+        });
+      }
+    });
   }
 
   private async startPlanSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
@@ -1676,53 +1684,88 @@ export class TelegramCodexBridge {
     }
     const topicId = message.topicId;
 
-    const pending = await this.database.createProvisioningSession({
-      telegramChatId: String(message.chatId),
-      telegramTopicId: topicId
-    });
-
-    try {
-      const spawnSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.spawn);
-      const thread = await this.codex.createThread(title, {
-        ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
-        settings: toCodexThreadSettingsOverride(spawnSettings)
-      });
-      await this.database.activateSession(pending.id, thread.threadId);
-      let session = await this.database.getSessionByTopic(message.chatId, topicId);
-      if (!session) {
-        throw new Error(`Failed to load topic session ${topicId} after activation`);
-      }
-
-      if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
-        session = await this.database.updateSessionPreferredMode(
-          Number(session.telegramChatId),
-          session.telegramTopicId,
-          options.initialPreferredMode
-        ) ?? session;
-      }
-
-      await this.maybeSendThreadStartFooterMessage(message.chatId, message.topicId, session.preferredMode, thread);
-      await this.maybeSendInitialPromptMessage(message.chatId, message.topicId, options?.initialPromptText);
-
-      if (options?.postActivationTopicMessage) {
-        await this.sendScopedBridgeMessage({
-          chatId: message.chatId,
-          topicId: message.topicId,
-          text: options.postActivationTopicMessage
-        });
-      }
-
-      if (options?.startInitialTurn ?? true) {
-        await this.sendTurnForSession(session, options?.firstTurnMessage ?? message);
-      }
-    } catch (error) {
-      await this.database.markSessionErrored(pending.id);
+    await this.runSessionProvisioning(message.chatId, topicId, async () => {
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
-        topicId: message.topicId,
-        text: `Failed to create Codex session for "${title}": ${formatError(error)}`
+        topicId,
+        text: "This topic is still provisioning a Codex session. Try again in a moment"
       });
+    }, async () => {
+      const pending = await this.database.createProvisioningSession({
+        telegramChatId: String(message.chatId),
+        telegramTopicId: topicId
+      });
+
+      try {
+        const spawnSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.spawn);
+        const thread = await this.codex.createThread(title, {
+          ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
+          settings: toCodexThreadSettingsOverride(spawnSettings)
+        });
+        await this.database.activateSession(pending.id, thread.threadId);
+        let session = await this.database.getSessionByTopic(message.chatId, topicId);
+        if (!session) {
+          throw new Error(`Failed to load topic session ${topicId} after activation`);
+        }
+
+        if (options?.initialPreferredMode && session.preferredMode !== options.initialPreferredMode) {
+          session = await this.database.updateSessionPreferredMode(
+            Number(session.telegramChatId),
+            session.telegramTopicId,
+            options.initialPreferredMode
+          ) ?? session;
+        }
+
+        await this.maybeSendThreadStartFooterMessage(message.chatId, topicId, session.preferredMode, thread);
+        await this.maybeSendInitialPromptMessage(message.chatId, topicId, options?.initialPromptText);
+
+        if (options?.postActivationTopicMessage) {
+          await this.sendScopedBridgeMessage({
+            chatId: message.chatId,
+            topicId,
+            text: options.postActivationTopicMessage
+          });
+        }
+
+        if (options?.startInitialTurn ?? true) {
+          await this.sendTurnForSession(session, options?.firstTurnMessage ?? message);
+        }
+      } catch (error) {
+        await this.database.markSessionErrored(pending.id);
+        await this.sendScopedBridgeMessage({
+          chatId: message.chatId,
+          topicId,
+          text: `Failed to create Codex session for "${title}": ${formatError(error)}`
+        });
+      }
+    });
+  }
+
+  private async runSessionProvisioning(
+    chatId: number,
+    topicId: number | null,
+    onAlreadyProvisioning: () => Promise<void>,
+    task: () => Promise<void>
+  ): Promise<void> {
+    const key = `${chatId}:${topicId ?? "root"}`;
+    if (this.#sessionProvisioningBySurface.has(key)) {
+      await onAlreadyProvisioning();
+      return;
     }
+
+    let provisioning!: Promise<void>;
+    provisioning = (async () => {
+      try {
+        await task();
+      } finally {
+        if (this.#sessionProvisioningBySurface.get(key) === provisioning) {
+          this.#sessionProvisioningBySurface.delete(key);
+        }
+      }
+    })();
+
+    this.#sessionProvisioningBySurface.set(key, provisioning);
+    await provisioning;
   }
 
   private async maybeSendThreadStartFooterMessage(
@@ -2645,7 +2688,7 @@ function buildPermissionsUpdatedMessage(scope: SettingsSelectionScope, label: st
 
 function toPersistedThreadSettings(settings: Pick<CodexThreadSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy">): PersistedThreadSettings {
   return {
-    model: settings.model,
+    model: normalizePersistedModel(settings.model),
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     approvalPolicy: settings.approvalPolicy,
@@ -2667,13 +2710,23 @@ function mergePersistedThreadSettings(
 }
 
 function toCodexThreadSettingsOverride(settings: PersistedThreadSettings): CodexThreadSettingsOverride {
+  const model = normalizePersistedModel(settings.model);
+
   return {
-    ...(settings.model ? { model: settings.model } : {}),
+    ...(model ? { model } : {}),
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
     ...(settings.sandboxPolicy ? { sandboxPolicy: settings.sandboxPolicy } : {})
   };
+}
+
+function normalizePersistedModel(model: string | null): string | null {
+  if (!model || model === "unknown-model") {
+    return null;
+  }
+
+  return model;
 }
 
 function toPermissionDetectionSettings(
