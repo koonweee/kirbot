@@ -270,8 +270,18 @@ describe("status presentation", () => {
         serviceTier: null,
         cwd: "/workspace",
         branch: "main"
-      }).text
-    ).toBe("General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5");
+      })
+    ).toEqual({
+      text: "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5",
+      entities: [
+        {
+          type: "pre",
+          offset: "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length,
+          length: "<1s • 100% left • /workspace • main • gpt-5".length,
+          language: "status"
+        }
+      ]
+    });
   });
 });
 

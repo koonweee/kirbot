@@ -1568,9 +1568,19 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex high • planning",
+        text:
+          "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5-codex high • planning",
         options: {
-          message_thread_id: 101
+          message_thread_id: 101,
+          entities: preformattedEntities(
+            "<1s • 100% left • /workspace • main • gpt-5-codex high • planning",
+            "status"
+          ).map((entity) => ({
+            ...entity,
+            offset:
+              entity.offset +
+              "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length
+          }))
         }
       },
       {
@@ -1659,9 +1669,19 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex • planning",
+        text:
+          "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5-codex • planning",
         options: {
-          message_thread_id: 101
+          message_thread_id: 101,
+          entities: preformattedEntities(
+            "<1s • 100% left • /workspace • main • gpt-5-codex • planning",
+            "status"
+          ).map((entity) => ({
+            ...entity,
+            offset:
+              entity.offset +
+              "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length
+          }))
         }
       },
       {
@@ -1937,7 +1957,7 @@ describe("TelegramCodexBridge", () => {
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
     expect(telegram.sentMessages.at(0)?.text).toBe(
-      "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex"
+      "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5-codex"
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
@@ -4802,9 +4822,18 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex",
+        text:
+          "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5-codex",
         options: {
-          message_thread_id: 777
+          message_thread_id: 777,
+          entities: preformattedEntities("<1s • 100% left • /workspace • main • gpt-5-codex", "status").map(
+            (entity) => ({
+              ...entity,
+              offset:
+                entity.offset +
+                "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length
+            })
+          )
         }
       }
     ]);
@@ -5655,7 +5684,7 @@ describe("TelegramCodexBridge", () => {
 
     const pending = await database.getPendingRequest(JSON.stringify(90));
     expect(telegram.sentMessages.at(-1)?.text).toContain("Question 1/2");
-    expect(telegram.sentMessages.at(-1)?.text).toContain("reply in this shared topic");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("Use the buttons below to answer, or reply in this shared topic");
     expect(telegram.sentMessages.at(-1)?.options?.reply_markup).toEqual({
       inline_keyboard: [[{ text: "Refactor", callback_data: `req:${pending.id}:opt:0` }]]
     });
@@ -5794,9 +5823,18 @@ describe("TelegramCodexBridge", () => {
 
     expect(footerMessage).toMatchObject({
       chatId: -1001,
-      text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex",
+      text:
+        "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5-codex",
       options: {
-        message_thread_id: 101
+        message_thread_id: 101,
+        entities: preformattedEntities("<1s • 100% left • /workspace • main • gpt-5-codex", "status").map(
+          (entity) => ({
+            ...entity,
+            offset:
+              entity.offset +
+              "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length
+          })
+        )
       }
     });
   });
