@@ -94,6 +94,7 @@ export type UserTurnMessage = {
   updateId: number;
   userId: number;
   actorLabel?: string;
+  telegramUsername?: string;
   text: string;
   input: UserTurnInput[];
   submittedInputSignature?: string;

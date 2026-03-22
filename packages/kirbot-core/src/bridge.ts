@@ -92,6 +92,7 @@ export type CallbackQueryEvent = {
   chatId: number;
   topicId: number | null;
   userId: number;
+  telegramUsername?: string;
 };
 
 export interface BridgeCodexApi {
@@ -227,6 +228,7 @@ export class TelegramCodexBridge {
       telegram,
       this.#messenger,
       codex,
+      this.getTurnContext.bind(this),
       (turnId, statusDraft, force) =>
         this.#lifecycle.updateStatus(turnId, statusDraft, {
           ...(force !== undefined ? { force } : {})
@@ -294,6 +296,10 @@ export class TelegramCodexBridge {
 
   getActiveTopics(): Array<{ chatId: number; topicId: number | null }> {
     return this.#lifecycle.getActiveTopics();
+  }
+
+  private getTurnContext(turnId: string): TurnContext | undefined {
+    return this.#lifecycle.getTurn(turnId);
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
@@ -2865,6 +2871,7 @@ function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string):
     messageId: 0,
     updateId: 0,
     userId: event.userId,
+    ...(event.telegramUsername ? { telegramUsername: event.telegramUsername } : {}),
     text,
     input: [
       {
