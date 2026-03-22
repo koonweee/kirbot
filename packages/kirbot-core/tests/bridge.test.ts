@@ -2505,6 +2505,92 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it.each([
+    {
+      title: "General",
+      callbackQueryId: "scope-root-model-pagination",
+      callbackData: "slash:scope:model:root",
+      expectedTitle: "Choose the model for the General thread",
+      expectedPageCallback: "slash:model:page:root:1",
+      expectedPickCallback: "slash:model:pick:root:6"
+    },
+    {
+      title: "spawn defaults",
+      callbackQueryId: "scope-spawn-model-pagination",
+      callbackData: "slash:scope:model:spawn",
+      expectedTitle: "Choose the default model for new /thread topics",
+      expectedPageCallback: "slash:model:page:spawn:1",
+      expectedPickCallback: "slash:model:pick:spawn:6"
+    }
+  ])("preserves $title model scope when paging through the picker", async ({
+    callbackQueryId,
+    callbackData,
+    expectedTitle,
+    expectedPageCallback,
+    expectedPickCallback
+  }) => {
+    codex.models = Array.from({ length: 7 }, (_, index) => ({
+      id: `model-${index + 1}`,
+      model: `gpt-5-model-${index + 1}`,
+      upgrade: null,
+      upgradeInfo: null,
+      availabilityNux: null,
+      displayName: `gpt-5-model-${index + 1}`,
+      description: `Model ${index + 1}`,
+      hidden: false,
+      supportedReasoningEfforts: [
+        { reasoningEffort: "medium", description: "Balanced" }
+      ],
+      defaultReasoningEffort: "medium",
+      inputModalities: [],
+      supportsPersonality: false,
+      isDefault: index === 0
+    }));
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 20,
+      updateId: 40,
+      userId: 42,
+      text: "/model"
+    });
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId,
+      data: callbackData,
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    const firstPage = telegram.sentMessages.at(-1);
+    expect(firstPage?.text).toBe([
+      expectedTitle,
+      "Current: gpt-5-codex",
+      "Then choose a reasoning effort"
+    ].join("\n"));
+
+    const nextPageCallback = getCallbackDataByButtonText(firstPage, "Next");
+    expect(nextPageCallback).toBe(expectedPageCallback);
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: `${callbackQueryId}-page-2`,
+      data: nextPageCallback!,
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    const secondPage = telegram.sentMessages.at(-1);
+    expect(secondPage?.text).toBe([
+      expectedTitle,
+      "Current: gpt-5-codex",
+      "Then choose a reasoning effort"
+    ].join("\n"));
+    expect(getCallbackDataByButtonText(secondPage, "gpt-5-model-7")).toBe(expectedPickCallback);
+  });
+
   it("uses General-facing copy when opening root permissions selection", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

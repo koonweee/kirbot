@@ -1450,10 +1450,22 @@ export class TelegramCodexBridge {
             ? [
                 [
                   ...(boundedPage > 0
-                    ? [{ text: "Previous", callback_data: `slash:model:page:${boundedPage - 1}` }]
+                    ? [{
+                        text: "Previous",
+                        callback_data:
+                          target.scope === "thread"
+                            ? `slash:model:page:${boundedPage - 1}`
+                            : `slash:model:page:${target.scope}:${boundedPage - 1}`
+                      }]
                     : []),
                   ...(boundedPage < totalPages - 1
-                    ? [{ text: "Next", callback_data: `slash:model:page:${boundedPage + 1}` }]
+                    ? [{
+                        text: "Next",
+                        callback_data:
+                          target.scope === "thread"
+                            ? `slash:model:page:${boundedPage + 1}`
+                            : `slash:model:page:${target.scope}:${boundedPage + 1}`
+                      }]
                     : [])
                 ]
               ]
@@ -1657,7 +1669,9 @@ export class TelegramCodexBridge {
     }
 
     if (area === "model" && action === "page") {
-      const page = Number.parseInt(rest[0] ?? "", 10);
+      const [maybeScope, maybePage] = rest;
+      const scope = maybePage ? maybeScope : "thread";
+      const page = Number.parseInt((maybePage ?? maybeScope) ?? "", 10);
       if (Number.isNaN(page)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model page"
@@ -1665,7 +1679,14 @@ export class TelegramCodexBridge {
         return;
       }
 
-      const opened = await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, page);
+      if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Invalid model page"
+        });
+        return;
+      }
+
+      const opened = await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, page, scope);
       await this.telegram.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
