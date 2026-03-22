@@ -236,8 +236,8 @@ export function renderQueuePreview(queueState: QueueStateSnapshot): string | nul
       lines.push("");
     }
     lines.push("Queued for next turn:");
-    for (const text of queueState.queuedFollowUps.slice(0, 3)) {
-      lines.push(`- ${truncateStatus(text)}`);
+    for (const queued of queueState.queuedFollowUps.slice(0, 3)) {
+      lines.push(`- ${truncateStatus(`${queued.actorLabel}: ${queued.text}`)}`);
     }
     if (queueState.queuedFollowUps.length > 3) {
       lines.push(`- …and ${queueState.queuedFollowUps.length - 3} more`);
@@ -412,12 +412,14 @@ export function buildRenderedThreadStartFooter(details: Pick<
   CompletionFooterDetails,
   "mode" | "model" | "reasoningEffort" | "serviceTier" | "cwd" | "branch"
 >): TelegramRenderedMessage {
-  return buildRenderedCompletionFooter({
-    ...details,
-    durationMs: 0,
-    changedFiles: 0,
-    contextLeftPercent: null
-  });
+  return {
+    text: `General stays shared for workspace-wide work. Use /thread to create a separate topic. ${buildCompletionFooterText({
+      ...details,
+      durationMs: 0,
+      changedFiles: 0,
+      contextLeftPercent: null
+    }).replace("100% left • ", "")}`
+  };
 }
 
 export function buildRenderedInitialPromptMessage(text: string): TelegramRenderedMessage {

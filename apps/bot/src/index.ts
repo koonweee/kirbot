@@ -72,6 +72,7 @@ async function main(): Promise<void> {
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
+      actorLabel: getTelegramActorLabel(context.message.from),
       text: context.message.text
     });
   });
@@ -93,6 +94,7 @@ async function main(): Promise<void> {
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
+      actorLabel: getTelegramActorLabel(context.message.from),
       text: input.text,
       input: input.input
     });
@@ -119,6 +121,7 @@ async function main(): Promise<void> {
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
+      actorLabel: getTelegramActorLabel(context.message.from),
       text: input.text,
       input: input.input
     });
@@ -183,6 +186,20 @@ async function main(): Promise<void> {
 
 function getMessageTopicId(message: Message.ServiceMessage): number | null {
   return message.is_topic_message ? (message.message_thread_id ?? null) : null;
+}
+
+function getTelegramActorLabel(user: {
+  first_name: string;
+  last_name?: string;
+  username?: string;
+}): string | undefined {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  if (name.length > 0) {
+    return name;
+  }
+
+  const username = user.username?.trim();
+  return username?.length ? username : undefined;
 }
 
 async function ensureWorkspaceMessage(

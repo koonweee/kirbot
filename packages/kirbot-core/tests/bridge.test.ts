@@ -1568,13 +1568,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "<1s • 100% left • /workspace • main • gpt-5-codex high • planning",
+        text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex high • planning",
         options: {
-          message_thread_id: 101,
-          entities: preformattedEntities(
-            "<1s • 100% left • /workspace • main • gpt-5-codex high • planning",
-            "status"
-          )
+          message_thread_id: 101
         }
       },
       {
@@ -1663,13 +1659,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "<1s • 100% left • /workspace • main • gpt-5-codex • planning",
+        text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex • planning",
         options: {
-          message_thread_id: 101,
-          entities: preformattedEntities(
-            "<1s • 100% left • /workspace • main • gpt-5-codex • planning",
-            "status"
-          )
+          message_thread_id: 101
         }
       },
       {
@@ -1944,7 +1936,9 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getSessionByTopic(-1001, 777);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
-    expect(telegram.sentMessages.at(0)?.text).toBe("<1s • 100% left • /workspace • main • gpt-5-codex");
+    expect(telegram.sentMessages.at(0)?.text).toBe(
+      "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex"
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
@@ -4638,6 +4632,7 @@ describe("TelegramCodexBridge", () => {
       messageId: 14,
       updateId: 27,
       userId: 42,
+      actorLabel: "Jeremy",
       text: "Inspect the current failure"
     });
 
@@ -4655,6 +4650,7 @@ describe("TelegramCodexBridge", () => {
       messageId: 15,
       updateId: 28,
       userId: 42,
+      actorLabel: "Jeremy",
       text: "Start the next step"
     });
 
@@ -4672,7 +4668,7 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-1"
       }
     ]);
-    expect(telegram.edits.at(-1)?.text).toBe("Queued for next turn:\n- Start the next step");
+    expect(telegram.edits.at(-1)?.text).toBe("Queued for next turn:\n- Jeremy: Start the next step");
 
     codex.emitNotification({
       method: "turn/completed",
@@ -4806,10 +4802,9 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages).toMatchObject([
       {
         chatId: -1001,
-        text: "<1s • 100% left • /workspace • main • gpt-5-codex",
+        text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex",
         options: {
-          message_thread_id: 777,
-          entities: preformattedEntities("<1s • 100% left • /workspace • main • gpt-5-codex", "status")
+          message_thread_id: 777
         }
       }
     ]);
@@ -5414,6 +5409,7 @@ describe("TelegramCodexBridge", () => {
       messageId: 45,
       updateId: 55,
       userId: 42,
+      actorLabel: "Jeremy",
       text: "Inspect the current failure"
     });
 
@@ -5423,6 +5419,7 @@ describe("TelegramCodexBridge", () => {
       messageId: 46,
       updateId: 56,
       userId: 42,
+      actorLabel: "Jeremy",
       text: "Pending steer"
     });
 
@@ -5464,7 +5461,7 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-1"
       }
     ]);
-    expect(telegram.edits.at(-1)?.text).toBe("Queued for next turn:\n- Pending steer\n- Queued follow-up");
+    expect(telegram.edits.at(-1)?.text).toBe("Queued for next turn:\n- Jeremy: Pending steer\n- User 42: Queued follow-up");
   });
 
   it("treats a stale interrupt as already finished and submits pending steers immediately", async () => {
@@ -5658,6 +5655,7 @@ describe("TelegramCodexBridge", () => {
 
     const pending = await database.getPendingRequest(JSON.stringify(90));
     expect(telegram.sentMessages.at(-1)?.text).toContain("Question 1/2");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("reply in this shared topic");
     expect(telegram.sentMessages.at(-1)?.options?.reply_markup).toEqual({
       inline_keyboard: [[{ text: "Refactor", callback_data: `req:${pending.id}:opt:0` }]]
     });
@@ -5740,7 +5738,7 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     const pending = await database.getPendingRequest(JSON.stringify(91));
-    expect(telegram.sentMessages.at(-1)?.text).toContain("Sensitive input. Your reply stays visible in this topic.");
+    expect(telegram.sentMessages.at(-1)?.text).toContain("Sensitive input. Your reply stays visible in this shared topic.");
     expect(telegram.sentMessages.at(-1)?.text).toContain("Standard: Use the default flow");
 
     await bridge.handleCallbackQuery({
@@ -5751,7 +5749,7 @@ describe("TelegramCodexBridge", () => {
       userId: 42
     });
 
-    expect(telegram.edits.at(-1)?.text).toContain("Reply with your own answer in this topic");
+    expect(telegram.edits.at(-1)?.text).toContain("Reply with your own answer in this shared topic");
 
     const finalAnswer = "Use a custom rollout path";
 
@@ -5778,6 +5776,29 @@ describe("TelegramCodexBridge", () => {
         length: finalAnswer.length
       }
     ]);
+  });
+
+  it("sends a topic startup footer that explains General and /thread", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 700,
+      updateId: 800,
+      userId: 42,
+      text: "/thread Review the deployment plan"
+    });
+
+    const footerMessage = telegram.sentMessages.find((message) =>
+      message.text.startsWith("General stays shared for workspace-wide work.")
+    );
+
+    expect(footerMessage).toMatchObject({
+      chatId: -1001,
+      text: "General stays shared for workspace-wide work. Use /thread to create a separate topic. <1s • /workspace • main • gpt-5-codex",
+      options: {
+        message_thread_id: 101
+      }
+    });
   });
 
   it("stores approval requests and resolves them via callback queries", async () => {

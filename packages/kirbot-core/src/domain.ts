@@ -93,6 +93,7 @@ export type UserTurnMessage = {
   messageId: number;
   updateId: number;
   userId: number;
+  actorLabel?: string;
   text: string;
   input: UserTurnInput[];
   submittedInputSignature?: string;

@@ -119,7 +119,7 @@ export function buildUserInputPrompt(
   lines.push(question.question);
 
   if (question.isSecret) {
-    lines.push("Sensitive input. Your reply stays visible in this topic.");
+    lines.push("Sensitive input. Your reply stays visible in this shared topic.");
   }
 
   const awaitingFreeText = state.awaitingFreeTextQuestionId === question.id;
@@ -130,10 +130,10 @@ export function buildUserInputPrompt(
     }
 
     lines.push("");
-    lines.push(awaitingFreeText ? "Reply with your own answer in this topic" : "Use the buttons below to answer");
+    lines.push(awaitingFreeText ? "Reply with your own answer in this shared topic" : "Use the buttons below to answer, or reply in this shared topic");
   } else {
     lines.push("");
-    lines.push("Reply with your answer in this topic");
+    lines.push("Reply in this shared topic");
   }
 
   const replyMarkup =

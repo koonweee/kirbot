@@ -83,7 +83,10 @@ export type QueueStateSnapshot = {
   chatId: number;
   topicId: number | null;
   pendingSteers: string[];
-  queuedFollowUps: string[];
+  queuedFollowUps: Array<{
+    actorLabel: string;
+    text: string;
+  }>;
 };
 
 export type PendingSteerDrain = {
@@ -339,7 +342,11 @@ export class BridgeTurnRuntime {
       chatId,
       topicId,
       pendingSteers: topicState?.pendingSteers.map((pending) => summarizeUserTurnMessage(pending.message)) ?? [],
-      queuedFollowUps: topicState?.queuedFollowUps.map((message) => summarizeUserTurnMessage(message)) ?? []
+      queuedFollowUps:
+        topicState?.queuedFollowUps.map((message) => ({
+          actorLabel: resolveUserTurnActorLabel(message),
+          text: summarizeUserTurnMessage(message)
+        })) ?? []
     };
   }
 
@@ -510,6 +517,11 @@ function summarizeUserTurnMessage(message: UserTurnMessage): string {
   }
 
   return "(empty message)";
+}
+
+function resolveUserTurnActorLabel(message: UserTurnMessage): string {
+  const label = message.actorLabel?.trim();
+  return label?.length ? label : `User ${message.userId}`;
 }
 
 function summarizeCommittedUserMessage(input: UserInput[]): string {
