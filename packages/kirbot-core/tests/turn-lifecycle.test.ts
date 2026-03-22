@@ -21,7 +21,7 @@ function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
 }
 
-function message(text: string, updateId = 1): UserTurnMessage {
+function message(text: string, updateId = 1, telegramUsername?: string): UserTurnMessage {
   return {
     chatId: -1001,
     topicId: 777,
@@ -35,11 +35,12 @@ function message(text: string, updateId = 1): UserTurnMessage {
         text,
         text_elements: []
       }
-    ]
-  };
+    ],
+    ...(telegramUsername ? { telegramUsername } : {})
+  } as UserTurnMessage;
 }
 
-function rootMessage(text: string, updateId = 1): UserTurnMessage {
+function rootMessage(text: string, updateId = 1, telegramUsername?: string): UserTurnMessage {
   return {
     chatId: -1001,
     topicId: null,
@@ -53,8 +54,9 @@ function rootMessage(text: string, updateId = 1): UserTurnMessage {
         text,
         text_elements: []
       }
-    ]
-  };
+    ],
+    ...(telegramUsername ? { telegramUsername } : {})
+  } as UserTurnMessage;
 }
 
 function getInlineButtonTexts(entry: { options?: Record<string, unknown> } | undefined): string[] {
@@ -316,6 +318,51 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.publishCurrentStatus("turn-root", true);
 
     expect(harness.telegram.drafts[0]?.options?.message_thread_id).toBeUndefined();
+  });
+
+  it("preserves the starter telegram username when activating a turn", async () => {
+    const harness = createHarness();
+
+    const context = harness.coordinator.activateTurn(
+      message("Start", 1, "starter-user"),
+      "thread-1",
+      "turn-1",
+      "gpt-5-codex"
+    );
+
+    expect(context).toMatchObject({
+      telegramUsername: "starter-user"
+    });
+  });
+
+  it("keeps queued follow-up usernames when promoting them into a new turn", async () => {
+    const harness = createHarness();
+
+    harness.coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    const pending = harness.coordinator.queuePendingSteer("turn-1", message("Queued follow-up", 2, "queued-user"));
+    expect(pending).not.toBeNull();
+
+    const queueState = harness.coordinator.movePendingSteerToQueued(-1001, 777, pending!.localId);
+    expect(queueState.queuedFollowUps[0]).toEqual({
+      actorLabel: "User 42",
+      text: "Queued follow-up"
+    });
+
+    const queuedMessage = harness.coordinator.peekNextQueuedFollowUp(-1001, 777);
+    expect(queuedMessage).toMatchObject({
+      telegramUsername: "queued-user"
+    });
+
+    const promotedContext = harness.coordinator.activateTurn(
+      harness.coordinator.shiftNextQueuedFollowUp(-1001, 777)!,
+      "thread-2",
+      "turn-2",
+      "gpt-5-codex"
+    );
+
+    expect(promotedContext).toMatchObject({
+      telegramUsername: "queued-user"
+    });
   });
 
   it("renders spawn-agent progress in the live status bubble with fallback agent labels", async () => {

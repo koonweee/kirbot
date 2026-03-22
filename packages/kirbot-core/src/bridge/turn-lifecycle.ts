@@ -70,6 +70,7 @@ export class TurnLifecycleCoordinator {
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       changedFilePaths: new Set(),
+      telegramUsername: message.telegramUsername,
       mode,
       model,
       reasoningEffort,

@@ -149,7 +149,7 @@ export class BridgeTurnRuntime {
   movePendingSteerToQueued(chatId: number, topicId: number | null, localId: string): QueueStateSnapshot {
     const pending = this.removePendingSteer(chatId, topicId, localId);
     if (pending) {
-      this.ensureTopicState(chatId, topicId).queuedFollowUps.push(pending.message);
+      this.ensureTopicState(chatId, topicId).queuedFollowUps.push(cloneUserTurnMessage(pending.message));
     }
     return this.getQueueState(chatId, topicId);
   }
@@ -362,7 +362,7 @@ export class BridgeTurnRuntime {
   }
 
   prependQueuedFollowUp(chatId: number, topicId: number | null, message: UserTurnMessage): QueueStateSnapshot {
-    this.ensureTopicState(chatId, topicId).queuedFollowUps.unshift(message);
+    this.ensureTopicState(chatId, topicId).queuedFollowUps.unshift(cloneUserTurnMessage(message));
     return this.getQueueState(chatId, topicId);
   }
 
@@ -571,4 +571,10 @@ function mergeUserTurnInput(messageInputs: UserTurnInput[][]): UserTurnInput[] {
   }
 
   return merged;
+}
+
+function cloneUserTurnMessage(message: UserTurnMessage): UserTurnMessage {
+  return {
+    ...message
+  };
 }

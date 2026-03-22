@@ -36,6 +36,7 @@ import {
   buildResponseArtifactButton,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
+import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { isAllowedSlashCommandInScope } from "../src/bridge/slash-commands";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
@@ -5577,6 +5578,61 @@ describe("TelegramCodexBridge", () => {
       }
     ]);
     expect(telegram.edits.at(-1)?.text).toBe("Queued for next turn:\n- Jeremy: Pending steer\n- User 42: Queued follow-up");
+  });
+
+  it("keeps a queued follow-up's telegram username when promoting it into a new turn", async () => {
+    const activateTurnSpy = vi.spyOn(TurnLifecycleCoordinator.prototype, "activateTurn");
+    try {
+      await bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 58,
+        updateId: 68,
+        userId: 42,
+        actorLabel: "Starter",
+        telegramUsername: "starter-user",
+        text: "Inspect the current failure"
+      } as any);
+
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "interrupted",
+            error: null
+          }
+        }
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      await (bridge as any).submitQueuedFollowUp(-1001, 777, {
+        chatId: -1001,
+        topicId: 777,
+        messageId: 59,
+        updateId: 69,
+        userId: 42,
+        actorLabel: "Queued",
+        telegramUsername: "queued-user",
+        text: "Queued follow-up",
+        input: [
+          {
+            type: "text",
+            text: "Queued follow-up",
+            text_elements: []
+          }
+        ]
+      } as any);
+
+      expect(activateTurnSpy.mock.calls.map(([message]) => (message as { telegramUsername?: string }).telegramUsername)).toEqual([
+        "starter-user",
+        "queued-user"
+      ]);
+    } finally {
+      activateTurnSpy.mockRestore();
+    }
   });
 
   it("treats a stale interrupt as already finished and submits pending steers immediately", async () => {

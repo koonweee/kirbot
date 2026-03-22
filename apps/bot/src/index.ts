@@ -66,6 +66,7 @@ async function main(): Promise<void> {
 
     const topicId = getMessageTopicId(context.message);
     const actorLabel = getTelegramActorLabel(context.message.from);
+    const telegramUsername = getTelegramUsername(context.message.from);
 
     await bridge.handleUserTextMessage({
       chatId: context.chat.id,
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
       updateId: context.update.update_id,
       userId: context.message.from.id,
       ...(actorLabel ? { actorLabel } : {}),
+      ...(telegramUsername ? { telegramUsername } : {}),
       text: context.message.text
     });
   });
@@ -90,6 +92,7 @@ async function main(): Promise<void> {
     const topicId = getMessageTopicId(context.message);
     const input = buildPhotoMessageInput(context.message.caption, context.message.photo);
     const actorLabel = getTelegramActorLabel(context.message.from);
+    const telegramUsername = getTelegramUsername(context.message.from);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
       topicId,
@@ -97,6 +100,7 @@ async function main(): Promise<void> {
       updateId: context.update.update_id,
       userId: context.message.from.id,
       ...(actorLabel ? { actorLabel } : {}),
+      ...(telegramUsername ? { telegramUsername } : {}),
       text: input.text,
       input: input.input
     });
@@ -118,6 +122,7 @@ async function main(): Promise<void> {
 
     const topicId = getMessageTopicId(context.message);
     const actorLabel = getTelegramActorLabel(context.message.from);
+    const telegramUsername = getTelegramUsername(context.message.from);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
       topicId,
@@ -125,6 +130,7 @@ async function main(): Promise<void> {
       updateId: context.update.update_id,
       userId: context.message.from.id,
       ...(actorLabel ? { actorLabel } : {}),
+      ...(telegramUsername ? { telegramUsername } : {}),
       text: input.text,
       input: input.input
     });
@@ -201,6 +207,13 @@ function getTelegramActorLabel(user: {
     return name;
   }
 
+  const username = user.username?.trim();
+  return username?.length ? username : undefined;
+}
+
+function getTelegramUsername(user: {
+  username?: string;
+}): string | undefined {
   const username = user.username?.trim();
   return username?.length ? username : undefined;
 }
