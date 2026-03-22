@@ -23,7 +23,7 @@ const optionalEnvString = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_USER_ID: z.coerce.number().int(),
+  TELEGRAM_WORKSPACE_CHAT_ID: z.coerce.number().int(),
   TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
   TELEGRAM_MINI_APP_PUBLIC_URL: z
     .string()
@@ -49,7 +49,7 @@ const envSchema = z.object({
 export type AppConfig = {
   telegram: {
     botToken: string;
-    userId: number;
+    workspaceChatId: number;
     mediaTempDir: string;
     miniApp: {
       publicUrl: string;
@@ -67,7 +67,7 @@ export function loadConfig(): AppConfig {
   return {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
-      userId: parsed.TELEGRAM_USER_ID,
+      workspaceChatId: parsed.TELEGRAM_WORKSPACE_CHAT_ID,
       mediaTempDir: parsed.TELEGRAM_MEDIA_TMP_DIR
         ? expandHomePath(parsed.TELEGRAM_MEDIA_TMP_DIR)
         : defaultTelegramMediaTempDir(),

@@ -19,7 +19,7 @@ describe("core config module", () => {
   it("requires a Mini App public URL when loading config", async () => {
     process.env = {
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_USER_ID: "42",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: ""
     };
 
@@ -31,7 +31,7 @@ describe("core config module", () => {
   it("requires the Mini App public URL to use https", async () => {
     process.env = {
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_USER_ID: "42",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "http://example.com/mini-app"
     };
 
@@ -43,7 +43,7 @@ describe("core config module", () => {
   it("derives an isolated Codex home from the database path by default", async () => {
     process.env = {
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_USER_ID: "42",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
       DATABASE_PATH: "/srv/kirbot/data/bridge.sqlite"
     };
@@ -56,7 +56,7 @@ describe("core config module", () => {
   it("respects an explicit Codex home override", async () => {
     process.env = {
       TELEGRAM_BOT_TOKEN: "token",
-      TELEGRAM_USER_ID: "42",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
       DATABASE_PATH: "/srv/kirbot/data/bridge.sqlite",
       CODEX_HOME_PATH: "/srv/kirbot/custom-codex-home"

@@ -2,7 +2,7 @@
 
 <img src="./kirbot.png" alt="kirbot" width="128" />
 
-kirbot is a Telegram bot that turns a Telegram root chat plus topics into a chat UI for Codex. One configured Telegram user can keep a persistent Codex conversation in the root chat, spawn additional topic threads with `/thread <prompt>`, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
+kirbot is a Telegram bot that turns a dedicated private forum supergroup plus topics into a chat UI for Codex. One configured workspace chat can keep a persistent Codex conversation in the forum root, spawn additional topic threads with `/thread <prompt>`, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
 
 ## Start Here
 
@@ -41,7 +41,7 @@ Prerequisites:
 - Node.js 22+
 - `tmux` for optional detached dev or production sessions
 - a Telegram bot token
-- the Telegram user ID allowed to use the bot
+- the Telegram workspace chat ID for the dedicated private forum supergroup
 - a deployed Telegram Mini App URL over `https`
 
 Install and configure:
@@ -55,7 +55,7 @@ cp .env.example .env
 Required settings:
 
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_USER_ID`
+- `TELEGRAM_WORKSPACE_CHAT_ID`
 - `TELEGRAM_MINI_APP_PUBLIC_URL`
 
 Commonly adjusted settings:
@@ -76,8 +76,9 @@ Bootstrap note:
 
 Telegram BotFather requirements:
 
-- Enable private-chat topics for the bot.
-- Disable user-created topics in private chats so kirbot can own `/thread` and root `/plan` topic creation.
+- Create a dedicated private forum supergroup for kirbot.
+- Enable forum topics for that supergroup.
+- Disable user-created topics in the forum so kirbot can own `/thread` and root `/plan` topic creation.
 
 Run locally in development:
 
