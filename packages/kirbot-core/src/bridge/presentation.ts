@@ -37,6 +37,7 @@ export const TOPIC_IMPLEMENT_CALLBACK_DATA = "topic:implement";
 export type TurnStatusState =
   | "thinking"
   | "planning"
+  | "spawning agent"
   | "using tool"
   | "running"
   | "editing"
@@ -45,8 +46,18 @@ export type TurnStatusState =
   | "failed"
   | "interrupted";
 
+export type LiveSubagentSnapshot = {
+  summary: string;
+  agents: Array<{
+    label: string;
+    state: "pending" | "running" | "completed" | "failed" | "interrupted";
+    detail: string | null;
+  }>;
+};
+
 export type TurnStatusDraft = {
   state: TurnStatusState;
+  subagentSnapshot?: LiveSubagentSnapshot | null;
 };
 
 export type CompletionFooterDetails = {
@@ -77,8 +88,14 @@ export function deriveTopicTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60) || "New Codex Session";
 }
 
-export function buildStatusDraft(state: TurnStatusState): TurnStatusDraft {
-  return { state };
+export function buildStatusDraft(
+  state: TurnStatusState,
+  options?: { subagentSnapshot?: LiveSubagentSnapshot | null }
+): TurnStatusDraft {
+  return {
+    state,
+    ...(options?.subagentSnapshot !== undefined ? { subagentSnapshot: options.subagentSnapshot } : {})
+  };
 }
 
 export function buildStatusDraftForItem(item: ThreadItem): TurnStatusDraft {
@@ -198,7 +215,7 @@ export function buildRenderedPermissionsApprovalPrompt(
 }
 
 export function isSameStatusDraft(left: TurnStatusDraft | null, right: TurnStatusDraft | null): boolean {
-  return left?.state === right?.state;
+  return left?.state === right?.state && serializeSubagentSnapshot(left?.subagentSnapshot) === serializeSubagentSnapshot(right?.subagentSnapshot);
 }
 
 export function renderQueuePreview(queueState: QueueStateSnapshot): string | null {
@@ -882,7 +899,38 @@ function buildStatusText(statusDraft: TurnStatusDraft, elapsedMs: number | null)
     parts.push(formatElapsedDuration(elapsedMs));
   }
 
-  return parts.join(" · ");
+  const summary = parts.join(" · ");
+  const subagentBlock = buildSubagentSnapshotText(statusDraft.subagentSnapshot ?? null);
+  return subagentBlock ? `${summary}\n\n${subagentBlock}` : summary;
+}
+
+function buildSubagentSnapshotText(snapshot: LiveSubagentSnapshot | null): string | null {
+  if (!snapshot) {
+    return null;
+  }
+
+  const summary = snapshot.summary.trim();
+  const lines = summary ? [summary] : [];
+  const agentLines = snapshot.agents.slice(0, 3).map((agent) => {
+    const label = agent.label.trim() || "agent";
+    const detail = agent.detail?.trim();
+    return `- ${label}: ${agent.state}${detail ? ` - ${detail}` : ""}`;
+  });
+  lines.push(...agentLines);
+
+  if (snapshot.agents.length > 3) {
+    lines.push(`- ...and ${snapshot.agents.length - 3} more`);
+  }
+
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function serializeSubagentSnapshot(snapshot: LiveSubagentSnapshot | null | undefined): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  return JSON.stringify(snapshot);
 }
 
 function buildRenderedStatusText(

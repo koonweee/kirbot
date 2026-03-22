@@ -1,4 +1,4 @@
-import type { TurnStatusDraft } from "./presentation";
+import type { LiveSubagentSnapshot, TurnStatusDraft } from "./presentation";
 import type { SessionMode } from "../domain";
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
@@ -18,6 +18,7 @@ export type TurnContext = {
   submitPendingSteersAfterInterrupt: boolean;
   startedAtMs: number;
   statusDraft: TurnStatusDraft | null;
+  subagentSnapshot: LiveSubagentSnapshot | null;
   lastStatusUpdateAt: number;
   visibleMessageHandle: TelegramTurnSurface;
   statusElapsedTimer: NodeJS.Timeout | null;

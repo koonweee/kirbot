@@ -13,6 +13,7 @@ import {
   buildStatusDraftForItem,
   isSameStatusDraft,
   renderTelegramStatusDraft,
+  type LiveSubagentSnapshot,
   type TurnStatusDraft
 } from "./presentation";
 import { type QueueStateSnapshot } from "../turn-runtime";
@@ -58,6 +59,7 @@ export class TurnLifecycleCoordinator {
       submitPendingSteersAfterInterrupt: false,
       startedAtMs,
       statusDraft: buildStatusDraft("thinking"),
+      subagentSnapshot: null,
       lastStatusUpdateAt: startedAtMs,
       visibleMessageHandle: createTelegramTurnSurface({
         messenger: this.deps.messenger,
@@ -229,7 +231,7 @@ export class TurnLifecycleCoordinator {
   }
 
   async handleTurnStarted(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("thinking"));
+    await this.updateStatus(turnId, this.buildContextualStatusDraft(turnId, "thinking", { clearSnapshot: true }));
   }
 
   async handleItemStarted(turnId: string, item: ThreadItem): Promise<void> {
@@ -244,24 +246,36 @@ export class TurnLifecycleCoordinator {
       }
     }
 
+    if (item.type === "collabAgentToolCall" && context) {
+      context.subagentSnapshot = buildLiveSubagentSnapshot(item);
+      await this.updateStatus(
+        turnId,
+        buildStatusDraft(collabToolToStatusState(item.tool), {
+          subagentSnapshot: context.subagentSnapshot
+        }),
+        { force: true }
+      );
+      return;
+    }
+
     await this.updateStatus(turnId, buildStatusDraftForItem(item));
   }
 
   async handlePlanUpdated(turnId: string, details: string | null): Promise<void> {
     void details;
-    await this.updateStatus(turnId, buildStatusDraft("planning"));
+    await this.updateStatus(turnId, this.buildContextualStatusDraft(turnId, "planning", { clearSnapshot: true }));
   }
 
   async handleToolProgress(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("using tool"));
+    await this.updateStatus(turnId, this.buildContextualStatusDraft(turnId, "using tool", { clearSnapshot: true }));
   }
 
   async handleCommandOutput(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("running"));
+    await this.updateStatus(turnId, this.buildContextualStatusDraft(turnId, "running", { clearSnapshot: true }));
   }
 
   async handleFileChangeOutput(turnId: string): Promise<void> {
-    await this.updateStatus(turnId, buildStatusDraft("editing"));
+    await this.updateStatus(turnId, this.buildContextualStatusDraft(turnId, "editing", { clearSnapshot: true }));
   }
 
   async handleAssistantDelta(turnId: string, itemId: string, delta: string): Promise<void> {
@@ -306,6 +320,18 @@ export class TurnLifecycleCoordinator {
     const activityLogEntry = buildActivityLogEntryForItemCompleted(item);
     if (activityLogEntry) {
       this.deps.runtime.appendActivityLogEntry(turnId, activityLogEntry);
+    }
+
+    if (item.type === "collabAgentToolCall") {
+      context.subagentSnapshot = buildLiveSubagentSnapshot(item);
+      await this.updateStatus(
+        turnId,
+        buildStatusDraft(collabToolToStatusState(item.tool), {
+          subagentSnapshot: context.subagentSnapshot
+        }),
+        { force: true }
+      );
+      return;
     }
 
     if (item.type === "reasoning") {
@@ -407,6 +433,25 @@ export class TurnLifecycleCoordinator {
     await context.visibleMessageHandle.updateStatus(rendered, force);
   }
 
+  private buildContextualStatusDraft(
+    turnId: string,
+    state: TurnStatusDraft["state"],
+    options?: { clearSnapshot?: boolean }
+  ): TurnStatusDraft {
+    const context = this.#turns.get(turnId);
+    if (!context) {
+      return buildStatusDraft(state);
+    }
+
+    if (options?.clearSnapshot) {
+      context.subagentSnapshot = null;
+    }
+
+    return buildStatusDraft(state, {
+      subagentSnapshot: context.subagentSnapshot
+    });
+  }
+
   private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {
     const messageId = await this.sendMiniAppPlanMessage(context, plan.text);
 
@@ -449,4 +494,88 @@ export class TurnLifecycleCoordinator {
       throw error;
     }
   }
+}
+
+function collabToolToStatusState(tool: Extract<ThreadItem, { type: "collabAgentToolCall" }>["tool"]): TurnStatusDraft["state"] {
+  switch (tool) {
+    case "spawnAgent":
+      return "spawning agent";
+    case "wait":
+      return "waiting";
+    case "sendInput":
+    case "resumeAgent":
+    case "closeAgent":
+      return "using tool";
+  }
+}
+
+function buildLiveSubagentSnapshot(
+  item: Extract<ThreadItem, { type: "collabAgentToolCall" }>
+): LiveSubagentSnapshot | null {
+  const summary = buildSubagentSummary(item.tool, item.receiverThreadIds.length);
+  const agents = buildLiveSubagentAgents(item);
+  if (!summary && agents.length === 0) {
+    return null;
+  }
+
+  return {
+    summary,
+    agents
+  };
+}
+
+function buildSubagentSummary(
+  tool: Extract<ThreadItem, { type: "collabAgentToolCall" }>["tool"],
+  receiverCount: number
+): string {
+  switch (tool) {
+    case "spawnAgent":
+      return "spawning agent";
+    case "wait":
+      return receiverCount > 0 ? `waiting for ${receiverCount} agent${receiverCount === 1 ? "" : "s"}` : "waiting for agents";
+    case "sendInput":
+      return "sending input";
+    case "resumeAgent":
+      return "resuming agent";
+    case "closeAgent":
+      return "closing agent";
+  }
+}
+
+function buildLiveSubagentAgents(
+  item: Extract<ThreadItem, { type: "collabAgentToolCall" }>
+): LiveSubagentSnapshot["agents"] {
+  const orderedThreadIds = item.receiverThreadIds.length > 0 ? item.receiverThreadIds : Object.keys(item.agentsStates);
+  return orderedThreadIds.map((threadId, index) => {
+    const state = item.agentsStates[threadId];
+    return {
+      label: `agent ${index + 1}`,
+      state: state ? mapCollabAgentState(state.status) : "pending",
+      detail: normalizeSubagentDetail(state?.message ?? null)
+    };
+  });
+}
+
+function mapCollabAgentState(
+  status: NonNullable<Extract<ThreadItem, { type: "collabAgentToolCall" }>["agentsStates"][string]>["status"]
+): LiveSubagentSnapshot["agents"][number]["state"] {
+  switch (status) {
+    case "pendingInit":
+      return "pending";
+    case "running":
+      return "running";
+    case "completed":
+      return "completed";
+    case "interrupted":
+      return "interrupted";
+    case "errored":
+    case "shutdown":
+    case "notFound":
+      return "failed";
+  }
+}
+
+function normalizeSubagentDetail(detail: string | null): string | null {
+  const trimmed = detail?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed.slice(0, 80) : null;
 }

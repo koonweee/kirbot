@@ -318,6 +318,78 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.drafts[0]?.options?.message_thread_id).toBeUndefined();
   });
 
+  it("renders spawn-agent progress in the live status bubble with fallback agent labels", async () => {
+    const harness = createHarness();
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.publishCurrentStatus("turn-1", true);
+    await harness.coordinator.handleItemStarted("turn-1", {
+      type: "collabAgentToolCall",
+      id: "agent-1",
+      tool: "spawnAgent",
+      status: "inProgress",
+      senderThreadId: "thread-1",
+      receiverThreadIds: ["thread-2", "thread-3"],
+      prompt: "Explore the repo",
+      model: "gpt-5",
+      reasoningEffort: "high",
+      agentsStates: {}
+    });
+
+    expect(harness.telegram.drafts.at(-1)?.text).toBe(
+      "spawning agent · 0s\n\nspawning agent\n- agent 1: pending\n- agent 2: pending"
+    );
+  });
+
+  it("renders wait progress and brief failures in the live status bubble", async () => {
+    const harness = createHarness();
+
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.publishCurrentStatus("turn-1", true);
+    await harness.coordinator.handleItemStarted("turn-1", {
+      type: "collabAgentToolCall",
+      id: "agent-1",
+      tool: "wait",
+      status: "inProgress",
+      senderThreadId: "thread-1",
+      receiverThreadIds: ["thread-2", "thread-3"],
+      prompt: null,
+      model: null,
+      reasoningEffort: null,
+      agentsStates: {}
+    });
+
+    expect(harness.telegram.drafts.at(-1)?.text).toBe(
+      "waiting · 0s\n\nwaiting for 2 agents\n- agent 1: pending\n- agent 2: pending"
+    );
+
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "collabAgentToolCall",
+      id: "agent-1",
+      tool: "wait",
+      status: "completed",
+      senderThreadId: "thread-1",
+      receiverThreadIds: ["thread-2", "thread-3"],
+      prompt: null,
+      model: null,
+      reasoningEffort: null,
+      agentsStates: {
+        "thread-2": {
+          status: "completed",
+          message: "Done"
+        },
+        "thread-3": {
+          status: "errored",
+          message: "timeout while reading"
+        }
+      }
+    });
+
+    expect(harness.telegram.drafts.at(-1)?.text).toBe(
+      "waiting · 0s\n\nwaiting for 2 agents\n- agent 1: completed - Done\n- agent 2: failed - timeout while reading"
+    );
+  });
+
   it("finalizes completed turns through one shared terminal path", async () => {
     const harness = createHarness("Final answer");
     const context = harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
@@ -937,7 +1009,7 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("keeps successful item completions transient but still publishes one durable compaction notice", async () => {
+  it("surfaces successful collab completions in the status bubble while keeping other successful items transient", async () => {
     const harness = createHarness();
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
@@ -1014,6 +1086,14 @@ describe("TurnLifecycleCoordinator", () => {
     expect(harness.telegram.sentMessages).toEqual([
       {
         chatId: -1001,
+        text: "spawning agent · 0s\n\nspawning agent\n- agent 1: pending",
+        options: {
+          disable_notification: true,
+          message_thread_id: 777
+        }
+      },
+      {
+        chatId: -1001,
         text: "Context compacted",
         options: {
           disable_notification: true,
@@ -1025,6 +1105,15 @@ describe("TurnLifecycleCoordinator", () => {
       {
         chatId: -1001,
         draftId: 1,
+        text: "spawning agent · 0s\n\nspawning agent\n- agent 1: pending",
+        options: {
+          disable_notification: true,
+          message_thread_id: 777
+        }
+      },
+      {
+        chatId: -1001,
+        draftId: 2,
         text: "Context compacted",
         options: {
           disable_notification: true,
