@@ -60,11 +60,21 @@ request.
   notifying message.
 - For approval, permissions, or structured user-input requests, the prompt
   message is the primary notifying message.
-- For plan-only completion, the first plan artifact publication or its oversize
-  fallback is the primary notifying message.
-- For commentary-only or response-only artifact output, the first notifying
-  artifact-availability message is the primary notifying message when no normal
-  final assistant reply is sent.
+- When no normal final assistant reply is sent, the primary notifying message
+  is whichever notification-enabled artifact or fallback message is emitted
+  first in the actual completion flow.
+
+### Turn Ownership
+
+- An active turn's starter is the `UserTurnMessage` that originally created that
+  turn.
+- Follow-up steers submitted into an already-active turn do not replace the
+  active turn starter for mention purposes.
+- Pending steers and queued follow-ups retain their own `telegramUsername`
+  while waiting.
+- If a queued follow-up is later promoted into a new turn, that new turn's
+  starter becomes the queued follow-up sender, not the starter of the previous
+  turn in the topic.
 
 ## Current State
 
@@ -130,10 +140,12 @@ apply the mention only there.
 #### Plan-Only Output
 
 - When a completed turn publishes only plan artifact messages, prepend the turn
-  starter's `@username` to the first notifying plan publication.
-- If the plan artifact is too large and Kirbot falls back to the oversize
-  message, that fallback should receive the mention because it is the notifying
-  message on that path.
+  starter's `@username` to the first notification-enabled publication on that
+  path.
+- If a plan-only completion also emits standalone commentary first, the
+  commentary publication remains the mention target because it is emitted first.
+- If the first notification-enabled publication on the plan path is an oversize
+  fallback message, that fallback should receive the mention.
 
 ### Request-Scoped Prompt Publishing
 
@@ -155,24 +167,26 @@ apply the mention only there.
 - If `request-coordinator.ts` cannot resolve an active turn context or the turn
   starter has no username, it should send the existing prompt text unchanged.
 - This design does not require persisting `telegramUsername` into
-  `PendingServerRequest` storage unless implementation constraints later show
-  that request creation can outlive access to active turn state.
+  `PendingServerRequest` storage because the explicit fallback is to send the
+  prompt unmentioned if active turn state is unavailable at creation time.
 
 ## Primary Notifying Message Rule
 
 The implementation should make the "primary notifying message" explicit rather
 than scattered across individual send calls.
 
-- Completion paths should decide whether the notifying message is:
-  - the final assistant reply
-  - the first commentary artifact message
-  - the first response artifact message
-  - the first plan artifact message
-  - the oversize fallback for one of those artifact types
+- Completion paths should choose the first notification-enabled send in their
+  actual publish order.
+- In practice the precedence should be:
+  - final assistant reply, when present
+  - otherwise the first standalone commentary publication, when present
+  - otherwise the first standalone response publication, when present
+  - otherwise the first standalone plan publication
+  - otherwise the first oversize fallback emitted on that path
 - Once that selection is made, only that first notifying message should receive
   the mention.
-- Additional artifact chunks in the same completion path should remain silent
-  and unmentioned.
+- Additional artifact chunks and any later notification-enabled sends in the
+  same completion path should remain unmentioned.
 
 This keeps shared-topic notification behavior predictable and avoids multiple
 mentions for one user action.
