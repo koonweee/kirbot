@@ -65,6 +65,7 @@ async function main(): Promise<void> {
     }
 
     const topicId = getMessageTopicId(context.message);
+    const actorLabel = getTelegramActorLabel(context.message.from);
 
     await bridge.handleUserTextMessage({
       chatId: context.chat.id,
@@ -72,7 +73,7 @@ async function main(): Promise<void> {
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
-      actorLabel: getTelegramActorLabel(context.message.from),
+      ...(actorLabel ? { actorLabel } : {}),
       text: context.message.text
     });
   });
@@ -88,13 +89,14 @@ async function main(): Promise<void> {
 
     const topicId = getMessageTopicId(context.message);
     const input = buildPhotoMessageInput(context.message.caption, context.message.photo);
+    const actorLabel = getTelegramActorLabel(context.message.from);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
       topicId,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
-      actorLabel: getTelegramActorLabel(context.message.from),
+      ...(actorLabel ? { actorLabel } : {}),
       text: input.text,
       input: input.input
     });
@@ -115,13 +117,14 @@ async function main(): Promise<void> {
     }
 
     const topicId = getMessageTopicId(context.message);
+    const actorLabel = getTelegramActorLabel(context.message.from);
     await bridge.handleUserMessage({
       chatId: context.chat.id,
       topicId,
       messageId: context.message.message_id,
       updateId: context.update.update_id,
       userId: context.message.from.id,
-      actorLabel: getTelegramActorLabel(context.message.from),
+      ...(actorLabel ? { actorLabel } : {}),
       text: input.text,
       input: input.input
     });
