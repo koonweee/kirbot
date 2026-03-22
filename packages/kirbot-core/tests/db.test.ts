@@ -276,6 +276,27 @@ describe("BridgeDatabase", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects malformed general rows on write", async () => {
+    await expect(
+      database.kysely
+        .insertInto("sessions")
+        .values({
+          telegram_chat_id: "-1001",
+          surface_kind: "general",
+          telegram_topic_id: 99,
+          codex_thread_id: null,
+          status: "active",
+          preferred_mode: "default",
+          model: null,
+          reasoning_effort: null,
+          service_tier: null,
+          approval_policy: null,
+          sandbox_policy_json: null
+        })
+        .execute()
+    ).rejects.toThrow();
+  });
+
   it("migrates v6 root sessions to general and preserves unique session surfaces", async () => {
     const legacyPath = join(tempDir, "legacy-v6.sqlite");
     const sqlite = new SqliteDatabase(legacyPath);
@@ -372,6 +393,138 @@ describe("BridgeDatabase", () => {
       surface: { kind: "topic", topicId: 23 }
     });
     expect(newTopic.surface).toEqual({ kind: "topic", topicId: 23 });
+
+    await migratedDatabase.close();
+  });
+
+  it("migrates v7 general sessions to v8 without losing data and enforces constraints", async () => {
+    const legacyPath = join(tempDir, "legacy-v7.sqlite");
+    const sqlite = new SqliteDatabase(legacyPath);
+
+    sqlite.exec(`
+      CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT
+      );
+
+      CREATE UNIQUE INDEX sessions_general_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'general';
+
+      CREATE UNIQUE INDEX sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+    `);
+
+    sqlite.pragma("user_version = 7");
+    sqlite.prepare(`
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(1, "-1001", "general", null, "general-thread", "active", "default", null, null, null, null, null);
+    sqlite.prepare(`
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(2, "-1001", "topic", 31, "topic-thread", "active", "plan", null, null, null, null, null);
+    sqlite.close();
+
+    const migratedDatabase = new BridgeDatabase(legacyPath);
+    await migratedDatabase.migrate();
+
+    const general = await migratedDatabase.getRootSessionByChat("-1001");
+    expect(general?.surface).toEqual({ kind: "general" });
+    expect(general?.codexThreadId).toBe("general-thread");
+
+    const topic = await migratedDatabase.getSessionByTopic(-1001, 31);
+    expect(topic?.telegramTopicId).toBe(31);
+    expect(topic?.codexThreadId).toBe("topic-thread");
+
+    await expect(
+      migratedDatabase.kysely
+        .insertInto("sessions")
+        .values({
+          telegram_chat_id: "-1001",
+          surface_kind: "general",
+          telegram_topic_id: null,
+          codex_thread_id: "duplicate-general-thread",
+          status: "active",
+          preferred_mode: "default",
+          model: null,
+          reasoning_effort: null,
+          service_tier: null,
+          approval_policy: null,
+          sandbox_policy_json: null
+        })
+        .execute()
+    ).rejects.toThrow();
+
+    await expect(
+      migratedDatabase.kysely
+        .insertInto("sessions")
+        .values({
+          telegram_chat_id: "-1001",
+          surface_kind: "general",
+          telegram_topic_id: 77,
+          codex_thread_id: "malformed-general-thread",
+          status: "active",
+          preferred_mode: "default",
+          model: null,
+          reasoning_effort: null,
+          service_tier: null,
+          approval_policy: null,
+          sandbox_policy_json: null
+        })
+        .execute()
+    ).rejects.toThrow();
+
+    const repeatedGeneral = await migratedDatabase.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" }
+    });
+    expect(repeatedGeneral.id).toBe(general?.id);
+
+    const newTopic = await migratedDatabase.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 32 }
+    });
+    expect(newTopic.surface).toEqual({ kind: "topic", topicId: 32 });
 
     await migratedDatabase.close();
   });
