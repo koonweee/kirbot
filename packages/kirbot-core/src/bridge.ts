@@ -228,6 +228,7 @@ export class TelegramCodexBridge {
       telegram,
       this.#messenger,
       codex,
+      this.getTurnContext.bind(this),
       (turnId, statusDraft, force) =>
         this.#lifecycle.updateStatus(turnId, statusDraft, {
           ...(force !== undefined ? { force } : {})
@@ -295,6 +296,10 @@ export class TelegramCodexBridge {
 
   getActiveTopics(): Array<{ chatId: number; topicId: number | null }> {
     return this.#lifecycle.getActiveTopics();
+  }
+
+  private getTurnContext(turnId: string): TurnContext | undefined {
+    return this.#lifecycle.getTurn(turnId);
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {

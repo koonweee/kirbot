@@ -6256,6 +6256,233 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.edits.at(-1)?.text).toBe("Allowed additional permissions for this session");
   });
 
+  it.each([
+    {
+      label: "command approval",
+      request: {
+        method: "item/commandExecution/requestApproval" as const,
+        id: 389,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          command: "npm publish",
+          cwd: "/workspace",
+          availableDecisions: ["accept", "decline", "cancel"] as const
+        }
+      },
+      buttonText: "Allow once"
+    },
+    {
+      label: "file approval",
+      request: {
+        method: "item/fileChange/requestApproval" as const,
+        id: 390,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-file-1",
+          reason: "needs write access outside the current sandbox root",
+          grantRoot: "/workspace/packages/kirbot-core"
+        }
+      },
+      buttonText: "Allow once"
+    },
+    {
+      label: "permissions approval",
+      request: {
+        method: "item/permissions/requestApproval" as const,
+        id: 391,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-perm-1",
+          reason: "Need to write outside the workspace",
+          permissions: {
+            network: null,
+            fileSystem: {
+              read: null,
+              write: ["/tmp/export"]
+            },
+            macos: null
+          }
+        }
+      },
+      buttonText: "Allow this session"
+    }
+  ])("prefixes the initial %s prompt with the starter username", async ({ request, buttonText }) => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 2000,
+      messageId: 100,
+      updateId: 200,
+      userId: 42,
+      telegramUsername: "starter-user",
+      text: "Start the topic"
+    });
+
+    codex.emitRequest(request);
+    await waitForAsyncNotifications();
+
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text?.startsWith("@starter-user ")).toBe(true);
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: `callback-${request.id}`,
+      data: getCallbackDataByButtonText(promptMessage, buttonText)!,
+      chatId: -1001,
+      topicId: 2000,
+      userId: 42
+    });
+
+    expect(telegram.edits.at(-1)?.text.startsWith("@starter-user ")).toBe(false);
+  });
+
+  it("prefixes the initial user-input prompt and leaves later edits unmentioned", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 2001,
+      messageId: 101,
+      updateId: 201,
+      userId: 42,
+      telegramUsername: "starter-user",
+      text: "Start the topic"
+    });
+
+    codex.emitRequest({
+      method: "item/tool/requestUserInput",
+      id: 492,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-input-1",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "What kind of change do you want?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Refactor",
+                description: "Change structure only"
+              }
+            ]
+          },
+          {
+            id: "notes",
+            header: "Notes",
+            question: "Any extra context?",
+            isOther: false,
+            isSecret: false,
+            options: null
+          }
+        ]
+      }
+    });
+    await waitForAsyncNotifications();
+
+    const promptMessage = telegram.sentMessages.at(-1);
+    expect(promptMessage?.text?.startsWith("@starter-user ")).toBe(true);
+
+    const pending = await database.getPendingRequest(JSON.stringify(492));
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-user-input-mention",
+      data: `req:${pending.id}:opt:0`,
+      chatId: -1001,
+      topicId: 2001,
+      userId: 42
+    });
+
+    expect(telegram.edits.at(-1)?.text.startsWith("@starter-user ")).toBe(false);
+    expect(telegram.edits.at(-1)?.text).toContain("Question 2/2");
+  });
+
+  it("falls back to unmentioned request prompts when the turn context is missing or unnamed", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 2002,
+      messageId: 102,
+      updateId: 202,
+      userId: 42,
+      telegramUsername: "starter-user",
+      text: "Start the topic"
+    });
+
+    codex.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      id: 593,
+      params: {
+        threadId: "thread-1",
+        turnId: "missing-turn",
+        itemId: "item-1",
+        command: "npm test",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "decline", "cancel"]
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.at(-1)?.text.startsWith("@starter-user ")).toBe(false);
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 2003,
+      messageId: 103,
+      updateId: 203,
+      userId: 42,
+      text: "Start another topic"
+    });
+
+    const turnIdWithoutUsername = codex.turns.at(-1)?.turnId;
+    expect(turnIdWithoutUsername).toBeDefined();
+
+    codex.emitRequest({
+      method: "item/permissions/requestApproval",
+      id: 594,
+      params: {
+        threadId: "thread-2",
+        turnId: turnIdWithoutUsername!,
+        itemId: "item-perm-2",
+        reason: "Need a raw fallback prompt",
+        permissions: {
+          network: null,
+          fileSystem: {
+            read: null,
+            write: ["/tmp/export"]
+          },
+          macos: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(telegram.sentMessages.at(-1)?.text.startsWith("@")).toBe(false);
+  });
+
+  it("keeps generic provisioning messages unmentioned", async () => {
+    await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      telegramTopicId: 2004
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 2004,
+      messageId: 104,
+      updateId: 204,
+      userId: 42,
+      telegramUsername: "starter-user",
+      text: "Try the topic again"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This topic is still provisioning a Codex session. Try again in a moment"
+    );
+    expect(telegram.sentMessages.at(-1)?.text.startsWith("@starter-user ")).toBe(false);
+  });
+
   it("cleans up pending approval prompts when the app server resolves them elsewhere", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
