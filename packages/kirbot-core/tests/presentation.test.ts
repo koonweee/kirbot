@@ -84,6 +84,64 @@ describe("status presentation", () => {
     });
   });
 
+  it("renders a live subagent snapshot block in the same status bubble", () => {
+    expect(
+      renderTelegramStatusDraft(
+        buildStatusDraft("waiting", {
+          subagentSnapshot: {
+            summary: "waiting for 2 agents",
+            agents: [
+              { label: "explorer", state: "running", detail: null },
+              { label: "worker", state: "completed", detail: null }
+            ]
+          }
+        }),
+        14_000
+      )
+    ).toEqual({
+      text: "waiting · 14s\n\nwaiting for 2 agents\n- explorer: running\n- worker: completed"
+    });
+  });
+
+  it("limits the live subagent snapshot to three rows plus overflow", () => {
+    expect(
+      renderTelegramStatusDraft(
+        buildStatusDraft("waiting", {
+          subagentSnapshot: {
+            summary: "waiting for 5 agents",
+            agents: [
+              { label: "agent 1", state: "running", detail: null },
+              { label: "agent 2", state: "running", detail: null },
+              { label: "agent 3", state: "completed", detail: null },
+              { label: "agent 4", state: "pending", detail: null },
+              { label: "agent 5", state: "failed", detail: "timeout" }
+            ]
+          }
+        }),
+        9_000
+      )
+    ).toEqual({
+      text:
+        "waiting · 9s\n\nwaiting for 5 agents\n- agent 1: running\n- agent 2: running\n- agent 3: completed\n- ...and 2 more"
+    });
+  });
+
+  it("renders brief failure detail in the live subagent snapshot", () => {
+    expect(
+      renderTelegramStatusDraft(
+        buildStatusDraft("using tool", {
+          subagentSnapshot: {
+            summary: "checking agent status",
+            agents: [{ label: "explorer", state: "failed", detail: "timeout" }]
+          }
+        }),
+        3_000
+      )
+    ).toEqual({
+      text: "using tool · 3s\n\nchecking agent status\n- explorer: failed - timeout"
+    });
+  });
+
   it("renders elapsed minutes without leading zero padding", () => {
     expect(renderTelegramStatusDraft(buildStatusDraft("thinking"), 69_000)).toEqual({
       text: "thinking · 1m 9s"
