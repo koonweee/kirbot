@@ -2,7 +2,10 @@ import { getVisibleTelegramCommands, type TelegramBotCommand } from "./telegram-
 import type { LoggerLike } from "./logging";
 
 type TelegramCommandScope =
-  {
+  | {
+      type: "default";
+    }
+  | {
       type: "chat";
       chat_id: number;
     };
@@ -27,10 +30,6 @@ export interface TelegramCommandApi {
   }): Promise<true>;
 }
 
-const COMMANDS_MENU_BUTTON: TelegramMenuButtonCommands = {
-  type: "commands"
-};
-
 export class TelegramCommandSync {
   constructor(
     private readonly telegram: TelegramCommandApi,
@@ -39,10 +38,11 @@ export class TelegramCommandSync {
   ) {}
 
   async initialize(): Promise<void> {
-    await this.runStartupStep(`set commands menu button for workspace chat ${this.workspaceChatId}`, async () => {
-      await this.telegram.setChatMenuButton({
-        chat_id: this.workspaceChatId,
-        menu_button: COMMANDS_MENU_BUTTON
+    await this.runStartupStep("clear commands for default scope", async () => {
+      await this.telegram.deleteMyCommands({
+        scope: {
+          type: "default"
+        }
       });
     });
     await this.runStartupStep(`set visible commands for workspace chat ${this.workspaceChatId}`, async () => {

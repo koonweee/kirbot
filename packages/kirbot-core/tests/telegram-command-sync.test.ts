@@ -76,14 +76,22 @@ class FakeTelegramCommandApi implements TelegramCommandApi {
 }
 
 describe("TelegramCommandSync", () => {
-  it("configures the commands menu and visible commands for the workspace chat at startup", async () => {
+  it("cleans up the default command scope and configures visible commands for the workspace chat", async () => {
     const telegram = new FakeTelegramCommandApi();
     const sync = new TelegramCommandSync(telegram, 42);
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     await sync.initialize();
 
-    expect(telegram.deleteMyCommandsCalls).toEqual([]);
+    expect(telegram.deleteMyCommandsCalls).toEqual([
+      {
+        options: {
+          scope: {
+            type: "default"
+          }
+        }
+      }
+    ]);
     expect(telegram.setMyCommandsCalls).toEqual([
       {
         commands: [
@@ -144,19 +152,10 @@ describe("TelegramCommandSync", () => {
         }
       }
     ]);
-    expect(telegram.setChatMenuButtonCalls).toEqual([
-      {
-        options: {
-          chat_id: 42,
-          menu_button: {
-            type: "commands"
-          }
-        }
-      }
-    ]);
+    expect(telegram.setChatMenuButtonCalls).toEqual([]);
     expect(infoSpy.mock.calls).toEqual([
-      ["Telegram command sync: starting set commands menu button for workspace chat 42."],
-      ["Telegram command sync: completed set commands menu button for workspace chat 42."],
+      ["Telegram command sync: starting clear commands for default scope."],
+      ["Telegram command sync: completed clear commands for default scope."],
       ["Telegram command sync: starting set visible commands for workspace chat 42."],
       ["Telegram command sync: completed set visible commands for workspace chat 42."]
     ]);
