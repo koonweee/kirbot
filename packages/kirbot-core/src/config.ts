@@ -21,9 +21,41 @@ const optionalEnvString = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
     return value;
   }, schema.optional());
 
+const workspaceChatIdEnv = z.preprocess(
+  (value) => value,
+  z.any().transform((value, ctx) => {
+    if (value === undefined || value === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID is required"
+      });
+      return z.NEVER;
+    }
+
+    if (typeof value === "string" && value.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID is required"
+      });
+      return z.NEVER;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID is required"
+      });
+      return z.NEVER;
+    }
+
+    return parsed;
+  })
+);
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_WORKSPACE_CHAT_ID: z.coerce.number().int(),
+  TELEGRAM_WORKSPACE_CHAT_ID: workspaceChatIdEnv,
   TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
   TELEGRAM_MINI_APP_PUBLIC_URL: z
     .string()

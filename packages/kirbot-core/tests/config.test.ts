@@ -28,6 +28,29 @@ describe("core config module", () => {
     expect(() => loadConfig()).toThrow("Invalid URL");
   });
 
+  it("requires TELEGRAM_WORKSPACE_CHAT_ID when loading config", async () => {
+    process.env = {
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("TELEGRAM_WORKSPACE_CHAT_ID is required");
+  });
+
+  it("does not accept TELEGRAM_USER_ID as a workspace chat id", async () => {
+    process.env = {
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_USER_ID: "42",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("TELEGRAM_WORKSPACE_CHAT_ID is required");
+  });
+
   it("requires the Mini App public URL to use https", async () => {
     process.env = {
       TELEGRAM_BOT_TOKEN: "token",
