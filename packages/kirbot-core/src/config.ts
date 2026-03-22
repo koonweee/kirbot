@@ -21,9 +21,49 @@ const optionalEnvString = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
     return value;
   }, schema.optional());
 
+const workspaceChatIdEnv = z.preprocess(
+  (value) => value,
+  z.any().transform((value, ctx) => {
+    if (value === undefined || value === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID is required"
+      });
+      return z.NEVER;
+    }
+
+    if (typeof value === "string" && value.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID is required"
+      });
+      return z.NEVER;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID is required"
+      });
+      return z.NEVER;
+    }
+
+    if (parsed >= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID must be negative"
+      });
+      return z.NEVER;
+    }
+
+    return parsed;
+  })
+);
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_USER_ID: z.coerce.number().int(),
+  TELEGRAM_WORKSPACE_CHAT_ID: workspaceChatIdEnv,
   TELEGRAM_MEDIA_TMP_DIR: z.string().optional(),
   TELEGRAM_MINI_APP_PUBLIC_URL: z
     .string()
@@ -49,7 +89,7 @@ const envSchema = z.object({
 export type AppConfig = {
   telegram: {
     botToken: string;
-    userId: number;
+    workspaceChatId: number;
     mediaTempDir: string;
     miniApp: {
       publicUrl: string;
@@ -67,7 +107,7 @@ export function loadConfig(): AppConfig {
   return {
     telegram: {
       botToken: parsed.TELEGRAM_BOT_TOKEN,
-      userId: parsed.TELEGRAM_USER_ID,
+      workspaceChatId: parsed.TELEGRAM_WORKSPACE_CHAT_ID,
       mediaTempDir: parsed.TELEGRAM_MEDIA_TMP_DIR
         ? expandHomePath(parsed.TELEGRAM_MEDIA_TMP_DIR)
         : defaultTelegramMediaTempDir(),

@@ -68,7 +68,8 @@ import {
   isCodexSlashCommand,
   parseSlashCommand,
   parseSlashCommandToken,
-  type ParsedSlashCommand
+  type ParsedSlashCommand,
+  type SlashCommandScope
 } from "./bridge/slash-commands";
 import {
   buildTopicCommandKeyboard,
@@ -181,7 +182,8 @@ const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
-const ROOT_SESSION_PROVISIONING_TEXT = "The root Codex session is still provisioning. Try again in a moment";
+const ROOT_SESSION_PROVISIONING_TEXT = "The General Codex session is still provisioning. Try again in a moment";
+const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum chat.";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -251,12 +253,13 @@ export class TelegramCodexBridge {
   }
 
   async handleUserMessage(message: UserTurnMessage): Promise<void> {
-    if (message.userId !== this.config.telegram.userId) {
+    const inserted = await this.database.markUpdateProcessed(message.updateId);
+    if (!inserted) {
       return;
     }
 
-    const inserted = await this.database.markUpdateProcessed(message.updateId);
-    if (!inserted) {
+    if (message.chatId !== this.config.telegram.workspaceChatId) {
+      await this.rejectUnsupportedChatMessage(message);
       return;
     }
 
@@ -269,6 +272,10 @@ export class TelegramCodexBridge {
   }
 
   async handleTopicClosed(event: TopicLifecycleEvent): Promise<void> {
+    if (event.chatId !== this.config.telegram.workspaceChatId) {
+      return;
+    }
+
     const session = await this.database.archiveSessionByTopic(event.chatId, event.topicId);
     if (!session?.codexThreadId) {
       return;
@@ -290,7 +297,10 @@ export class TelegramCodexBridge {
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
-    if (event.userId !== this.config.telegram.userId) {
+    if (event.chatId !== this.config.telegram.workspaceChatId) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: WORKSPACE_CHAT_ONLY_TEXT
+      });
       return;
     }
 
@@ -321,6 +331,14 @@ export class TelegramCodexBridge {
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
       text: "Unsupported callback"
     });
+  }
+
+  private async rejectUnsupportedChatMessage(message: UserTurnMessage): Promise<void> {
+    if (message.chatId <= 0) {
+      return;
+    }
+
+    await this.telegram.sendMessage(message.chatId, WORKSPACE_CHAT_ONLY_TEXT);
   }
 
   private async handleTopicImplementCallbackQuery(event: CallbackQueryEvent): Promise<void> {
@@ -409,7 +427,7 @@ export class TelegramCodexBridge {
   private async handleRootMessage(message: UserTurnMessage): Promise<void> {
     const command = parseSlashCommand(message.text);
     if (command) {
-      if (!isAllowedSlashCommandInScope(command.command, "root")) {
+      if (!isAllowedSlashCommandInScope(command.command, "general")) {
         await this.sendInvalidSlashCommandMessage(message);
         return;
       }
@@ -1199,7 +1217,7 @@ export class TelegramCodexBridge {
       replyMarkup: {
         inline_keyboard: [[
           {
-            text: "Root Thread",
+            text: "General Thread",
             callback_data: `slash:fast:apply:root:${fastAction}`
           }
         ], [
@@ -1219,7 +1237,7 @@ export class TelegramCodexBridge {
       replyMarkup: {
         inline_keyboard: [[
           {
-            text: "Root Thread",
+            text: "General Thread",
             callback_data: `slash:scope:${area}:root`
           }
         ], [
@@ -1432,10 +1450,22 @@ export class TelegramCodexBridge {
             ? [
                 [
                   ...(boundedPage > 0
-                    ? [{ text: "Previous", callback_data: `slash:model:page:${boundedPage - 1}` }]
+                    ? [{
+                        text: "Previous",
+                        callback_data:
+                          target.scope === "thread"
+                            ? `slash:model:page:${boundedPage - 1}`
+                            : `slash:model:page:${target.scope}:${boundedPage - 1}`
+                      }]
                     : []),
                   ...(boundedPage < totalPages - 1
-                    ? [{ text: "Next", callback_data: `slash:model:page:${boundedPage + 1}` }]
+                    ? [{
+                        text: "Next",
+                        callback_data:
+                          target.scope === "thread"
+                            ? `slash:model:page:${boundedPage + 1}`
+                            : `slash:model:page:${target.scope}:${boundedPage + 1}`
+                      }]
                     : [])
                 ]
               ]
@@ -1639,7 +1669,9 @@ export class TelegramCodexBridge {
     }
 
     if (area === "model" && action === "page") {
-      const page = Number.parseInt(rest[0] ?? "", 10);
+      const [maybeScope, maybePage] = rest;
+      const scope = maybePage ? maybeScope : "thread";
+      const page = Number.parseInt((maybePage ?? maybeScope) ?? "", 10);
       if (Number.isNaN(page)) {
         await this.telegram.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model page"
@@ -1647,7 +1679,14 @@ export class TelegramCodexBridge {
         return;
       }
 
-      const opened = await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, page);
+      if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
+        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+          text: "Invalid model page"
+        });
+        return;
+      }
+
+      const opened = await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, page, scope);
       await this.telegram.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
@@ -1736,7 +1775,7 @@ export class TelegramCodexBridge {
     }, async () => {
       const pending = await this.database.createProvisioningSession({
         telegramChatId: String(message.chatId),
-        surface: { kind: "root" }
+        surface: { kind: "general" }
       });
 
       try {
@@ -2467,15 +2506,15 @@ export class TelegramCodexBridge {
     });
   }
 
-  private async buildTopicCommandReplyMarkup(): Promise<ReplyKeyboardMarkup | undefined> {
+  private async buildTopicCommandReplyMarkup(scope: SlashCommandScope): Promise<ReplyKeyboardMarkup | undefined> {
     return buildTopicCommandKeyboard(
-      getVisibleSlashCommands(),
+      getVisibleSlashCommands(scope),
       await this.database.listCustomCommands()
     );
   }
 
   private async showCommandKeyboard(message: UserTurnMessage): Promise<void> {
-    const replyMarkup = await this.buildTopicCommandReplyMarkup();
+    const replyMarkup = await this.buildTopicCommandReplyMarkup(message.topicId === null ? "general" : "topic");
     await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
@@ -2718,7 +2757,7 @@ export class TelegramCodexBridge {
     update: CodexThreadSettingsOverride
   ): Promise<ThreadStartSettings> {
     const session =
-      surface.kind === "root"
+      surface.kind === "general"
         ? await this.database.getRootSessionByChat(chatId)
         : await this.database.getSessionByTopic(chatId, surface.topicId);
     if (!session) {
@@ -2728,7 +2767,7 @@ export class TelegramCodexBridge {
     const hydratedSession = await this.ensurePersistedSessionSettings(session);
     const merged = mergePersistedThreadSettings(hydratedSession.settings, update);
     const updated =
-      surface.kind === "root"
+      surface.kind === "general"
         ? await this.database.updateRootSessionSettings(chatId, merged)
         : await this.database.updateTopicSessionSettings(chatId, surface.topicId, merged);
     const nextSession = updated ?? { ...hydratedSession, settings: merged };
@@ -2742,7 +2781,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.updateSessionSettingsForSurface(chatId, { kind: "root" }, update);
+    await this.updateSessionSettingsForSurface(chatId, { kind: "general" }, update);
   }
 
 }
@@ -2861,13 +2900,13 @@ function isFastSelectionAction(value: string | undefined): value is FastSelectio
 
 function buildScopedFastStatusMessage(scope: Exclude<SettingsSelectionScope, "thread">, serviceTier: ServiceTier | null): string {
   return scope === "root"
-    ? `Root thread fast mode is ${serviceTier === "fast" ? "on" : "off"}`
+    ? `General thread fast mode is ${serviceTier === "fast" ? "on" : "off"}`
     : `New thread default fast mode is ${serviceTier === "fast" ? "on" : "off"}`;
 }
 
 function buildScopedFastUpdatedMessage(scope: Exclude<SettingsSelectionScope, "thread">, serviceTier: ServiceTier | null): string {
   return scope === "root"
-    ? `Root thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`
+    ? `General thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`
     : `New thread default fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`;
 }
 
@@ -2876,7 +2915,7 @@ function describeModelSelectionTitle(scope: SettingsSelectionScope): string {
     case "thread":
       return "Choose the model for this thread";
     case "root":
-      return "Choose the model for the root thread";
+      return "Choose the model for the General thread";
     case "spawn":
       return "Choose the default model for new /thread topics";
   }
@@ -2900,7 +2939,7 @@ function describePermissionsSelectionTitle(scope: SettingsSelectionScope): strin
     case "thread":
       return "Choose Codex permissions for this thread";
     case "root":
-      return "Choose Codex permissions for the root thread";
+      return "Choose Codex permissions for the General thread";
     case "spawn":
       return "Choose default Codex permissions for new /thread topics";
   }
@@ -2911,7 +2950,7 @@ function describePermissionsSelectionScope(scope: SettingsSelectionScope): strin
     case "thread":
       return "Your selection will apply only to this topic";
     case "root":
-      return "Your selection will apply to the root thread";
+      return "Your selection will apply to the General thread";
     case "spawn":
       return "Your selection will apply to future /thread topics";
   }
@@ -2922,7 +2961,7 @@ function buildModelUpdatedMessage(scope: SettingsSelectionScope, model: string, 
     case "thread":
       return `Thread model set to ${model} ${reasoningEffort}`;
     case "root":
-      return `Root thread model set to ${model} ${reasoningEffort}`;
+      return `General thread model set to ${model} ${reasoningEffort}`;
     case "spawn":
       return `New thread default model set to ${model} ${reasoningEffort}`;
   }
@@ -2933,7 +2972,7 @@ function buildPermissionsUpdatedMessage(scope: SettingsSelectionScope, label: st
     case "thread":
       return `Thread permissions set to ${label}`;
     case "root":
-      return `Root thread permissions set to ${label}`;
+      return `General thread permissions set to ${label}`;
     case "spawn":
       return `New thread default permissions set to ${label}`;
   }
@@ -2995,8 +3034,8 @@ function toPermissionDetectionSettings(
   };
 }
 
-function isRootBridgeSession(session: TopicSession | BridgeSession): session is BridgeSession & { surface: { kind: "root" } } {
-  return "surface" in session && session.surface.kind === "root";
+function isRootBridgeSession(session: TopicSession | BridgeSession): session is BridgeSession & { surface: { kind: "general" } } {
+  return "surface" in session && session.surface.kind === "general";
 }
 
 function getSessionTopicId(session: TopicSession | BridgeSession): number {

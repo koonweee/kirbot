@@ -60,13 +60,15 @@ export type TelegramHarness = {
   getLogs(): AppLogEntry[];
 };
 
+const HARNESS_SIMULATED_SENDER_USER_ID = 42;
+
 export async function createTelegramHarness(options: CreateTelegramHarnessOptions = {}): Promise<TelegramHarness> {
   const baseConfig = options.config ?? loadConfig();
   const stateDir = options.stateDir ?? mkdtempSync(join(tmpdir(), "kirbot-telegram-harness-"));
   const config = await buildHarnessConfig(baseConfig, stateDir, options);
   const logTarget = new BufferingLogTarget();
   const harnessLogger = createSourceLogger(logTarget, "harness");
-  const telegram = new RecordingTelegram(config.telegram.userId);
+  const telegram = new RecordingTelegram(config.telegram.workspaceChatId);
 
   let runtime: KirbotRuntime | null = null;
   let nextMessageId = 1;
@@ -106,7 +108,13 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
     },
     sendRootText: async (text: string) => {
       const activeRuntime = await ensureStarted();
-      const message = buildUserMessage(nextMessageId++, nextUpdateId++, config.telegram.userId, text);
+      const message = buildUserMessage(
+        nextMessageId++,
+        nextUpdateId++,
+        config.telegram.workspaceChatId,
+        HARNESS_SIMULATED_SENDER_USER_ID,
+        text
+      );
       telegram.recordUserTextMessage({
         chatId: message.chatId,
         topicId: null,
@@ -126,7 +134,8 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       const message = buildUserImageMessage(
         nextMessageId++,
         nextUpdateId++,
-        config.telegram.userId,
+        config.telegram.workspaceChatId,
+        HARNESS_SIMULATED_SENDER_USER_ID,
         input.caption ?? "",
         fileId,
         input,
@@ -150,7 +159,14 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
     },
     sendTopicText: async (topicId: number, text: string) => {
       const activeRuntime = await ensureStarted();
-      const message = buildUserMessage(nextMessageId++, nextUpdateId++, config.telegram.userId, text, topicId);
+      const message = buildUserMessage(
+        nextMessageId++,
+        nextUpdateId++,
+        config.telegram.workspaceChatId,
+        HARNESS_SIMULATED_SENDER_USER_ID,
+        text,
+        topicId
+      );
       telegram.recordUserTextMessage({
         chatId: message.chatId,
         topicId,
@@ -170,7 +186,8 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       const message = buildUserImageMessage(
         nextMessageId++,
         nextUpdateId++,
-        config.telegram.userId,
+        config.telegram.workspaceChatId,
+        HARNESS_SIMULATED_SENDER_USER_ID,
         input.caption ?? "",
         fileId,
         input,
@@ -207,7 +224,7 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
         data: callbackData,
         chatId: location.chatId,
         topicId: location.topicId,
-        userId: config.telegram.userId
+        userId: HARNESS_SIMULATED_SENDER_USER_ID
       });
     },
     waitForIdle: async (waitOptions: WaitForIdleOptions = {}) => {
@@ -309,12 +326,13 @@ function resolveHarnessWorkspaceDir(
 function buildUserMessage(
   messageId: number,
   updateId: number,
+  chatId: number,
   userId: number,
   text: string,
   topicId: number | null = null
 ): Omit<UserTurnMessage, "input" | "submittedInputSignature"> {
   return {
-    chatId: userId,
+    chatId,
     topicId,
     messageId,
     updateId,
@@ -326,6 +344,7 @@ function buildUserMessage(
 function buildUserImageMessage(
   messageId: number,
   updateId: number,
+  chatId: number,
   userId: number,
   text: string,
   fileId: string,
@@ -333,7 +352,7 @@ function buildUserImageMessage(
   topicId: number | null = null
 ): UserTurnMessage {
   return {
-    ...buildUserMessage(messageId, updateId, userId, text, topicId),
+    ...buildUserMessage(messageId, updateId, chatId, userId, text, topicId),
     input: buildImageInput(text, fileId, image)
   };
 }

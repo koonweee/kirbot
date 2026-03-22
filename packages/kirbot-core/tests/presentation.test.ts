@@ -9,9 +9,11 @@ import {
   buildRenderedFileChangeApprovalPrompt,
   buildRenderedCompletionFooter,
   buildRenderedCompletionNotification,
+  buildRenderedThreadStartFooter,
   buildTopicCommandKeyboard,
   buildResponseArtifactPublication,
   buildStatusDraft,
+  renderQueuePreview,
   renderTelegramStatusDraft,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
@@ -231,6 +233,52 @@ describe("status presentation", () => {
           type: "code",
           offset: 0,
           length: 6
+        }
+      ]
+    });
+  });
+
+  it("renders queued follow-ups with actor labels and user-id fallback", () => {
+    expect(
+      renderQueuePreview({
+        chatId: -1001,
+        topicId: 777,
+        pendingSteers: ["Re-run the last check"],
+        queuedFollowUps: [
+          { actorLabel: "Jeremy", text: "Inspect the deploy logs" },
+          { actorLabel: "User 42", text: "Post the failing test output" }
+        ]
+      })
+    ).toBe(
+      [
+        "Queued for current turn:",
+        "- Re-run the last check",
+        "",
+        "Queued for next turn:",
+        "- Jeremy: Inspect the deploy logs",
+        "- User 42: Post the failing test output"
+      ].join("\n")
+    );
+  });
+
+  it("renders a thread-start footer that explains General and /thread", () => {
+    expect(
+      buildRenderedThreadStartFooter({
+        mode: "default",
+        model: "gpt-5",
+        reasoningEffort: null,
+        serviceTier: null,
+        cwd: "/workspace",
+        branch: "main"
+      })
+    ).toEqual({
+      text: "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5",
+      entities: [
+        {
+          type: "pre",
+          offset: "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length,
+          length: "<1s • 100% left • /workspace • main • gpt-5".length,
+          language: "status"
         }
       ]
     });

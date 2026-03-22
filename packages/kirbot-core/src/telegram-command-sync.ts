@@ -30,38 +30,25 @@ export interface TelegramCommandApi {
   }): Promise<true>;
 }
 
-const COMMANDS_MENU_BUTTON: TelegramMenuButtonCommands = {
-  type: "commands"
-};
-
 export class TelegramCommandSync {
   constructor(
     private readonly telegram: TelegramCommandApi,
-    private readonly privateChatId: number,
+    private readonly workspaceChatId: number,
     private readonly logger: LoggerLike = console
   ) {}
 
   async initialize(): Promise<void> {
-    await this.runStartupStep("set visible commands for default scope", async () => {
-      await this.applyVisibleCommands({
-        type: "default"
+    await this.runStartupStep("clear commands for default scope", async () => {
+      await this.telegram.deleteMyCommands({
+        scope: {
+          type: "default"
+        }
       });
     });
-    await this.runStartupStep("set commands menu button for default scope", async () => {
-      await this.telegram.setChatMenuButton({
-        menu_button: COMMANDS_MENU_BUTTON
-      });
-    });
-    await this.runStartupStep(`set commands menu button for private chat ${this.privateChatId}`, async () => {
-      await this.telegram.setChatMenuButton({
-        chat_id: this.privateChatId,
-        menu_button: COMMANDS_MENU_BUTTON
-      });
-    });
-    await this.runStartupStep(`set visible commands for private chat ${this.privateChatId}`, async () => {
+    await this.runStartupStep(`set visible commands for workspace chat ${this.workspaceChatId}`, async () => {
       await this.applyVisibleCommands({
         type: "chat",
-        chat_id: this.privateChatId
+        chat_id: this.workspaceChatId
       });
     });
   }

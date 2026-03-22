@@ -531,6 +531,7 @@ describe("Telegram harness", () => {
     await harness.waitForIdle();
 
     const transcript = harness.getTranscript();
+    expect(transcript.root.chatId).toBe(-1001);
     expect(transcript.root.messages).toEqual([
       {
         actor: "user",
@@ -836,7 +837,7 @@ function createConfig(tempDir: string): AppConfig {
   return {
     telegram: {
       botToken: "token",
-      userId: 42,
+      workspaceChatId: -1001,
       mediaTempDir: join(tempDir, "media"),
       miniApp: {
         publicUrl: "https://example.com/mini-app"

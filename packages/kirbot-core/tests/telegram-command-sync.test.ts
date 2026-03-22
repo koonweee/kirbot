@@ -76,78 +76,25 @@ class FakeTelegramCommandApi implements TelegramCommandApi {
 }
 
 describe("TelegramCommandSync", () => {
-  it("configures the commands menu and a single visible command list at startup", async () => {
+  it("cleans up the default command scope and configures only General-safe commands for the workspace chat", async () => {
     const telegram = new FakeTelegramCommandApi();
     const sync = new TelegramCommandSync(telegram, 42);
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     await sync.initialize();
 
-    expect(telegram.deleteMyCommandsCalls).toEqual([]);
-    expect(telegram.setMyCommandsCalls).toEqual([
+    expect(telegram.deleteMyCommandsCalls).toEqual([
       {
-        commands: [
-          {
-            command: "stop",
-            description: "Stop the current response"
-          },
-          {
-            command: "plan",
-            description: "Switch this topic into plan mode"
-          },
-          {
-            command: "thread",
-            description: "Start a new topic thread"
-          },
-          {
-            command: "restart",
-            description: "Rebuild and restart kirbot"
-          },
-          {
-            command: "implement",
-            description: "Implement the plan in this topic"
-          },
-          {
-            command: "cmd",
-            description: "Manage custom thread commands"
-          },
-          {
-            command: "model",
-            description: "Choose the default or thread model"
-          },
-          {
-            command: "fast",
-            description: "Toggle default or thread fast mode"
-          },
-          {
-            command: "compact",
-            description: "Compact the current thread"
-          },
-          {
-            command: "clear",
-            description: "Start a fresh Codex thread"
-          },
-          {
-            command: "permissions",
-            description: "Set default or thread permissions"
-          },
-          {
-            command: "commands",
-            description: "Show the command keyboard"
-          }
-        ],
         options: {
           scope: {
             type: "default"
           }
         }
-      },
+      }
+    ]);
+    expect(telegram.setMyCommandsCalls).toEqual([
       {
         commands: [
-          {
-            command: "stop",
-            description: "Stop the current response"
-          },
           {
             command: "plan",
             description: "Switch this topic into plan mode"
@@ -159,10 +106,6 @@ describe("TelegramCommandSync", () => {
           {
             command: "restart",
             description: "Rebuild and restart kirbot"
-          },
-          {
-            command: "implement",
-            description: "Implement the plan in this topic"
           },
           {
             command: "cmd",
@@ -201,32 +144,12 @@ describe("TelegramCommandSync", () => {
         }
       }
     ]);
-    expect(telegram.setChatMenuButtonCalls).toEqual([
-      {
-        options: {
-          menu_button: {
-            type: "commands"
-          }
-        }
-      },
-      {
-        options: {
-          chat_id: 42,
-          menu_button: {
-            type: "commands"
-          }
-        }
-      }
-    ]);
+    expect(telegram.setChatMenuButtonCalls).toEqual([]);
     expect(infoSpy.mock.calls).toEqual([
-      ["Telegram command sync: starting set visible commands for default scope."],
-      ["Telegram command sync: completed set visible commands for default scope."],
-      ["Telegram command sync: starting set commands menu button for default scope."],
-      ["Telegram command sync: completed set commands menu button for default scope."],
-      ["Telegram command sync: starting set commands menu button for private chat 42."],
-      ["Telegram command sync: completed set commands menu button for private chat 42."],
-      ["Telegram command sync: starting set visible commands for private chat 42."],
-      ["Telegram command sync: completed set visible commands for private chat 42."]
+      ["Telegram command sync: starting clear commands for default scope."],
+      ["Telegram command sync: completed clear commands for default scope."],
+      ["Telegram command sync: starting set visible commands for workspace chat 42."],
+      ["Telegram command sync: completed set visible commands for workspace chat 42."]
     ]);
   });
 
