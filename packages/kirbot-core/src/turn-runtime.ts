@@ -190,7 +190,9 @@ export class BridgeTurnRuntime {
       return this.getQueueState(chatId, topicId);
     }
 
-    const drained = topicState.pendingSteers.splice(0, topicState.pendingSteers.length).map((pending) => pending.message);
+    const drained = topicState.pendingSteers.splice(0, topicState.pendingSteers.length).map((pending) =>
+      cloneUserTurnMessage(pending.message)
+    );
     topicState.queuedFollowUps = [...drained, ...topicState.queuedFollowUps];
     return this.getQueueState(chatId, topicId);
   }
