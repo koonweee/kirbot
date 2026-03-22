@@ -7,7 +7,6 @@ import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifa
 import {
   buildArtifactReplyMarkup,
   buildCommentaryArtifactButton,
-  buildResponseArtifactPublication,
   buildResponseArtifactButton,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
@@ -17,23 +16,10 @@ import {
   type TelegramCreateForumTopicOptions
 } from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
+import { TurnFinalizer } from "../src/bridge/turn-finalization";
 
 function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
-}
-
-function buildOversizedResponseMarkdown(): string {
-  for (let count = 220; count <= 1_400; count += 120) {
-    const markdownText = Array.from({ length: count }, (_, index) =>
-      `Paragraph ${index + 1}\n\n${Array.from({ length: 12 }, (__unused, wordIndex) => `token-${index}-${wordIndex}`).join(" ")}`
-    ).join("\n\n");
-    const publication = buildResponseArtifactPublication("https://example.com/mini-app", markdownText);
-    if (publication.attachedButton === null && publication.standaloneMessages.length > 1) {
-      return markdownText;
-    }
-  }
-
-  throw new Error("Failed to build oversized response fixture");
 }
 
 function message(text: string, updateId = 1, telegramUsername?: string): UserTurnMessage {
@@ -743,24 +729,89 @@ describe("TurnLifecycleCoordinator", () => {
   });
 
   it("mentions the first standalone response publication when the final assistant reply cannot be published", async () => {
-    const harness = createHarness(buildOversizedResponseMarkdown());
-    const context = harness.coordinator.activateTurn(
-      message("Start", 1, "starter-user"),
-      "thread-1",
-      "turn-1",
-      "gpt-5-codex"
-    );
-    const originalSurface = context.visibleMessageHandle;
-    context.visibleMessageHandle = {
-      ...originalSurface,
-      publishFinalAssistantMessage: async () => null
-    };
+    const commentarySpy = vi.spyOn(TurnFinalizer.prototype as any, "buildCommentaryPublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [
+        { text: "Commentary is available", replyMarkup: buildArtifactReplyMarkup([buildCommentaryArtifactButton("https://example.com/mini-app", [{ kind: "commentary", text: "Inspecting files" }])]) },
+        { text: "Commentary is available (2/2)", replyMarkup: buildArtifactReplyMarkup([buildCommentaryArtifactButton("https://example.com/mini-app", [{ kind: "commentary", text: "Inspecting files 2" }])]) }
+      ],
+      oversizeNoticeText: null
+    });
+    const responseSpy = vi.spyOn(TurnFinalizer.prototype as any, "buildResponsePublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [
+        { text: "Response is available", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer")]) },
+        { text: "Response is available (2/2)", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer 2")]) }
+      ],
+      oversizeNoticeText: null
+    });
+    try {
+      const harness = createHarness("Final answer");
+      const context = harness.coordinator.activateTurn(
+        message("Start", 1, "starter-user"),
+        "thread-1",
+        "turn-1",
+        "gpt-5-codex"
+      );
+      const originalSurface = context.visibleMessageHandle;
+      context.visibleMessageHandle = {
+        ...originalSurface,
+        publishFinalAssistantMessage: async () => null
+      };
 
-    await harness.coordinator.completeTurn("thread-1", "turn-1");
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    const responseMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Response"));
-    expect(responseMessages[0]?.text.startsWith("@starter-user Response")).toBe(true);
-    expect(responseMessages.slice(1).every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+      const commentaryMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Commentary"));
+      const responseMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Response"));
+      expect(commentaryMessages[0]?.text.startsWith("@starter-user Commentary")).toBe(true);
+      expect(commentaryMessages.slice(1).every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+      expect(responseMessages.every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+    } finally {
+      commentarySpy.mockRestore();
+      responseSpy.mockRestore();
+    }
+  });
+
+  it("does not let a commentary oversize notice outrank standalone response publication", async () => {
+    const commentarySpy = vi.spyOn(TurnFinalizer.prototype as any, "buildCommentaryPublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [],
+      oversizeNoticeText: "Commentary artifact was too large to encode"
+    });
+    const responseSpy = vi.spyOn(TurnFinalizer.prototype as any, "buildResponsePublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [
+        { text: "Response is available", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer")]) },
+        { text: "Response is available (2/2)", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer 2")]) }
+      ],
+      oversizeNoticeText: null
+    });
+    try {
+      const harness = createHarness("Final answer");
+      const context = harness.coordinator.activateTurn(
+        message("Start", 1, "starter-user"),
+        "thread-1",
+        "turn-1",
+        "gpt-5-codex"
+      );
+      const originalSurface = context.visibleMessageHandle;
+      context.visibleMessageHandle = {
+        ...originalSurface,
+        publishFinalAssistantMessage: async () => null
+      };
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+      expect(
+        harness.telegram.sentMessages.find((entry) => entry.text === "Commentary artifact was too large to encode")
+      ).toBeTruthy();
+      const responseMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Response"));
+      expect(responseMessages[0]?.text.startsWith("@starter-user Response")).toBe(true);
+      expect(responseMessages.slice(1).every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+    } finally {
+      commentarySpy.mockRestore();
+      responseSpy.mockRestore();
+    }
   });
 
   it("mentions the first standalone plan publication when no higher-precedence completion message exists", async () => {

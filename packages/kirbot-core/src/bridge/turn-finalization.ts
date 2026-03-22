@@ -101,10 +101,14 @@ export class TurnFinalizer {
       responsePublication,
       hasPlanPublication: snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
     });
+    const deferStandaloneCommentary =
+      notificationTarget === "finalAssistant" && commentaryPublication.standaloneMessages.length > 0;
 
-    await this.publishStandaloneCommentary(context, commentaryPublication, {
-      mentionPrimaryMessage: notificationTarget === "commentary"
-    });
+    if (!deferStandaloneCommentary) {
+      await this.publishStandaloneCommentary(context, commentaryPublication, {
+        mentionPrimaryMessage: notificationTarget === "commentary"
+      });
+    }
 
     let finalAssistantMessageId: number | null = null;
     if (!publishesPlanOnly && publishedFinalAssistantMessage) {
@@ -123,6 +127,12 @@ export class TurnFinalizer {
           hasPlanPublication: snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
         })
       : notificationTarget;
+
+    if (deferStandaloneCommentary) {
+      await this.publishStandaloneCommentary(context, commentaryPublication, {
+        mentionPrimaryMessage: fallbackNotificationTarget === "commentary"
+      });
+    }
 
     if (finalAssistantMessageId === null && publishedFinalAssistantMessage) {
       await this.publishStandaloneResponse(context, responsePublication, {
@@ -389,19 +399,24 @@ export class TurnFinalizer {
       return "finalAssistant";
     }
 
-    if (input.commentaryPublication.standaloneMessages.length > 0 || input.commentaryPublication.oversizeNoticeText) {
+    if (input.commentaryPublication.standaloneMessages.length > 0) {
       return "commentary";
     }
 
-    if (
-      input.responsePublication &&
-      (input.responsePublication.standaloneMessages.length > 0 || input.responsePublication.oversizeNoticeText)
-    ) {
+    if (input.responsePublication && input.responsePublication.standaloneMessages.length > 0) {
       return "response";
     }
 
     if (input.hasPlanPublication) {
       return "plan";
+    }
+
+    if (input.commentaryPublication.oversizeNoticeText) {
+      return "commentary";
+    }
+
+    if (input.responsePublication?.oversizeNoticeText) {
+      return "response";
     }
 
     return null;
