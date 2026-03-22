@@ -976,14 +976,29 @@ describe("TelegramCodexBridge", () => {
 
   it.each([
     {
-      title: "root",
-      topicId: null
+      title: "general",
+      topicId: null,
+      expectedRows: [
+        ["/plan", "/thread"],
+        ["/restart", "/cmd"],
+        ["/model", "/fast"],
+        ["/compact", "/clear"],
+        ["/permissions", "/commands"],
+        ["/standup"]
+      ]
     },
     {
       title: "topic",
-      topicId: 777
+      topicId: 777,
+      expectedRows: [
+        ["/stop", "/plan"],
+        ["/implement", "/model"],
+        ["/fast", "/compact"],
+        ["/clear", "/permissions"],
+        ["/commands", "/standup"]
+      ]
     }
-  ])("shows the command keyboard when /commands is requested in $title scope", async ({ topicId }) => {
+  ])("shows the command keyboard when /commands is requested in $title scope", async ({ topicId, expectedRows }) => {
     await database.createCustomCommand({
       command: "standup",
       prompt: "Draft the status update."
@@ -1003,15 +1018,7 @@ describe("TelegramCodexBridge", () => {
       ...(topicId !== null ? { options: { message_thread_id: topicId } } : {}),
       text: "Commands"
     });
-    expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual([
-      ["/stop", "/plan"],
-      ["/thread", "/restart"],
-      ["/implement", "/cmd"],
-      ["/model", "/fast"],
-      ["/compact", "/clear"],
-      ["/permissions", "/commands"],
-      ["/standup"]
-    ]);
+    expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual(expectedRows);
   });
 
   it.each([
@@ -1352,7 +1359,7 @@ describe("TelegramCodexBridge", () => {
     await expect(Promise.all([firstMessagePromise, secondMessagePromise])).resolves.toEqual([undefined, undefined]);
 
     expect(codex.createdThreads).toEqual(["Root Chat"]);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("The root Codex session is still provisioning. Try again in a moment");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("The General Codex session is still provisioning. Try again in a moment");
 
     const session = await database.getRootSessionByChat(-1001);
     expect(session?.status).toBe("active");
@@ -2211,7 +2218,7 @@ describe("TelegramCodexBridge", () => {
 
     const scopePicker = telegram.sentMessages.at(-1);
     expect(scopePicker?.text).toBe("Apply fast mode to:");
-    expect(getInlineButtonTexts(scopePicker)).toEqual(["Root Thread", "New /thread Topics"]);
+    expect(getInlineButtonTexts(scopePicker)).toEqual(["General Thread", "New /thread Topics"]);
 
     const spawnCallback = getCallbackDataByButtonText(scopePicker, "New /thread Topics");
     expect(spawnCallback).toBe("slash:fast:apply:spawn:on");
@@ -2421,7 +2428,7 @@ describe("TelegramCodexBridge", () => {
 
     const scopePicker = telegram.sentMessages.at(-1);
     expect(scopePicker?.text).toBe("Choose which settings to update");
-    expect(getInlineButtonTexts(scopePicker)).toEqual(["Root Thread", "New /thread Topics"]);
+    expect(getInlineButtonTexts(scopePicker)).toEqual(["General Thread", "New /thread Topics"]);
 
     await bridge.handleCallbackQuery({
       callbackQueryId: "scope-root-model",
@@ -2432,6 +2439,13 @@ describe("TelegramCodexBridge", () => {
     });
 
     const modelPicker = telegram.sentMessages.at(-1);
+    expect(modelPicker?.text).toBe(
+      [
+        "Choose the model for the General thread",
+        "Current: gpt-5-codex",
+        "Then choose a reasoning effort"
+      ].join("\n")
+    );
     const pickCallback = getCallbackDataByButtonText(modelPicker, "gpt-5.3-codex");
     expect(pickCallback).toBe("slash:model:pick:root:1");
 
@@ -2457,7 +2471,7 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.globalSettingsUpdates).toHaveLength(0);
     expect(codex.threadSettingsUpdates).toHaveLength(0);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("Root thread model set to gpt-5.3-codex high");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("General thread model set to gpt-5.3-codex high");
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -2477,6 +2491,33 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("uses General-facing copy when opening root permissions selection", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 31,
+      userId: 42,
+      text: "/permissions"
+    });
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "scope-root-permissions",
+      data: "slash:scope:permissions:root",
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      [
+        "Choose Codex permissions for the General thread",
+        "Current: Default",
+        "Your selection will apply to the General thread"
+      ].join("\n")
+    );
+  });
+
   it("treats /approvals as an alias for /permissions and applies the selected preset to spawn defaults", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -2489,7 +2530,7 @@ describe("TelegramCodexBridge", () => {
 
     const scopePicker = telegram.sentMessages.at(-1);
     expect(scopePicker?.text).toBe("Choose which settings to update");
-    expect(getInlineButtonTexts(scopePicker)).toEqual(["Root Thread", "New /thread Topics"]);
+    expect(getInlineButtonTexts(scopePicker)).toEqual(["General Thread", "New /thread Topics"]);
 
     await bridge.handleCallbackQuery({
       callbackQueryId: "scope-spawn-permissions",

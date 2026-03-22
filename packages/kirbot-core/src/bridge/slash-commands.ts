@@ -25,7 +25,7 @@ type SlashCommandDefinition = {
   description: string;
   kind: SlashCommandKind;
   visible: boolean;
-  allowInRoot: boolean;
+  allowInGeneral: boolean;
   allowInTopic: boolean;
 };
 
@@ -35,7 +35,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Stop the current response",
     kind: "kirbot",
     visible: true,
-    allowInRoot: false,
+    allowInGeneral: false,
     allowInTopic: true
   },
   {
@@ -43,7 +43,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Switch this topic into plan mode",
     kind: "kirbot",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -51,7 +51,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Start a new topic thread",
     kind: "kirbot",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: false
   },
   {
@@ -59,7 +59,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Rebuild and restart kirbot",
     kind: "kirbot",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: false
   },
   {
@@ -67,7 +67,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Implement the plan in this topic",
     kind: "kirbot",
     visible: true,
-    allowInRoot: false,
+    allowInGeneral: false,
     allowInTopic: true
   },
   {
@@ -75,7 +75,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Manage custom thread commands",
     kind: "kirbot",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: false
   },
   {
@@ -83,7 +83,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Choose the default or thread model",
     kind: "codex",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -91,7 +91,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Toggle default or thread fast mode",
     kind: "codex",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -99,7 +99,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Compact the current thread",
     kind: "codex",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -107,7 +107,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Start a fresh Codex thread",
     kind: "codex",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -115,7 +115,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Set default or thread permissions",
     kind: "codex",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -123,7 +123,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Show the command keyboard",
     kind: "kirbot",
     visible: true,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   },
   {
@@ -131,7 +131,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: "Alias for /permissions",
     kind: "codex",
     visible: false,
-    allowInRoot: true,
+    allowInGeneral: true,
     allowInTopic: true
   }
 ] satisfies readonly SlashCommandDefinition[];
@@ -141,15 +141,22 @@ const SLASH_COMMAND_BY_NAME = new Map(
 );
 
 const GENERAL_COMMAND_SET: ReadonlySet<string> = new Set(
-  SLASH_COMMAND_DEFINITIONS.filter((definition) => definition.allowInRoot).map((definition) => definition.command)
+  SLASH_COMMAND_DEFINITIONS.filter((definition) => definition.allowInGeneral).map((definition) => definition.command)
 );
 const TOPIC_COMMAND_SET: ReadonlySet<string> = new Set(
   SLASH_COMMAND_DEFINITIONS.filter((definition) => definition.allowInTopic).map((definition) => definition.command)
 );
 
-export function getVisibleSlashCommands(): readonly TelegramBotCommand[] {
+export function getVisibleSlashCommands(scope?: SlashCommandScope): readonly TelegramBotCommand[] {
   return SLASH_COMMAND_DEFINITIONS
     .filter((definition) => definition.visible)
+    .filter((definition) => {
+      if (!scope) {
+        return true;
+      }
+
+      return scope === "general" ? definition.allowInGeneral : definition.allowInTopic;
+    })
     .map((definition) => ({
       command: definition.command,
       description: definition.description
@@ -157,12 +164,7 @@ export function getVisibleSlashCommands(): readonly TelegramBotCommand[] {
 }
 
 export function getSurfaceableTopicSlashCommands(): readonly TelegramBotCommand[] {
-  return SLASH_COMMAND_DEFINITIONS
-    .filter((definition) => definition.visible && definition.allowInTopic)
-    .map((definition) => ({
-      command: definition.command,
-      description: definition.description
-    }));
+  return getVisibleSlashCommands("topic");
 }
 
 export function isAllowedSlashCommandInScope(command: string, scope: SlashCommandScope): boolean {

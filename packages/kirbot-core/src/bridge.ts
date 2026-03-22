@@ -68,7 +68,8 @@ import {
   isCodexSlashCommand,
   parseSlashCommand,
   parseSlashCommandToken,
-  type ParsedSlashCommand
+  type ParsedSlashCommand,
+  type SlashCommandScope
 } from "./bridge/slash-commands";
 import {
   buildTopicCommandKeyboard,
@@ -181,7 +182,7 @@ const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
-const ROOT_SESSION_PROVISIONING_TEXT = "The root Codex session is still provisioning. Try again in a moment";
+const ROOT_SESSION_PROVISIONING_TEXT = "The General Codex session is still provisioning. Try again in a moment";
 const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum chat.";
 
 export class TelegramCodexBridge {
@@ -1216,7 +1217,7 @@ export class TelegramCodexBridge {
       replyMarkup: {
         inline_keyboard: [[
           {
-            text: "Root Thread",
+            text: "General Thread",
             callback_data: `slash:fast:apply:root:${fastAction}`
           }
         ], [
@@ -1236,7 +1237,7 @@ export class TelegramCodexBridge {
       replyMarkup: {
         inline_keyboard: [[
           {
-            text: "Root Thread",
+            text: "General Thread",
             callback_data: `slash:scope:${area}:root`
           }
         ], [
@@ -2484,15 +2485,15 @@ export class TelegramCodexBridge {
     });
   }
 
-  private async buildTopicCommandReplyMarkup(): Promise<ReplyKeyboardMarkup | undefined> {
+  private async buildTopicCommandReplyMarkup(scope: SlashCommandScope): Promise<ReplyKeyboardMarkup | undefined> {
     return buildTopicCommandKeyboard(
-      getVisibleSlashCommands(),
+      getVisibleSlashCommands(scope),
       await this.database.listCustomCommands()
     );
   }
 
   private async showCommandKeyboard(message: UserTurnMessage): Promise<void> {
-    const replyMarkup = await this.buildTopicCommandReplyMarkup();
+    const replyMarkup = await this.buildTopicCommandReplyMarkup(message.topicId === null ? "general" : "topic");
     await this.sendScopedBridgeMessage({
       chatId: message.chatId,
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
@@ -2878,13 +2879,13 @@ function isFastSelectionAction(value: string | undefined): value is FastSelectio
 
 function buildScopedFastStatusMessage(scope: Exclude<SettingsSelectionScope, "thread">, serviceTier: ServiceTier | null): string {
   return scope === "root"
-    ? `Root thread fast mode is ${serviceTier === "fast" ? "on" : "off"}`
+    ? `General thread fast mode is ${serviceTier === "fast" ? "on" : "off"}`
     : `New thread default fast mode is ${serviceTier === "fast" ? "on" : "off"}`;
 }
 
 function buildScopedFastUpdatedMessage(scope: Exclude<SettingsSelectionScope, "thread">, serviceTier: ServiceTier | null): string {
   return scope === "root"
-    ? `Root thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`
+    ? `General thread fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`
     : `New thread default fast mode ${serviceTier === "fast" ? "enabled" : "disabled"}`;
 }
 
@@ -2893,7 +2894,7 @@ function describeModelSelectionTitle(scope: SettingsSelectionScope): string {
     case "thread":
       return "Choose the model for this thread";
     case "root":
-      return "Choose the model for the root thread";
+      return "Choose the model for the General thread";
     case "spawn":
       return "Choose the default model for new /thread topics";
   }
@@ -2917,7 +2918,7 @@ function describePermissionsSelectionTitle(scope: SettingsSelectionScope): strin
     case "thread":
       return "Choose Codex permissions for this thread";
     case "root":
-      return "Choose Codex permissions for the root thread";
+      return "Choose Codex permissions for the General thread";
     case "spawn":
       return "Choose default Codex permissions for new /thread topics";
   }
@@ -2928,7 +2929,7 @@ function describePermissionsSelectionScope(scope: SettingsSelectionScope): strin
     case "thread":
       return "Your selection will apply only to this topic";
     case "root":
-      return "Your selection will apply to the root thread";
+      return "Your selection will apply to the General thread";
     case "spawn":
       return "Your selection will apply to future /thread topics";
   }
@@ -2939,7 +2940,7 @@ function buildModelUpdatedMessage(scope: SettingsSelectionScope, model: string, 
     case "thread":
       return `Thread model set to ${model} ${reasoningEffort}`;
     case "root":
-      return `Root thread model set to ${model} ${reasoningEffort}`;
+      return `General thread model set to ${model} ${reasoningEffort}`;
     case "spawn":
       return `New thread default model set to ${model} ${reasoningEffort}`;
   }
@@ -2950,7 +2951,7 @@ function buildPermissionsUpdatedMessage(scope: SettingsSelectionScope, label: st
     case "thread":
       return `Thread permissions set to ${label}`;
     case "root":
-      return `Root thread permissions set to ${label}`;
+      return `General thread permissions set to ${label}`;
     case "spawn":
       return `New thread default permissions set to ${label}`;
   }
