@@ -69,7 +69,7 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       pendingSteers: [],
-      queuedFollowUps: ["Follow up"]
+      queuedFollowUps: [{ actorLabel: "User 42", text: "Follow up" }]
     });
     expect(runtime.peekNextQueuedFollowUp(-1001, 777)?.text).toBe("Follow up");
   });
@@ -114,7 +114,11 @@ describe("BridgeTurnRuntime", () => {
       chatId: -1001,
       topicId: 777,
       pendingSteers: [],
-      queuedFollowUps: ["First steer", "Second steer", "Queued later"]
+      queuedFollowUps: [
+        { actorLabel: "User 42", text: "First steer" },
+        { actorLabel: "User 42", text: "Second steer" },
+        { actorLabel: "User 42", text: "Queued later" }
+      ]
     });
   });
 
