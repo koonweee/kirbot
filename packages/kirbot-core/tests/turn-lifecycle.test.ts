@@ -7,6 +7,7 @@ import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifa
 import {
   buildArtifactReplyMarkup,
   buildCommentaryArtifactButton,
+  buildResponseArtifactPublication,
   buildResponseArtifactButton,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
@@ -19,6 +20,20 @@ import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime"
 
 function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
+}
+
+function buildOversizedResponseMarkdown(): string {
+  for (let count = 220; count <= 1_400; count += 120) {
+    const markdownText = Array.from({ length: count }, (_, index) =>
+      `Paragraph ${index + 1}\n\n${Array.from({ length: 12 }, (__unused, wordIndex) => `token-${index}-${wordIndex}`).join(" ")}`
+    ).join("\n\n");
+    const publication = buildResponseArtifactPublication("https://example.com/mini-app", markdownText);
+    if (publication.attachedButton === null && publication.standaloneMessages.length > 1) {
+      return markdownText;
+    }
+  }
+
+  throw new Error("Failed to build oversized response fixture");
 }
 
 function message(text: string, updateId = 1, telegramUsername?: string): UserTurnMessage {
@@ -641,6 +656,137 @@ describe("TurnLifecycleCoordinator", () => {
       title: "Commentary",
       markdownText: "Inspecting the rollout plan"
     });
+  });
+
+  it("mentions the turn starter on the final assistant reply even when commentary would otherwise publish earlier", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "Final answer",
+        assistantText: "Final answer",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting the rollout plan",
+      phase: "commentary"
+    });
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(telegram.sentMessages.find((entry) => entry.text === "@starter-user Final answer")).toBeTruthy();
+    expect(telegram.sentMessages.some((entry) => entry.text.startsWith("@starter-user Commentary"))).toBe(false);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("<1s • 100% left • /workspace • main • gpt-5-codex");
+  });
+
+  it("mentions the first standalone commentary publication when no final assistant reply exists", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "",
+        assistantText: "",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting the rollout plan",
+      phase: "commentary"
+    });
+    await coordinator.finalizeInterruptedTurnById("thread-1", "turn-1");
+
+    const commentaryStub = telegram.sentMessages.find((entry) => entry.text.startsWith("@starter-user Commentary"));
+    expect(commentaryStub?.text).toBe("@starter-user Commentary is available");
+    expect(commentaryStub?.options?.disable_notification).toBeUndefined();
+  });
+
+  it("mentions the first standalone response publication when the final assistant reply cannot be published", async () => {
+    const harness = createHarness(buildOversizedResponseMarkdown());
+    const context = harness.coordinator.activateTurn(
+      message("Start", 1, "starter-user"),
+      "thread-1",
+      "turn-1",
+      "gpt-5-codex"
+    );
+    const originalSurface = context.visibleMessageHandle;
+    context.visibleMessageHandle = {
+      ...originalSurface,
+      publishFinalAssistantMessage: async () => null
+    };
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    const responseMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Response"));
+    expect(responseMessages[0]?.text.startsWith("@starter-user Response")).toBe(true);
+    expect(responseMessages.slice(1).every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+  });
+
+  it("mentions the first standalone plan publication when no higher-precedence completion message exists", async () => {
+    const harness = createHarness({
+      text: "1. Draft the rollout",
+      assistantText: "",
+      planText: "1. Draft the rollout"
+    });
+
+    harness.coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    const planStub = harness.telegram.sentMessages.find((entry) => entry.text.startsWith("@starter-user Plan"));
+    expect(planStub?.text).toBe("@starter-user Plan is ready");
+    expect(planStub?.options?.disable_notification).toBeUndefined();
+  });
+
+  it("leaves silent status bubble text unchanged and keeps messages unprefixed when no telegram username exists", async () => {
+    const harness = createHarness("Final answer");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.publishCurrentStatus("turn-1", true);
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.drafts[0]?.text).toBe("thinking · 0s");
+    expect(harness.telegram.sentMessages[1]?.text).toBe("Final answer");
+    expect(harness.telegram.sentMessages.some((entry) => entry.text.startsWith("@"))).toBe(false);
   });
 
   it("publishes a standalone commentary stub before plan output when no assistant answer follows", async () => {

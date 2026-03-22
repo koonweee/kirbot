@@ -4291,6 +4291,112 @@ describe("TelegramCodexBridge", () => {
     ).toBe(true);
   });
 
+  it("mentions only the final assistant reply when commentary is published during the same completed turn", async () => {
+    const miniAppCodex = new FakeCodex();
+    miniAppCodex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
+    const miniAppTelegram = new FakeTelegram();
+    const miniAppBridge = new TelegramCodexBridge(config, database, miniAppTelegram, miniAppCodex, mediaStore);
+
+    await miniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 90,
+      updateId: 190,
+      userId: 42,
+      telegramUsername: "starter-user",
+      text: "Explain the fix"
+    });
+
+    miniAppCodex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: "Inspecting files",
+          phase: "commentary"
+        }
+      }
+    });
+    miniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(miniAppTelegram.sentMessages.find((message) => message.text === "@starter-user Final answer")).toBeTruthy();
+    expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("@starter-user Commentary"))).toBe(false);
+  });
+
+  it("mentions the oversize plan fallback when no higher-precedence completion message exists", async () => {
+    const oversizeMiniAppConfig: AppConfig = {
+      ...config,
+      telegram: {
+        ...config.telegram,
+        miniApp: {
+          publicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`
+        }
+      }
+    };
+    const oversizeMiniAppCodex = new FakeCodex();
+    oversizeMiniAppCodex.readTurnSnapshotResult = {
+      text: "1. Draft the rollout",
+      assistantText: "",
+      planText: "1. Draft the rollout"
+    };
+    const oversizeMiniAppTelegram = new FakeTelegram();
+    const oversizeMiniAppBridge = new TelegramCodexBridge(
+      oversizeMiniAppConfig,
+      database,
+      oversizeMiniAppTelegram,
+      oversizeMiniAppCodex,
+      mediaStore
+    );
+
+    await oversizeMiniAppBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 787,
+      messageId: 91,
+      updateId: 191,
+      userId: 42,
+      telegramUsername: "starter-user",
+      text: "Plan the rollout"
+    });
+
+    oversizeMiniAppCodex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    expect(
+      oversizeMiniAppTelegram.sentMessages.find(
+        (message) => message.text === "@starter-user Plan artifact was too large to encode"
+      )
+    ).toBeTruthy();
+  });
+
   it("sends the final persisted message as a separate assistant bubble and deletes the status bubble", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -5532,6 +5638,7 @@ describe("TelegramCodexBridge", () => {
       updateId: 55,
       userId: 42,
       actorLabel: "Jeremy",
+      telegramUsername: "starter-user",
       text: "Inspect the current failure"
     });
 
@@ -5584,6 +5691,7 @@ describe("TelegramCodexBridge", () => {
       }
     ]);
     expect(telegram.edits.at(-1)?.text).toBe("Queued for next turn:\n- Jeremy: Pending steer\n- User 42: Queued follow-up");
+    expect(telegram.edits.at(-1)?.text.startsWith("@")).toBe(false);
   });
 
   it("keeps a queued follow-up's telegram username when promoting it into a new turn", async () => {
