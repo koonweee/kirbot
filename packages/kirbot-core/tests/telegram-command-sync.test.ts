@@ -76,7 +76,7 @@ class FakeTelegramCommandApi implements TelegramCommandApi {
 }
 
 describe("TelegramCommandSync", () => {
-  it("cleans up the default command scope and configures visible commands for the workspace chat", async () => {
+  it("cleans up the default command scope and configures only General-safe commands for the workspace chat", async () => {
     const telegram = new FakeTelegramCommandApi();
     const sync = new TelegramCommandSync(telegram, 42);
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
@@ -96,10 +96,6 @@ describe("TelegramCommandSync", () => {
       {
         commands: [
           {
-            command: "stop",
-            description: "Stop the current response"
-          },
-          {
             command: "plan",
             description: "Switch this topic into plan mode"
           },
@@ -110,10 +106,6 @@ describe("TelegramCommandSync", () => {
           {
             command: "restart",
             description: "Rebuild and restart kirbot"
-          },
-          {
-            command: "implement",
-            description: "Implement the plan in this topic"
           },
           {
             command: "cmd",
