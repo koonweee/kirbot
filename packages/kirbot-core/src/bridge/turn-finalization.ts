@@ -24,7 +24,7 @@ import {
   transitionTurnPhase
 } from "./turn-context";
 import { formatError } from "./error-handling";
-import { prefixTelegramUsernameMention } from "./telegram-mention-prefix";
+import { prefixTelegramUsernameMention, type MentionableMessage } from "./telegram-mention-prefix";
 
 export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
@@ -330,10 +330,10 @@ export class TurnFinalizer {
     options?: { notifyFirstMessage?: boolean; mentionPrimaryMessage?: boolean }
   ): Promise<void> {
     for (const [index, message] of messages.entries()) {
-      const renderedMessage =
+      const renderedMessage: MentionableMessage =
         options?.mentionPrimaryMessage && index === 0
-          ? prefixTelegramUsernameMention(message, context.telegramUsername)
-          : message;
+          ? prefixTelegramUsernameMention({ text: message.text }, context.telegramUsername)
+          : { text: message.text };
       await this.deps.messenger.sendMessage({
         chatId: context.chatId,
         topicId: context.topicId,
@@ -352,7 +352,7 @@ export class TurnFinalizer {
   ): Promise<void> {
     await this.publishStandaloneAgentMessages(context, publication.standaloneMessages, {
       notifyFirstMessage: true,
-      mentionPrimaryMessage: options?.mentionPrimaryMessage
+      ...(options?.mentionPrimaryMessage !== undefined ? { mentionPrimaryMessage: options.mentionPrimaryMessage } : {})
     });
 
     if (publication.oversizeNoticeText) {
@@ -376,7 +376,7 @@ export class TurnFinalizer {
 
     await this.publishStandaloneAgentMessages(context, publication.standaloneMessages, {
       notifyFirstMessage: true,
-      mentionPrimaryMessage: options?.mentionPrimaryMessage
+      ...(options?.mentionPrimaryMessage !== undefined ? { mentionPrimaryMessage: options.mentionPrimaryMessage } : {})
     });
 
     if (publication.oversizeNoticeText) {

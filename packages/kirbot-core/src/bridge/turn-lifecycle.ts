@@ -23,7 +23,7 @@ import {
   type TurnLifecycleDependencies,
   TurnFinalizer
 } from "./turn-finalization";
-import { prefixTelegramUsernameMention } from "./telegram-mention-prefix";
+import { prefixTelegramUsernameMention, type MentionableMessage } from "./telegram-mention-prefix";
 
 export type { TurnContext } from "./turn-context";
 
@@ -71,7 +71,7 @@ export class TurnLifecycleCoordinator {
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       changedFilePaths: new Set(),
-      telegramUsername: message.telegramUsername,
+      ...(message.telegramUsername !== undefined ? { telegramUsername: message.telegramUsername } : {}),
       mode,
       model,
       reasoningEffort,
@@ -475,10 +475,10 @@ export class TurnLifecycleCoordinator {
       let lastMessageId: number | null = null;
 
       for (const [index, publication] of publications.entries()) {
-        const renderedMessage =
+        const renderedMessage: MentionableMessage =
           options?.mentionTurnStarter && index === 0
             ? prefixTelegramUsernameMention({ text: publication.text }, context.telegramUsername)
-            : publication;
+            : { text: publication.text };
         lastMessageId = (
           await this.deps.messenger.sendMessage({
             chatId: context.chatId,
@@ -498,7 +498,7 @@ export class TurnLifecycleCoordinator {
       return lastMessageId;
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
-        const renderedMessage = options?.mentionTurnStarter
+        const renderedMessage: MentionableMessage = options?.mentionTurnStarter
           ? prefixTelegramUsernameMention(buildOversizePlanArtifactMessage(), context.telegramUsername)
           : buildOversizePlanArtifactMessage();
         return this.deps.messenger.sendMessage({
