@@ -144,6 +144,20 @@ apply the mention only there.
 - These are request-scoped notification messages and should stay within the same
   username-only rule.
 
+### Request Username Source Of Truth
+
+- Request-scoped prompt messages should resolve the username from the active
+  `TurnContext` using the request's `turnId` at the time the initial prompt is
+  created.
+- The initial prompt `sendMessage` is the only request-path message that should
+  receive the mention. Later `editMessageText` updates for the same pending
+  request should not add or preserve a mention prefix.
+- If `request-coordinator.ts` cannot resolve an active turn context or the turn
+  starter has no username, it should send the existing prompt text unchanged.
+- This design does not require persisting `telegramUsername` into
+  `PendingServerRequest` storage unless implementation constraints later show
+  that request creation can outlive access to active turn state.
+
 ## Primary Notifying Message Rule
 
 The implementation should make the "primary notifying message" explicit rather
