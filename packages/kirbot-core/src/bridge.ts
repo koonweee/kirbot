@@ -182,6 +182,7 @@ const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
 const ROOT_SESSION_PROVISIONING_TEXT = "The root Codex session is still provisioning. Try again in a moment";
+const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum chat.";
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -251,12 +252,13 @@ export class TelegramCodexBridge {
   }
 
   async handleUserMessage(message: UserTurnMessage): Promise<void> {
-    if (message.userId !== this.config.telegram.userId) {
+    const inserted = await this.database.markUpdateProcessed(message.updateId);
+    if (!inserted) {
       return;
     }
 
-    const inserted = await this.database.markUpdateProcessed(message.updateId);
-    if (!inserted) {
+    if (message.chatId !== this.config.telegram.workspaceChatId) {
+      await this.rejectUnsupportedChatMessage(message);
       return;
     }
 
@@ -269,6 +271,10 @@ export class TelegramCodexBridge {
   }
 
   async handleTopicClosed(event: TopicLifecycleEvent): Promise<void> {
+    if (event.chatId !== this.config.telegram.workspaceChatId) {
+      return;
+    }
+
     const session = await this.database.archiveSessionByTopic(event.chatId, event.topicId);
     if (!session?.codexThreadId) {
       return;
@@ -290,7 +296,10 @@ export class TelegramCodexBridge {
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
-    if (event.userId !== this.config.telegram.userId) {
+    if (event.chatId !== this.config.telegram.workspaceChatId) {
+      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        text: WORKSPACE_CHAT_ONLY_TEXT
+      });
       return;
     }
 
@@ -321,6 +330,14 @@ export class TelegramCodexBridge {
     await this.telegram.answerCallbackQuery(event.callbackQueryId, {
       text: "Unsupported callback"
     });
+  }
+
+  private async rejectUnsupportedChatMessage(message: UserTurnMessage): Promise<void> {
+    if (message.chatId <= 0) {
+      return;
+    }
+
+    await this.telegram.sendMessage(message.chatId, WORKSPACE_CHAT_ONLY_TEXT);
   }
 
   private async handleTopicImplementCallbackQuery(event: CallbackQueryEvent): Promise<void> {

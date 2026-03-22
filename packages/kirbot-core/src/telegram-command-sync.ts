@@ -2,10 +2,7 @@ import { getVisibleTelegramCommands, type TelegramBotCommand } from "./telegram-
 import type { LoggerLike } from "./logging";
 
 type TelegramCommandScope =
-  | {
-      type: "default";
-    }
-  | {
+  {
       type: "chat";
       chat_id: number;
     };
@@ -37,31 +34,21 @@ const COMMANDS_MENU_BUTTON: TelegramMenuButtonCommands = {
 export class TelegramCommandSync {
   constructor(
     private readonly telegram: TelegramCommandApi,
-    private readonly privateChatId: number,
+    private readonly workspaceChatId: number,
     private readonly logger: LoggerLike = console
   ) {}
 
   async initialize(): Promise<void> {
-    await this.runStartupStep("set visible commands for default scope", async () => {
-      await this.applyVisibleCommands({
-        type: "default"
-      });
-    });
-    await this.runStartupStep("set commands menu button for default scope", async () => {
+    await this.runStartupStep(`set commands menu button for workspace chat ${this.workspaceChatId}`, async () => {
       await this.telegram.setChatMenuButton({
+        chat_id: this.workspaceChatId,
         menu_button: COMMANDS_MENU_BUTTON
       });
     });
-    await this.runStartupStep(`set commands menu button for private chat ${this.privateChatId}`, async () => {
-      await this.telegram.setChatMenuButton({
-        chat_id: this.privateChatId,
-        menu_button: COMMANDS_MENU_BUTTON
-      });
-    });
-    await this.runStartupStep(`set visible commands for private chat ${this.privateChatId}`, async () => {
+    await this.runStartupStep(`set visible commands for workspace chat ${this.workspaceChatId}`, async () => {
       await this.applyVisibleCommands({
         type: "chat",
-        chat_id: this.privateChatId
+        chat_id: this.workspaceChatId
       });
     });
   }

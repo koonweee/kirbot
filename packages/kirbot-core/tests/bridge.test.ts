@@ -843,7 +843,7 @@ describe("TelegramCodexBridge", () => {
     config = {
       telegram: {
         botToken: "token",
-        userId: 42,
+        workspaceChatId: -1001,
         mediaTempDir: join(tempDir, "telegram-media"),
         miniApp: {
           publicUrl: "https://example.com/mini-app"
@@ -1865,7 +1865,7 @@ describe("TelegramCodexBridge", () => {
     expect(await database.getCustomCommandByName("standup")).toBeUndefined();
   });
 
-  it("ignores messages from users other than the configured Telegram user", async () => {
+  it("accepts messages from any sender in the configured workspace chat", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -1876,7 +1876,32 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.createdTopics).toHaveLength(0);
+    expect(codex.createdThreads).toEqual(["Root Chat"]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "Fix the failing deployment tests",
+        turnId: "turn-1"
+      }
+    ]);
+  });
+
+  it("rejects direct messages instead of treating them as the root surface", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: 99,
+      topicId: null,
+      messageId: 11,
+      updateId: 21,
+      userId: 99,
+      text: "Can you help from DM?"
+    });
+
     expect(codex.createdThreads).toHaveLength(0);
+    expect(await database.getRootSessionByChat(99)).toBeUndefined();
+    expect(telegram.sentMessages.at(-1)).toMatchObject({
+      chatId: 99,
+      text: "Use Kirbot from the configured workspace forum chat."
+    });
   });
 
   it("creates a Codex session inside an unmapped existing topic", async () => {
@@ -6181,7 +6206,7 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
-  it("ignores callback queries from users other than the configured Telegram user", async () => {
+  it("accepts callback queries from any sender in the configured workspace chat", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -6208,7 +6233,12 @@ describe("TelegramCodexBridge", () => {
       userId: 99
     });
 
-    expect(codex.interruptCalls).toHaveLength(0);
+    expect(codex.interruptCalls).toEqual([
+      {
+        threadId: "thread-1",
+        turnId: "turn-1"
+      }
+    ]);
   });
 });
 
