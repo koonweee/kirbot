@@ -168,13 +168,15 @@ async function main(): Promise<void> {
       message && "message_thread_id" in message && typeof message.message_thread_id === "number"
         ? message.message_thread_id
         : null;
+    const telegramUsername = getTelegramUsername(context.callbackQuery.from);
 
     await bridge.handleCallbackQuery({
       callbackQueryId: context.callbackQuery.id,
       data: context.callbackQuery.data,
       chatId: callbackChatId,
       topicId,
-      userId: context.callbackQuery.from.id
+      userId: context.callbackQuery.from.id,
+      ...(telegramUsername ? { telegramUsername } : {})
     });
   });
 

@@ -92,6 +92,7 @@ export type CallbackQueryEvent = {
   chatId: number;
   topicId: number | null;
   userId: number;
+  telegramUsername?: string;
 };
 
 export interface BridgeCodexApi {
@@ -2865,6 +2866,7 @@ function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string):
     messageId: 0,
     updateId: 0,
     userId: event.userId,
+    ...(event.telegramUsername ? { telegramUsername: event.telegramUsername } : {}),
     text,
     input: [
       {

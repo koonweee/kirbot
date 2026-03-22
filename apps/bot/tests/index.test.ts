@@ -319,7 +319,8 @@ describe("bot entrypoint routing", () => {
         id: "callback-workspace",
         data: "turn:turn-1:sendNow",
         from: {
-          id: 77
+          id: 77,
+          username: "callback-user"
         },
         message: {
           message_thread_id: 777
@@ -332,7 +333,8 @@ describe("bot entrypoint routing", () => {
       data: "turn:turn-1:sendNow",
       chatId: -1001,
       topicId: 777,
-      userId: 77
+      userId: 77,
+      telegramUsername: "callback-user"
     });
     expect(answerCallbackQuery).not.toHaveBeenCalled();
   });

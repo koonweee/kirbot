@@ -5336,6 +5336,7 @@ describe("TelegramCodexBridge", () => {
   });
 
   it("starts a default-mode implementation turn from the plan stub button", async () => {
+    const activateTurnSpy = vi.spyOn(TurnLifecycleCoordinator.prototype, "activateTurn");
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 786,
@@ -5383,12 +5384,17 @@ describe("TelegramCodexBridge", () => {
       data: callbackData!,
       chatId: -1001,
       topicId: 786,
-      userId: 42
+      userId: 42,
+      telegramUsername: "callback-user"
     });
 
     expect(codex.turns).toHaveLength(2);
     expect(codex.turns.at(-1)?.text).toBe("Implement the plan.");
+    expect(activateTurnSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+      telegramUsername: "callback-user"
+    });
     expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
+    activateTurnSpy.mockRestore();
   });
 
   it("interrupts the active turn from /stop", async () => {
