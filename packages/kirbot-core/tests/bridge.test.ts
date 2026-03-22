@@ -6385,6 +6385,7 @@ describe("TelegramCodexBridge", () => {
 
     const promptMessage = telegram.sentMessages.at(-1);
     expect(promptMessage?.text?.startsWith("@starter-user ")).toBe(true);
+    expect(getInlineButtonTexts(promptMessage)).toEqual(["Refactor"]);
 
     const pending = await database.getPendingRequest(JSON.stringify(492));
     await bridge.handleCallbackQuery({

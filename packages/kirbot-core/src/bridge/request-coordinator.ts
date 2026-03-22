@@ -430,6 +430,7 @@ export class BridgeRequestCoordinator {
   ): Promise<void> {
     const chatId = Number.parseInt(request.telegramChatId, 10);
     const prompt = buildUserInputPrompt(request.id, payload.questions, state);
+    const prefixedPrompt = this.prefixInitialRequestPrompt(payload.turnId, prompt);
 
     if (request.telegramMessageId) {
       await this.telegram.editMessageText(chatId, request.telegramMessageId, prompt.text, {
@@ -441,7 +442,9 @@ export class BridgeRequestCoordinator {
     const message = await this.messenger.sendMessage({
       chatId,
       topicId: request.telegramTopicId,
-      ...this.prefixInitialRequestPrompt(payload.turnId, prompt),
+      text: prefixedPrompt.text,
+      ...(prefixedPrompt.entities ? { entities: prefixedPrompt.entities } : {}),
+      ...(prompt.replyMarkup ? { replyMarkup: prompt.replyMarkup } : {}),
       disableNotification: false
     });
 
