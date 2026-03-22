@@ -56,13 +56,16 @@ request.
 
 - Each turn or request should have at most one primary notifying message that
   gets the mention.
-- For normal turn completion, the final assistant message is the primary
-  notifying message.
+- For turn completion, the primary notifying message is chosen by semantic
+  precedence, not by raw send order.
+- When a normal final assistant message is present, it is always the primary
+  notifying message for the turn even if standalone commentary is published
+  earlier in transport order.
 - For approval, permissions, or structured user-input requests, the prompt
   message is the primary notifying message.
 - When no normal final assistant reply is sent, the primary notifying message
-  is whichever notification-enabled artifact or fallback message is emitted
-  first in the actual completion flow.
+  is whichever notification-enabled artifact or fallback message has the highest
+  precedence among the remaining completion outputs.
 
 ### Turn Ownership
 
@@ -143,7 +146,8 @@ apply the mention only there.
   starter's `@username` to the first notification-enabled publication on that
   path.
 - If a plan-only completion also emits standalone commentary first, the
-  commentary publication remains the mention target because it is emitted first.
+  commentary publication remains the mention target because there is no final
+  assistant reply and commentary has higher precedence than plan publication.
 - If the first notification-enabled publication on the plan path is an oversize
   fallback message, that fallback should receive the mention.
 
@@ -175,9 +179,7 @@ apply the mention only there.
 The implementation should make the "primary notifying message" explicit rather
 than scattered across individual send calls.
 
-- Completion paths should choose the first notification-enabled send in their
-  actual publish order.
-- In practice the precedence should be:
+- Completion paths should choose the mention target by this precedence list:
   - final assistant reply, when present
   - otherwise the first standalone commentary publication, when present
   - otherwise the first standalone response publication, when present
