@@ -143,8 +143,8 @@ async function main(): Promise<void> {
   });
 
   bot.on("callback_query:data", async (context) => {
-    const callbackChatId = context.chat?.id ?? workspaceChatId;
-    if (callbackChatId !== workspaceChatId) {
+    const callbackChatId = context.chat?.id;
+    if (callbackChatId === undefined || callbackChatId !== workspaceChatId) {
       await bot.api.answerCallbackQuery(context.callbackQuery.id, {
         text: WORKSPACE_CHAT_ONLY_TEXT
       });
