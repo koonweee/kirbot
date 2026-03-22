@@ -128,7 +128,7 @@ Verified by:
 User experience:
 
 - `/model`, `/fast`, and `/permissions` in `General` first ask whether to update the live shared root thread or the defaults for future `/thread` topics.
-- `/restart` in the lobby reports each deployment step in Telegram, then checks out `master`, fetches `origin`, hard-resets to `origin/master`, rebuilds kirbot, and restarts the detached production tmux session.
+- `/restart` in `General` reports each deployment step in Telegram, then checks out `master`, fetches `origin`, hard-resets to `origin/master`, rebuilds kirbot, and restarts the detached production tmux session.
 - The same commands inside a topic change only that topic's existing Codex thread settings.
 - Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
 - Existing topic threads do not follow later root-level spawn-default changes automatically.
@@ -152,11 +152,11 @@ Verified by:
 
 User experience:
 
-- `/cmd` in the lobby shows a short help blurb for `add`, `update`, and `delete`.
-- `/cmd add <command> <prompt>` validates the command name and prompt, then sends a confirmation message in the lobby with `Add` and `Cancel` buttons instead of creating the command immediately.
+- `/cmd` in `General` shows a short help blurb for `add`, `update`, and `delete`.
+- `/cmd add <command> <prompt>` validates the command name and prompt, then sends a confirmation message in `General` with `Add` and `Cancel` buttons instead of creating the command immediately.
 - `/cmd update <command> <prompt>` and `/cmd delete <command>` update the saved command set immediately after validation.
 - Confirmed custom commands are not added to Telegram’s built-in slash-command picker, but they do appear on reply keyboards that kirbot refreshes on both root and topic completion footers.
-- A custom command can be invoked from the root chat or from a topic. kirbot expands it to the stored prompt text plus any extra trailing text and routes it like a normal user message in the current session, including root-session bootstrap, topic-session bootstrap in an unmapped topic, and steer or queue behavior during an active turn.
+- A custom command can be invoked from `General` or from a topic. kirbot expands it to the stored prompt text plus any extra trailing text and routes it like a normal user message in the current session, including root-session bootstrap, topic-session bootstrap in an unmapped topic, and steer or queue behavior during an active turn.
 
 Owned by:
 
