@@ -426,7 +426,7 @@ export class TelegramCodexBridge {
   private async handleRootMessage(message: UserTurnMessage): Promise<void> {
     const command = parseSlashCommand(message.text);
     if (command) {
-      if (!isAllowedSlashCommandInScope(command.command, "root")) {
+      if (!isAllowedSlashCommandInScope(command.command, "general")) {
         await this.sendInvalidSlashCommandMessage(message);
         return;
       }

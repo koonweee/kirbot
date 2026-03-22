@@ -36,6 +36,7 @@ import {
   buildResponseArtifactButton,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
+import { isAllowedSlashCommandInScope } from "../src/bridge/slash-commands";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
   let resolve!: (value: T) => void;
@@ -902,6 +903,15 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getRootSessionByChat(-1001);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+    expect(session?.surface).toEqual({ kind: "general" });
+  });
+
+  it("treats General as the shared root slash-command scope", () => {
+    expect(isAllowedSlashCommandInScope("plan", "general")).toBe(true);
+    expect(isAllowedSlashCommandInScope("thread", "general")).toBe(true);
+    expect(isAllowedSlashCommandInScope("cmd", "general")).toBe(true);
+    expect(isAllowedSlashCommandInScope("stop", "general")).toBe(false);
+    expect(isAllowedSlashCommandInScope("implement", "general")).toBe(false);
   });
 
   it("does not persist or reuse the unknown-model sentinel for root defaults", async () => {

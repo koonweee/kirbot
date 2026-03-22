@@ -7,7 +7,7 @@ export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "imple
 export type CodexSlashCommand = "model" | "fast" | "compact" | "approvals" | "permissions";
 export type SlashCommandName = KirbotSlashCommand | CodexSlashCommand;
 export type SlashCommandKind = "kirbot" | "codex";
-export type SlashCommandScope = "root" | "topic";
+export type SlashCommandScope = "general" | "topic";
 
 export type ParsedSlashCommandToken = {
   command: string;
@@ -140,7 +140,7 @@ const SLASH_COMMAND_BY_NAME = new Map(
   SLASH_COMMAND_DEFINITIONS.map((definition) => [definition.command, definition])
 );
 
-const ROOT_COMMAND_SET: ReadonlySet<string> = new Set(
+const GENERAL_COMMAND_SET: ReadonlySet<string> = new Set(
   SLASH_COMMAND_DEFINITIONS.filter((definition) => definition.allowInRoot).map((definition) => definition.command)
 );
 const TOPIC_COMMAND_SET: ReadonlySet<string> = new Set(
@@ -166,7 +166,9 @@ export function getSurfaceableTopicSlashCommands(): readonly TelegramBotCommand[
 }
 
 export function isAllowedSlashCommandInScope(command: string, scope: SlashCommandScope): boolean {
-  return scope === "root" ? ROOT_COMMAND_SET.has(command as SlashCommandName) : TOPIC_COMMAND_SET.has(command as SlashCommandName);
+  return scope === "general"
+    ? GENERAL_COMMAND_SET.has(command as SlashCommandName)
+    : TOPIC_COMMAND_SET.has(command as SlashCommandName);
 }
 
 export function parseSlashCommandToken(text: string): ParsedSlashCommandToken | null {
