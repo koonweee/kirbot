@@ -9,7 +9,7 @@ export type SessionMode = "default" | "plan";
 export type PendingCustomCommandStatus = "pending" | "confirmed" | "canceled";
 
 export type SessionSurface =
-  | { kind: "root" }
+  | { kind: "general" }
   | { kind: "topic"; topicId: number };
 
 export type PersistedThreadSettings = {

@@ -46,30 +46,39 @@ describe("BridgeDatabase", () => {
     expect(archived?.status).toBe("archived");
   });
 
-  it("creates and looks up a root session separately from a topic session", async () => {
-    const pendingRoot = await database.createProvisioningSession({
+  it("creates and looks up a general session separately from topic sessions", async () => {
+    const pendingGeneral = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
-    expect("surface" in pendingRoot && pendingRoot.surface.kind).toBe("root");
+    expect("surface" in pendingGeneral && pendingGeneral.surface.kind).toBe("general");
 
-    const activeRoot = await database.activateSession(pendingRoot.id, "root-thread");
-    expect("surface" in activeRoot && activeRoot.surface.kind).toBe("root");
+    const activeGeneral = await database.activateSession(pendingGeneral.id, "general-thread");
+    expect("surface" in activeGeneral && activeGeneral.surface.kind).toBe("general");
 
-    const pendingTopic = await database.createProvisioningSession({
+    const firstTopic = await database.createProvisioningSession({
       telegramChatId: "-1001",
       surface: { kind: "topic", topicId: 22 }
     });
-    const activeTopic = await database.activateSession(pendingTopic.id, "topic-thread");
-    expect("surface" in activeTopic && activeTopic.surface.kind).toBe("topic");
+    const secondTopic = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 23 }
+    });
+    const activeFirstTopic = await database.activateSession(firstTopic.id, "topic-thread-22");
+    expect("surface" in activeFirstTopic && activeFirstTopic.surface.kind).toBe("topic");
+    expect(secondTopic.id).not.toBe(firstTopic.id);
 
     const rootLookup = await database.getRootSessionByChat(-1001);
-    expect(rootLookup?.codexThreadId).toBe("root-thread");
+    expect(rootLookup?.surface).toEqual({ kind: "general" });
+    expect(rootLookup?.codexThreadId).toBe("general-thread");
     expect(rootLookup?.settings.model).toBeNull();
 
     const topicLookup = await database.getSessionByTopic(-1001, 22);
-    expect(topicLookup?.codexThreadId).toBe("topic-thread");
+    expect(topicLookup?.codexThreadId).toBe("topic-thread-22");
     expect(topicLookup?.settings.model).toBeNull();
+
+    const otherTopicLookup = await database.getSessionByTopic(-1001, 23);
+    expect(otherTopicLookup?.telegramTopicId).toBe(23);
   });
 
   it("stores per-session settings separately from chat defaults", async () => {
@@ -139,12 +148,12 @@ describe("BridgeDatabase", () => {
     });
   });
 
-  it("stores root session settings", async () => {
-    const pendingRoot = await database.createProvisioningSession({
+  it("stores general session settings via root/default helpers", async () => {
+    const pendingGeneral = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
-    await database.activateSession(pendingRoot.id, "root-thread");
+    await database.activateSession(pendingGeneral.id, "general-thread");
 
     const updatedRoot = await database.updateRootSessionSettings("-1001", {
       model: "gpt-5.4-mini",
@@ -163,17 +172,21 @@ describe("BridgeDatabase", () => {
       }
     });
 
+    expect(updatedRoot?.surface).toEqual({ kind: "general" });
     expect(updatedRoot?.settings.model).toBe("gpt-5.4-mini");
     expect(updatedRoot?.settings.reasoningEffort).toBe("medium");
     expect(updatedRoot?.settings.approvalPolicy).toBe("on-request");
+
+    const rootLookup = await database.getRootSessionByChat("-1001");
+    expect(rootLookup?.surface).toEqual({ kind: "general" });
   });
 
-  it("repoints an active session to a fresh Codex thread without changing settings", async () => {
-    const pendingRoot = await database.createProvisioningSession({
+  it("repoints an active general session to a fresh Codex thread without changing settings", async () => {
+    const pendingGeneral = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
-    await database.activateSession(pendingRoot.id, "thread-1");
+    await database.activateSession(pendingGeneral.id, "thread-1");
 
     await database.updateRootSessionSettings("-1001", {
       model: "gpt-5.4-mini",
@@ -192,42 +205,64 @@ describe("BridgeDatabase", () => {
       }
     });
 
-    const repointed = await database.activateSession(pendingRoot.id, "thread-2");
+    const repointed = await database.activateSession(pendingGeneral.id, "thread-2");
+    expect(repointed.surface).toEqual({ kind: "general" });
     expect(repointed.codexThreadId).toBe("thread-2");
     expect(repointed.settings.model).toBe("gpt-5.4-mini");
     expect(repointed.settings.reasoningEffort).toBe("medium");
   });
 
-  it("returns the existing root provisioning session when creation races", async () => {
+  it("returns the existing general provisioning session when creation races", async () => {
     const first = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
 
     const second = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
 
     expect(second).toEqual(first);
   });
 
-  it("reclaims an errored root session when provisioning is retried", async () => {
+  it("reclaims an errored general session when provisioning is retried", async () => {
     const first = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
 
     await database.markSessionErrored(first.id);
 
     const retried = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
 
     expect(retried.id).toBe(first.id);
     expect(retried.status).toBe("provisioning");
     expect(retried.codexThreadId).toBeNull();
+  });
+
+  it("rejects topic rows without a numeric topic id", async () => {
+    await database.kysely
+      .insertInto("sessions")
+      .values({
+        telegram_chat_id: "-1001",
+        surface_kind: "topic",
+        telegram_topic_id: null,
+        codex_thread_id: null,
+        status: "active",
+        preferred_mode: "default",
+        model: null,
+        reasoning_effort: null,
+        service_tier: null,
+        approval_policy: null,
+        sandbox_policy_json: null
+      })
+      .execute();
+
+    await expect(database.getSessionById(1)).rejects.toThrow("Topic session row is missing telegram_topic_id");
   });
 
   it("stores separate root and spawn defaults", async () => {
