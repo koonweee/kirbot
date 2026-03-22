@@ -29,7 +29,7 @@ kirbot sits between Telegram and a pinned local Codex app server:
 
 The bridge uses one persistent root session plus topic sessions:
 
-- plain root-chat messages continue the same root Codex thread
+- plain forum root messages continue the same workspace Codex thread
 - `/thread <prompt>` and root `/plan [prompt]` create topic-backed Codex sessions
 - later messages inside a topic continue that topic's Codex thread
 - pending approvals and user-input requests route back to the surface that owns the session

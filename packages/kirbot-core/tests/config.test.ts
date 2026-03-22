@@ -51,6 +51,18 @@ describe("core config module", () => {
     expect(() => loadConfig()).toThrow("TELEGRAM_WORKSPACE_CHAT_ID is required");
   });
 
+  it("rejects positive TELEGRAM_WORKSPACE_CHAT_ID values", async () => {
+    process.env = {
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "42",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("TELEGRAM_WORKSPACE_CHAT_ID must be negative");
+  });
+
   it("requires the Mini App public URL to use https", async () => {
     process.env = {
       TELEGRAM_BOT_TOKEN: "token",

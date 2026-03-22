@@ -49,6 +49,14 @@ const workspaceChatIdEnv = z.preprocess(
       return z.NEVER;
     }
 
+    if (parsed >= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TELEGRAM_WORKSPACE_CHAT_ID must be negative"
+      });
+      return z.NEVER;
+    }
+
     return parsed;
   })
 );
