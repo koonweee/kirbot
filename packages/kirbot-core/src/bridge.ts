@@ -1736,7 +1736,7 @@ export class TelegramCodexBridge {
     }, async () => {
       const pending = await this.database.createProvisioningSession({
         telegramChatId: String(message.chatId),
-        surface: { kind: "root" }
+        surface: { kind: "general" }
       });
 
       try {
@@ -2718,7 +2718,7 @@ export class TelegramCodexBridge {
     update: CodexThreadSettingsOverride
   ): Promise<ThreadStartSettings> {
     const session =
-      surface.kind === "root"
+      surface.kind === "general"
         ? await this.database.getRootSessionByChat(chatId)
         : await this.database.getSessionByTopic(chatId, surface.topicId);
     if (!session) {
@@ -2728,7 +2728,7 @@ export class TelegramCodexBridge {
     const hydratedSession = await this.ensurePersistedSessionSettings(session);
     const merged = mergePersistedThreadSettings(hydratedSession.settings, update);
     const updated =
-      surface.kind === "root"
+      surface.kind === "general"
         ? await this.database.updateRootSessionSettings(chatId, merged)
         : await this.database.updateTopicSessionSettings(chatId, surface.topicId, merged);
     const nextSession = updated ?? { ...hydratedSession, settings: merged };
@@ -2742,7 +2742,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.updateSessionSettingsForSurface(chatId, { kind: "root" }, update);
+    await this.updateSessionSettingsForSurface(chatId, { kind: "general" }, update);
   }
 
 }
@@ -2995,8 +2995,8 @@ function toPermissionDetectionSettings(
   };
 }
 
-function isRootBridgeSession(session: TopicSession | BridgeSession): session is BridgeSession & { surface: { kind: "root" } } {
-  return "surface" in session && session.surface.kind === "root";
+function isRootBridgeSession(session: TopicSession | BridgeSession): session is BridgeSession & { surface: { kind: "general" } } {
+  return "surface" in session && session.surface.kind === "general";
 }
 
 function getSessionTopicId(session: TopicSession | BridgeSession): number {

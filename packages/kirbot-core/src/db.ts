@@ -20,7 +20,7 @@ import type {
 } from "./domain";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 type SessionsTable = {
   id: Generated<number>;
@@ -213,7 +213,14 @@ function normalizePersistedModel(model: string | null): string | null {
   return model;
 }
 
+function validateSessionSurface(surface: SessionSurface): void {
+  if (surface.kind === "topic" && !Number.isInteger(surface.topicId)) {
+    throw new Error("Topic sessions require a numeric topic id");
+  }
+}
+
 function sessionSurfaceToRow(surface: SessionSurface): Pick<SessionsTable, "surface_kind" | "telegram_topic_id"> {
+  validateSessionSurface(surface);
   return surface.kind === "general"
     ? {
         surface_kind: "general",
@@ -241,18 +248,25 @@ export class BridgeDatabase {
   async migrate(): Promise<void> {
     const currentVersion = this.#readSchemaVersion();
     if (currentVersion === SCHEMA_VERSION) {
-      this.#createSchemaV7();
+      this.#createSchemaV8();
       return;
     }
 
     if (currentVersion === 0) {
-      this.#createSchemaV7();
+      this.#createSchemaV8();
+      this.#writeSchemaVersion(SCHEMA_VERSION);
+      return;
+    }
+
+    if (currentVersion === 7) {
+      this.#migrateFromV7ToV8();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
 
     if (currentVersion === 6) {
       this.#migrateFromV6ToV7();
+      this.#migrateFromV7ToV8();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -260,6 +274,7 @@ export class BridgeDatabase {
     if (currentVersion === 5) {
       this.#migrateFromV5ToV6();
       this.#migrateFromV6ToV7();
+      this.#migrateFromV7ToV8();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -268,6 +283,7 @@ export class BridgeDatabase {
       this.#migrateFromV4ToV5();
       this.#migrateFromV5ToV6();
       this.#migrateFromV6ToV7();
+      this.#migrateFromV7ToV8();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -957,7 +973,7 @@ export class BridgeDatabase {
     };
   }
 
-  #createSchemaV7(): void {
+  #createSchemaV8(): void {
     this.#sqlite.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -971,7 +987,12 @@ export class BridgeDatabase {
         reasoning_effort TEXT,
         service_tier TEXT,
         approval_policy TEXT,
-        sandbox_policy_json TEXT
+        sandbox_policy_json TEXT,
+        CHECK (surface_kind IN ('general', 'topic')),
+        CHECK (
+          (surface_kind = 'general' AND telegram_topic_id IS NULL)
+          OR (surface_kind = 'topic' AND telegram_topic_id IS NOT NULL)
+        )
       );
 
       CREATE UNIQUE INDEX IF NOT EXISTS sessions_general_unique
@@ -1270,6 +1291,78 @@ export class BridgeDatabase {
 
       DROP TABLE sessions;
       ALTER TABLE sessions_v7 RENAME TO sessions;
+
+      CREATE UNIQUE INDEX sessions_general_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'general';
+
+      CREATE UNIQUE INDEX sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+
+      COMMIT;
+    `);
+  }
+
+  #migrateFromV7ToV8(): void {
+    this.#sqlite.exec(`
+      BEGIN;
+
+      CREATE TABLE sessions_v8 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT,
+        CHECK (surface_kind IN ('general', 'topic')),
+        CHECK (
+          (surface_kind = 'general' AND telegram_topic_id IS NULL)
+          OR (surface_kind = 'topic' AND telegram_topic_id IS NOT NULL)
+        )
+      );
+
+      INSERT INTO sessions_v8 (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      )
+      SELECT
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      FROM sessions;
+
+      DROP TABLE sessions;
+      ALTER TABLE sessions_v8 RENAME TO sessions;
 
       CREATE UNIQUE INDEX sessions_general_unique
         ON sessions (telegram_chat_id, surface_kind)

@@ -1,3 +1,4 @@
+import SqliteDatabase from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -5,6 +6,7 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { BridgeDatabase } from "../src/db";
+import type { SessionSurface } from "../src/domain";
 
 describe("BridgeDatabase", () => {
   let database: BridgeDatabase;
@@ -44,6 +46,15 @@ describe("BridgeDatabase", () => {
 
     const archived = await database.archiveSessionByTopic(-1001, 22);
     expect(archived?.status).toBe("archived");
+  });
+
+  it("rejects provisioning a topic session without a numeric topic id", async () => {
+    await expect(
+      database.createProvisioningSession({
+        telegramChatId: "-1001",
+        surface: { kind: "topic" } as SessionSurface
+      })
+    ).rejects.toThrow("Topic sessions require a numeric topic id");
   });
 
   it("creates and looks up a general session separately from topic sessions", async () => {
@@ -244,25 +255,125 @@ describe("BridgeDatabase", () => {
     expect(retried.codexThreadId).toBeNull();
   });
 
-  it("rejects topic rows without a numeric topic id", async () => {
-    await database.kysely
-      .insertInto("sessions")
-      .values({
-        telegram_chat_id: "-1001",
-        surface_kind: "topic",
-        telegram_topic_id: null,
-        codex_thread_id: null,
-        status: "active",
-        preferred_mode: "default",
-        model: null,
-        reasoning_effort: null,
-        service_tier: null,
-        approval_policy: null,
-        sandbox_policy_json: null
-      })
-      .execute();
+  it("rejects malformed topic rows on write", async () => {
+    await expect(
+      database.kysely
+        .insertInto("sessions")
+        .values({
+          telegram_chat_id: "-1001",
+          surface_kind: "topic",
+          telegram_topic_id: null,
+          codex_thread_id: null,
+          status: "active",
+          preferred_mode: "default",
+          model: null,
+          reasoning_effort: null,
+          service_tier: null,
+          approval_policy: null,
+          sandbox_policy_json: null
+        })
+        .execute()
+    ).rejects.toThrow();
+  });
 
-    await expect(database.getSessionById(1)).rejects.toThrow("Topic session row is missing telegram_topic_id");
+  it("migrates v6 root sessions to general and preserves unique session surfaces", async () => {
+    const legacyPath = join(tempDir, "legacy-v6.sqlite");
+    const sqlite = new SqliteDatabase(legacyPath);
+
+    sqlite.exec(`
+      CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT
+      );
+
+      CREATE UNIQUE INDEX sessions_root_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'root';
+
+      CREATE UNIQUE INDEX sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+    `);
+
+    sqlite.pragma("user_version = 6");
+    sqlite.prepare(`
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(1, "-1001", "root", null, "root-thread", "active", "default", null, null, null, null, null);
+    sqlite.prepare(`
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(2, "-1001", "topic", 22, "topic-thread", "active", "plan", null, null, null, null, null);
+    sqlite.close();
+
+    const migratedDatabase = new BridgeDatabase(legacyPath);
+    await migratedDatabase.migrate();
+
+    const general = await migratedDatabase.getRootSessionByChat("-1001");
+    expect(general?.surface).toEqual({ kind: "general" });
+    expect(general?.codexThreadId).toBe("root-thread");
+
+    const topic = await migratedDatabase.getSessionByTopic(-1001, 22);
+    expect(topic?.telegramTopicId).toBe(22);
+    expect(topic?.codexThreadId).toBe("topic-thread");
+
+    const repeatedGeneral = await migratedDatabase.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" }
+    });
+    expect(repeatedGeneral.id).toBe(general?.id);
+
+    const repeatedTopic = await migratedDatabase.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 22 }
+    });
+    expect(repeatedTopic.id).toBe(topic?.id);
+
+    const newTopic = await migratedDatabase.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 23 }
+    });
+    expect(newTopic.surface).toEqual({ kind: "topic", topicId: 23 });
+
+    await migratedDatabase.close();
   });
 
   it("stores separate root and spawn defaults", async () => {

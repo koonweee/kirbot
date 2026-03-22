@@ -1352,7 +1352,7 @@ describe("TelegramCodexBridge", () => {
   it("recovers the root session after a prior provisioning failure left it errored", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "root" }
+      surface: { kind: "general" }
     });
     await database.markSessionErrored(pending.id);
 
