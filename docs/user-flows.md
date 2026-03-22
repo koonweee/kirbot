@@ -16,9 +16,10 @@ Each flow has three lenses:
 
 User experience:
 
-- A normal message in the root private chat continues one persistent Codex thread in that same root chat.
-- `/thread <prompt>` creates a Telegram topic with a random icon, creates a new Codex thread for that topic, mirrors the initial prompt into the topic, and starts the first turn there immediately.
-- Root `/plan [prompt]` still creates a new plan-oriented topic instead of switching the root session into plan mode.
+- A normal message in the workspace chat's `General` topic continues one persistent shared Codex thread for the whole workspace.
+- `/thread <prompt>` from `General` creates a Telegram topic with a random icon, creates a new shared Codex thread for that topic, mirrors the initial prompt into the topic, and starts the first turn there immediately.
+- Root `/plan [prompt]` from `General` still creates a new plan-oriented topic instead of switching the shared root session into plan mode.
+- Direct messages are rejected or redirected; they do not create a private root conversation.
 
 Owned by:
 
@@ -38,6 +39,7 @@ User experience:
 - kirbot posts the startup footer before any other topic message for that new thread.
 - That startup footer also refreshes a topic-local reply keyboard with the built-in thread commands plus any saved custom thread commands.
 - Later messages in that topic continue the same Codex thread.
+- Every topic session is shared by all participants in that topic, so follow-up turns and approvals are visible to the whole forum thread.
 
 Owned by:
 
@@ -125,7 +127,7 @@ Verified by:
 
 User experience:
 
-- `/model`, `/fast`, and `/permissions` in the root chat first ask whether to update the live root thread or the defaults for future `/thread` topics.
+- `/model`, `/fast`, and `/permissions` in `General` first ask whether to update the live shared root thread or the defaults for future `/thread` topics.
 - `/restart` in the lobby reports each deployment step in Telegram, then checks out `master`, fetches `origin`, hard-resets to `origin/master`, rebuilds kirbot, and restarts the detached production tmux session.
 - The same commands inside a topic change only that topic's existing Codex thread settings.
 - Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
@@ -173,7 +175,7 @@ Verified by:
 User experience:
 
 - `/plan` enables plan mode for a topic.
-- `/plan` from the lobby creates a new plan-oriented topic and can optionally start a turn immediately if the command includes a prompt.
+- `/plan` from `General` creates a new plan-oriented topic and can optionally start a turn immediately if the command includes a prompt.
 - `/implement` switches the topic back to default implementation mode and starts a normal turn on the existing thread context.
 - Mode changes are blocked while a turn is still active.
 
@@ -192,7 +194,7 @@ Verified by:
 
 User experience:
 
-- When Codex asks for command approval, file approval, or structured user input, kirbot presents that request back on the same Telegram surface that owns the session: root or topic.
+- When Codex asks for command approval, file approval, or structured user input, kirbot presents that request back on the same Telegram surface that owns the session: `General` or topic.
 - Command approvals render as structured cards with the command in a code block,
   `CWD` in inline code, clearer scope wording, and explicit approval button
   labels.
@@ -257,7 +259,7 @@ Verified by:
 
 These are the constraints most likely to matter during onboarding:
 
-- The Telegram topic is the stable user-facing unit of conversation.
+- The Telegram forum topic is the stable user-facing unit of conversation, with `General` serving as the shared root session for the workspace.
 - The Codex thread is the stable model-facing unit of conversation.
 - The bridge owns the mapping between those two units.
 - Presentation rules live in bridge presentation and Telegram formatting code, not in flow orchestration.

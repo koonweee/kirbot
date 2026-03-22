@@ -2,7 +2,7 @@
 
 <img src="./kirbot.png" alt="kirbot" width="128" />
 
-kirbot is a Telegram bot that turns a dedicated private forum supergroup plus topics into a chat UI for Codex. One configured workspace chat can keep a persistent Codex conversation in the forum root, spawn additional topic threads with `/thread <prompt>`, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
+kirbot is a Telegram bot that turns a dedicated private forum supergroup plus topics into a chat UI for Codex. One configured workspace chat can keep a persistent Codex conversation in the forum's `General` topic, spawn additional topic threads with `/thread <prompt>`, approve tool actions, answer follow-up questions, and switch between planning and implementation without leaving Telegram. Final responses and completed plans can open in a separate Telegram Mini App instead of forcing long content into message bubbles.
 
 ## Start Here
 
@@ -27,11 +27,11 @@ kirbot sits between Telegram and a pinned local Codex app server:
 - `packages/kirbot-core/src/telegram-messenger.ts` and `packages/telegram-format/src/*` own Telegram delivery and formatting.
 - `apps/plan-mini-app` is a separate SvelteKit frontend for rendering completed plans from typed URL payloads.
 
-The bridge uses one persistent root session plus topic sessions:
+The bridge uses one persistent `General` root session plus topic sessions:
 
-- plain forum root messages continue the same workspace Codex thread
-- `/thread <prompt>` and root `/plan [prompt]` create topic-backed Codex sessions
-- later messages inside a topic continue that topic's Codex thread
+- plain `General` messages continue the same workspace Codex thread
+- `/thread <prompt>` and root `/plan [prompt]` from `General` create topic-backed Codex sessions
+- later messages inside a topic continue that topic's shared Codex thread
 - pending approvals and user-input requests route back to the surface that owns the session
 
 ## Quick Start

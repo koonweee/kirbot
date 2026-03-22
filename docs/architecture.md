@@ -8,9 +8,9 @@ For step-by-step behavior, read [user-flows.md](user-flows.md). For setup and ch
 
 kirbot is a single-process bridge with four main responsibilities:
 
-- accept Telegram updates from one allowed user
-- translate those updates into Codex threads, turns, approvals, and follow-up input
-- stream Codex output back into Telegram topics
+- accept Telegram updates from one dedicated private forum supergroup workspace
+- translate those updates into shared Codex sessions, turns, approvals, and follow-up input
+- stream Codex output back into the workspace's General surface and forum topics
 - persist enough state to survive restarts and keep topic-to-thread routing stable
 
 At runtime, the process owns both sides of the bridge:
@@ -21,6 +21,8 @@ At runtime, the process owns both sides of the bridge:
 - a SQLite database for bridge state
 
 The Telegram Mini App frontend itself lives separately in [`apps/plan-mini-app`](/home/jtkw/kirbot/apps/plan-mini-app).
+
+Direct messages are not part of the product surface. The bot rejects or redirects DMs instead of treating them as a root conversation.
 
 ## Startup And Shutdown
 
@@ -103,6 +105,7 @@ kirbot stores bridge state in SQLite, not Telegram metadata.
 `topic_sessions`
 
 - maps a Telegram chat/topic pair to one Codex thread
+- treats the workspace chat's `General` topic as the persistent shared root session
 - stores the topic title and preferred session mode
 - records whether a topic is provisioning, active, archived, or errored
 - stores the persisted thread settings Kirbot applies on future turns for that session
@@ -135,6 +138,7 @@ These boundaries matter more than the exact implementation:
 
 - Keep `packages/kirbot-core/src/bridge.ts` as orchestration glue. Move reusable logic into `packages/kirbot-core/src/bridge/*` helpers.
 - Keep Telegram formatting logic in `packages/telegram-format/src/*`, not in bridge or messenger code.
+- Keep the dedicated workspace model explicit: `General` is the shared root session, and all other sessions live in forum topics inside the same private supergroup.
 - Keep reusable app startup in `packages/kirbot-core/src/runtime.ts`, not split between the Telegram entrypoint and harness code.
 - Prefer Telegram fail-open behavior when the extra UX affordance is optional. Session and turn delivery matter more than a copied message, deep link, or draft nicety.
 - Treat tests as the executable contract for user-visible behavior.
