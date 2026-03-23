@@ -348,7 +348,7 @@ describe("bot entrypoint routing", () => {
       disableNotification: true
     });
 
-    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1) as unknown[] | undefined;
     const uploadedPhoto = sendPhotoCall?.[1] as
       | {
           filename?: string;
@@ -398,7 +398,7 @@ describe("bot entrypoint routing", () => {
       disableNotification: true
     });
 
-    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1) as unknown[] | undefined;
     const uploadedPhoto = sendPhotoCall?.[1] as
       | {
           filename?: string;
@@ -443,7 +443,7 @@ describe("bot entrypoint routing", () => {
       disableNotification: true
     });
 
-    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1) as unknown[] | undefined;
     const uploadedPhoto = sendPhotoCall?.[1] as
       | {
           filename?: string;
@@ -482,7 +482,7 @@ describe("bot entrypoint routing", () => {
       disableNotification: true
     });
 
-    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1) as unknown[] | undefined;
     const uploadedPhoto = sendPhotoCall?.[1] as
       | {
           filename?: string;

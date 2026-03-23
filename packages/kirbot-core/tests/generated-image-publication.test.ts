@@ -16,6 +16,8 @@ import {
 } from "../src/bridge/generated-image-publication";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 
+type StreamReadResult<T> = { done: false; value: T } | { done: true; value: undefined };
+
 function imageGenerationItem(result: string): Extract<ThreadItem, { type: "imageGeneration" }> {
   return {
     type: "imageGeneration",
@@ -74,7 +76,7 @@ beforeEach(() => {
       address: "93.184.216.34",
       family: 4
     }
-  ] as Awaited<ReturnType<typeof dns.lookup>>);
+  ] as unknown as Awaited<ReturnType<typeof dns.lookup>>);
 });
 
 describe("generated image publication helper", () => {
@@ -131,7 +133,7 @@ describe("generated image publication helper", () => {
         address: "10.0.0.25",
         family: 4
       }
-    ] as Awaited<ReturnType<typeof dns.lookup>>);
+    ] as unknown as Awaited<ReturnType<typeof dns.lookup>>);
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
       throw new Error("fetch should not be called for hostnames that resolve internally");
     });
@@ -153,17 +155,19 @@ describe("generated image publication helper", () => {
 
   it("keeps the timeout active while the response body is still streaming", async () => {
     vi.useFakeTimers();
-    let resolveSecondRead: ((value: ReadableStreamReadResult<Uint8Array>) => void) | null = null;
+    const secondReadState: {
+      resolve?: (value: StreamReadResult<Uint8Array>) => void;
+    } = {};
     const read = vi
-      .fn<() => Promise<ReadableStreamReadResult<Uint8Array>>>()
+      .fn<() => Promise<StreamReadResult<Uint8Array>>>()
       .mockResolvedValueOnce({
         done: false,
         value: new Uint8Array([1])
       })
       .mockImplementationOnce(
         () =>
-          new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
-            resolveSecondRead = resolve;
+          new Promise<StreamReadResult<Uint8Array>>((resolve) => {
+            secondReadState.resolve = resolve;
           })
       );
     const cancel = vi.fn(async () => undefined);
@@ -203,7 +207,11 @@ describe("generated image publication helper", () => {
     expect(outcome).toBe("rejected");
     expect(cancel).toHaveBeenCalledTimes(1);
 
-    resolveSecondRead?.({
+    const secondReadResolver = secondReadState.resolve;
+    if (!secondReadResolver) {
+      throw new Error("Expected second read resolver");
+    }
+    secondReadResolver({
       done: true,
       value: undefined
     });

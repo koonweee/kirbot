@@ -953,7 +953,7 @@ describe("TelegramCodexBridge", () => {
         address: "93.184.216.34",
         family: 4
       }
-    ] as Awaited<ReturnType<typeof dns.lookup>>);
+    ] as unknown as Awaited<ReturnType<typeof dns.lookup>>);
 
     tempDir = mkdtempSync(join(tmpdir(), "telegram-codex-bridge-service-"));
     database = new BridgeDatabase(join(tempDir, "bridge.sqlite"));
@@ -3729,10 +3729,15 @@ describe("TelegramCodexBridge", () => {
       await waitForAsyncNotifications();
 
       const photoEvents = telegram.events.filter((event) => event.startsWith("photo:"));
-      const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
-      const firstPhotoIndex = telegram.events.indexOf(photoEvents[0]);
-      const secondPhotoIndex = telegram.events.indexOf(photoEvents[1]);
       expect(photoEvents).toHaveLength(2);
+      const [firstPhotoEvent, secondPhotoEvent] = photoEvents;
+      if (!firstPhotoEvent || !secondPhotoEvent) {
+        throw new Error("Expected two photo events");
+      }
+
+      const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
+      const firstPhotoIndex = telegram.events.indexOf(firstPhotoEvent);
+      const secondPhotoIndex = telegram.events.indexOf(secondPhotoEvent);
       expect(firstPhotoIndex).toBeGreaterThanOrEqual(0);
       expect(secondPhotoIndex).toBeGreaterThan(firstPhotoIndex);
       expect(finalIndex).toBeGreaterThan(secondPhotoIndex);

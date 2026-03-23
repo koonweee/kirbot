@@ -422,7 +422,7 @@ beforeEach(() => {
       address: "93.184.216.34",
       family: 4
     }
-  ] as Awaited<ReturnType<typeof dns.lookup>>);
+  ] as unknown as Awaited<ReturnType<typeof dns.lookup>>);
 });
 
 describe("TurnLifecycleCoordinator", () => {
@@ -1687,7 +1687,8 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchStub).toHaveBeenCalledTimes(1);
-      expect(fetchStub.mock.calls[0]?.[0]).toBe("https://example.com/not-an-image.txt");
+      const firstFetchCall = fetchStub.mock.calls[0] as [string] | undefined;
+      expect(firstFetchCall?.[0]).toBe("https://example.com/not-an-image.txt");
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-validation",
@@ -1935,7 +1936,8 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchStub).toHaveBeenCalledTimes(1);
-      expect(fetchStub.mock.calls[0]?.[0]).toBe("https://example.com/oversized.png");
+      const firstFetchCall = fetchStub.mock.calls[0] as [string] | undefined;
+      expect(firstFetchCall?.[0]).toBe("https://example.com/oversized.png");
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-oversized",
