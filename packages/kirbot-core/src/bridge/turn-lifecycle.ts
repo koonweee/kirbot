@@ -336,10 +336,12 @@ export class TurnLifecycleCoordinator {
 
       const publication = await this.publishGeneratedImage(context, item);
       if (publication.published) {
+        this.deps.runtime.clearGeneratedImagePublicationFailureEntry(turnId, item.id);
         context.handledImageGenerationItemIds.add(item.id);
       } else if (publication.failure) {
-        this.deps.runtime.appendActivityLogEntry(
+        this.deps.runtime.upsertGeneratedImagePublicationFailureEntry(
           turnId,
+          item.id,
           buildActivityLogEntryForGeneratedImagePublicationFailure(publication.failure)
         );
       }

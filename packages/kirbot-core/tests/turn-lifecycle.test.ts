@@ -1904,6 +1904,7 @@ describe("TurnLifecycleCoordinator", () => {
           mime_type: "image/png"
         })
       });
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       fetchSpy.mockRestore();
     }
