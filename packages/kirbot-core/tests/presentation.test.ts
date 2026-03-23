@@ -1,3 +1,4 @@
+import type { MessageEntity } from "grammy/types";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,6 +6,7 @@ import {
   buildCommentaryArtifactPublication,
   buildPlanArtifactMessage,
   buildPlanArtifactMessages,
+  buildRenderedAssistantMessage,
   buildRenderedCommandApprovalPrompt,
   buildRenderedFileChangeApprovalPrompt,
   buildRenderedCompletionFooter,
@@ -17,6 +19,7 @@ import {
   renderTelegramStatusDraft,
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
+import { prefixTelegramUsernameMention } from "../src/bridge/telegram-mention-prefix";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import type { ActivityLogEntry } from "../src/turn-runtime";
 
@@ -557,6 +560,78 @@ describe("multipart artifact presentation", () => {
 });
 
 describe("command presentation", () => {
+  it("returns the original payload unchanged when the telegram username is missing or blank", () => {
+    const message = {
+      text: "Hello there",
+      entities: [{ type: "bold", offset: 0, length: 5 }] satisfies MessageEntity[]
+    };
+
+    expect(prefixTelegramUsernameMention(message, undefined)).toBe(message);
+    expect(prefixTelegramUsernameMention(message, null)).toBe(message);
+    expect(prefixTelegramUsernameMention(message, "   ")).toBe(message);
+  });
+
+  it("prefixes plain text payloads with a normalized mention", () => {
+    expect(prefixTelegramUsernameMention({ text: "Please review this" }, "  jeremy  ")).toEqual({
+      text: "@jeremy Please review this"
+    });
+  });
+
+  it("shifts entity offsets for rendered assistant and approval messages", () => {
+    const assistantMessage = buildRenderedAssistantMessage("Use `npm test` and **keep going**");
+    expect(assistantMessage.entities?.length).toBeGreaterThan(0);
+
+    const prefixedAssistantMessage = prefixTelegramUsernameMention(assistantMessage, "jeremy");
+    expect(prefixedAssistantMessage.text).toBe(`@jeremy ${assistantMessage.text}`);
+    expect(prefixedAssistantMessage.entities).toEqual(
+      assistantMessage.entities?.map((entity) => ({
+        ...entity,
+        offset: entity.offset + "@jeremy ".length
+      }))
+    );
+
+    const approvalMessage = buildRenderedCommandApprovalPrompt({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      command: "npm install",
+      cwd: "/workspace",
+      reason: "network access required",
+      commandActions: [{ type: "read", command: "npm", name: "package metadata", path: "package.json" }],
+      networkApprovalContext: { host: "registry.npmjs.org", protocol: "https" },
+      additionalPermissions: {
+        network: { enabled: true },
+        fileSystem: { read: ["/workspace/package.json"], write: ["/workspace/package-lock.json"] },
+        macos: null
+      },
+      skillMetadata: { pathToSkillsMd: "/skills/npm/SKILL.md" },
+      proposedExecpolicyAmendment: ["npm", "install"],
+      proposedNetworkPolicyAmendments: null,
+      availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+    });
+
+    const prefixedApprovalMessage = prefixTelegramUsernameMention(approvalMessage, " jeremy ");
+    expect(prefixedApprovalMessage.text).toBe(`@jeremy ${approvalMessage.text}`);
+    expect(prefixedApprovalMessage.entities).toEqual(
+      approvalMessage.entities?.map((entity) => ({
+        ...entity,
+        offset: entity.offset + "@jeremy ".length
+      }))
+    );
+  });
+
+  it("keeps the prefix-boundary entity aligned when the entity begins at the old text start", () => {
+    const message = {
+      text: "Command approval needed",
+      entities: [{ type: "bold", offset: 0, length: 7 }] satisfies MessageEntity[]
+    };
+
+    expect(prefixTelegramUsernameMention(message, "jeremy")).toEqual({
+      text: "@jeremy Command approval needed",
+      entities: [{ type: "bold", offset: "@jeremy ".length, length: 7 }]
+    });
+  });
+
   it("renders command approval cards with code-block commands and inline CWD", () => {
     const rendered = buildRenderedCommandApprovalPrompt({
       threadId: "thread-1",

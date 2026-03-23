@@ -24,6 +24,7 @@ import {
   transitionTurnPhase
 } from "./turn-context";
 import { formatError } from "./error-handling";
+import { prefixTelegramUsernameMention, type MentionableMessage } from "./telegram-mention-prefix";
 
 export type TurnLifecycleDependencies = {
   runtime: BridgeTurnRuntime;
@@ -39,7 +40,11 @@ export type TurnLifecycleDependencies = {
 };
 
 type TurnFinalizerCallbacks = {
-  publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number>;
+  publishCompletedPlan(
+    context: TurnContext,
+    plan: { itemId: string; text: string },
+    options?: { mentionTurnStarter?: boolean }
+  ): Promise<number>;
 };
 
 type PlannedArtifactPublication = ArtifactPublication & {
@@ -85,26 +90,69 @@ export class TurnFinalizer {
     const snapshot = await this.deps.resolveTurnSnapshot(policy.threadId, context.turnId);
     const hasAssistantText = snapshot.assistantText.trim().length > 0;
     const publishesPlanOnly = policy.terminalStatus === "completed" && !hasAssistantText && snapshot.planText.trim().length > 0;
-    const commentaryPublication = this.buildCommentaryPublication(activityLogEntries, !publishesPlanOnly);
-    await this.publishStandaloneCommentary(context, commentaryPublication);
-    if (snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0) {
-      await this.callbacks.publishCompletedPlan(context, {
-        itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
-        text: snapshot.planText
-      });
-    }
     const finalText = policy.buildFinalText(snapshot.text);
     const responsePublication = publishesPlanOnly ? null : this.buildResponsePublication(finalText);
     const publishedFinalAssistantMessage =
       !publishesPlanOnly && (finalText.trim().length > 0 || policy.publishWhenEmpty);
+    const commentaryPublication = this.buildCommentaryPublication(activityLogEntries, publishedFinalAssistantMessage);
+    const notificationTarget = this.resolveNotificationTarget({
+      hasFinalAssistantReply: publishedFinalAssistantMessage,
+      commentaryPublication,
+      responsePublication,
+      hasPlanPublication: snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
+    });
+    const deferStandaloneCommentary =
+      notificationTarget === "finalAssistant" && commentaryPublication.standaloneMessages.length > 0;
+
+    if (!deferStandaloneCommentary) {
+      await this.publishStandaloneCommentary(context, commentaryPublication, {
+        mentionPrimaryMessage: notificationTarget === "commentary"
+      });
+    }
+
+    let finalAssistantMessageId: number | null = null;
     if (!publishesPlanOnly && publishedFinalAssistantMessage) {
-      await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication);
+      finalAssistantMessageId = await this.publishFinalTurnText(context, finalText, commentaryPublication, responsePublication, {
+        mentionTurnStarter: notificationTarget === "finalAssistant"
+      });
     } else {
       await this.publishTerminalStatus(context, policy.terminalStatus);
     }
 
-    if (responsePublication?.oversizeNoticeText) {
+    const fallbackNotificationTarget = finalAssistantMessageId === null && publishedFinalAssistantMessage
+      ? this.resolveNotificationTarget({
+          hasFinalAssistantReply: false,
+          commentaryPublication,
+          responsePublication,
+          hasPlanPublication: snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0
+        })
+      : notificationTarget;
+
+    if (deferStandaloneCommentary) {
+      await this.publishStandaloneCommentary(context, commentaryPublication, {
+        mentionPrimaryMessage: fallbackNotificationTarget === "commentary"
+      });
+    }
+
+    if (finalAssistantMessageId === null && publishedFinalAssistantMessage) {
+      await this.publishStandaloneResponse(context, responsePublication, {
+        mentionPrimaryMessage: fallbackNotificationTarget === "response"
+      });
+    } else if (responsePublication?.oversizeNoticeText) {
       await this.publishArtifactOversizeNotice(context, responsePublication.oversizeNoticeText);
+    }
+
+    if (snapshot.planText.trim().length > 0 && context.publishedPlanMessages === 0) {
+      await this.callbacks.publishCompletedPlan(
+        context,
+        {
+          itemId: this.deps.runtime.getLatestPlanItemId(context.turnId) ?? "plan-final",
+          text: snapshot.planText
+        },
+        {
+          mentionTurnStarter: fallbackNotificationTarget === "plan"
+        }
+      );
     }
 
     if (policy.publishFooter) {
@@ -165,14 +213,19 @@ export class TurnFinalizer {
     context: TurnContext,
     text: string,
     commentaryPublication: PlannedArtifactPublication,
-    responsePublication: PlannedArtifactPublication | null
+    responsePublication: PlannedArtifactPublication | null,
+    options?: { mentionTurnStarter?: boolean }
   ): Promise<number | null> {
     const attachment = this.resolveAssistantAttachment(responsePublication, commentaryPublication);
+    const renderedMessage = buildRenderedAssistantMessage(text, {
+      includeContinueInViewNote: attachment.includeContinueInViewNote
+    });
+    const message = options?.mentionTurnStarter
+      ? prefixTelegramUsernameMention(renderedMessage, context.telegramUsername)
+      : renderedMessage;
 
     const messageId = await context.visibleMessageHandle.publishFinalAssistantMessage(
-      buildRenderedAssistantMessage(text, {
-        includeContinueInViewNote: attachment.includeContinueInViewNote
-      }),
+      message,
       {
         ...(attachment.replyMarkup ? { replyMarkup: attachment.replyMarkup } : {}),
         disableNotification: false
@@ -230,16 +283,6 @@ export class TurnFinalizer {
     }
   }
 
-  private async publishStandaloneCommentary(context: TurnContext, publication: PlannedArtifactPublication): Promise<void> {
-    await this.publishStandaloneAgentMessages(context, publication.standaloneMessages, {
-      notifyFirstMessage: true
-    });
-
-    if (publication.oversizeNoticeText) {
-      await this.publishArtifactOversizeNotice(context, publication.oversizeNoticeText);
-    }
-  }
-
   private async publishCompletionFooter(context: TurnContext, snapshot: ResolvedTurnSnapshot): Promise<void> {
     const rendered = buildRenderedCompletionFooter(this.buildCompletionFooterDetails(context, snapshot));
     const replyMarkup = await this.deps.buildTopicCommandReplyMarkup?.();
@@ -284,17 +327,99 @@ export class TurnFinalizer {
   private async publishStandaloneAgentMessages(
     context: TurnContext,
     messages: ArtifactPublication["standaloneMessages"],
-    options?: { notifyFirstMessage?: boolean }
+    options?: { notifyFirstMessage?: boolean; mentionPrimaryMessage?: boolean }
   ): Promise<void> {
     for (const [index, message] of messages.entries()) {
+      const renderedMessage: MentionableMessage =
+        options?.mentionPrimaryMessage && index === 0
+          ? prefixTelegramUsernameMention({ text: message.text }, context.telegramUsername)
+          : { text: message.text };
       await this.deps.messenger.sendMessage({
         chatId: context.chatId,
         topicId: context.topicId,
-        text: message.text,
+        text: renderedMessage.text,
+        ...(renderedMessage.entities ? { entities: renderedMessage.entities } : {}),
         replyMarkup: message.replyMarkup,
         disableNotification: options?.notifyFirstMessage && index === 0 ? false : true
       });
     }
+  }
+
+  private async publishStandaloneCommentary(
+    context: TurnContext,
+    publication: PlannedArtifactPublication,
+    options?: { mentionPrimaryMessage?: boolean }
+  ): Promise<void> {
+    await this.publishStandaloneAgentMessages(context, publication.standaloneMessages, {
+      notifyFirstMessage: true,
+      ...(options?.mentionPrimaryMessage !== undefined ? { mentionPrimaryMessage: options.mentionPrimaryMessage } : {})
+    });
+
+    if (publication.oversizeNoticeText) {
+      await this.publishArtifactOversizeNotice(
+        context,
+        options?.mentionPrimaryMessage
+          ? prefixTelegramUsernameMention({ text: publication.oversizeNoticeText }, context.telegramUsername).text
+          : publication.oversizeNoticeText
+      );
+    }
+  }
+
+  private async publishStandaloneResponse(
+    context: TurnContext,
+    publication: PlannedArtifactPublication | null,
+    options?: { mentionPrimaryMessage?: boolean }
+  ): Promise<void> {
+    if (!publication) {
+      return;
+    }
+
+    await this.publishStandaloneAgentMessages(context, publication.standaloneMessages, {
+      notifyFirstMessage: true,
+      ...(options?.mentionPrimaryMessage !== undefined ? { mentionPrimaryMessage: options.mentionPrimaryMessage } : {})
+    });
+
+    if (publication.oversizeNoticeText) {
+      await this.publishArtifactOversizeNotice(
+        context,
+        options?.mentionPrimaryMessage
+          ? prefixTelegramUsernameMention({ text: publication.oversizeNoticeText }, context.telegramUsername).text
+          : publication.oversizeNoticeText
+      );
+    }
+  }
+
+  private resolveNotificationTarget(input: {
+    hasFinalAssistantReply: boolean;
+    commentaryPublication: PlannedArtifactPublication;
+    responsePublication: PlannedArtifactPublication | null;
+    hasPlanPublication: boolean;
+  }): "finalAssistant" | "commentary" | "response" | "plan" | null {
+    if (input.hasFinalAssistantReply) {
+      return "finalAssistant";
+    }
+
+    if (input.commentaryPublication.standaloneMessages.length > 0) {
+      return "commentary";
+    }
+
+    if (input.responsePublication && input.responsePublication.standaloneMessages.length > 0) {
+      return "response";
+    }
+
+    if (input.hasPlanPublication) {
+      return "plan";
+    }
+
+    if (input.commentaryPublication.oversizeNoticeText) {
+      return "commentary";
+    }
+
+    if (input.responsePublication?.oversizeNoticeText) {
+      return "response";
+    }
+
+    return null;
   }
 
   private resolveAssistantAttachment(

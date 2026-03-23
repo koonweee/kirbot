@@ -23,6 +23,7 @@ import {
   type TurnLifecycleDependencies,
   TurnFinalizer
 } from "./turn-finalization";
+import { prefixTelegramUsernameMention, type MentionableMessage } from "./telegram-mention-prefix";
 
 export type { TurnContext } from "./turn-context";
 
@@ -70,6 +71,7 @@ export class TurnLifecycleCoordinator {
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       changedFilePaths: new Set(),
+      ...(message.telegramUsername !== undefined ? { telegramUsername: message.telegramUsername } : {}),
       mode,
       model,
       reasoningEffort,
@@ -452,24 +454,37 @@ export class TurnLifecycleCoordinator {
     });
   }
 
-  private async publishCompletedPlan(context: TurnContext, plan: { itemId: string; text: string }): Promise<number> {
-    const messageId = await this.sendMiniAppPlanMessage(context, plan.text);
+  private async publishCompletedPlan(
+    context: TurnContext,
+    plan: { itemId: string; text: string },
+    options?: { mentionTurnStarter?: boolean }
+  ): Promise<number> {
+    const messageId = await this.sendMiniAppPlanMessage(context, plan.text, options);
 
     context.publishedPlanMessages += 1;
     return messageId;
   }
 
-  private async sendMiniAppPlanMessage(context: TurnContext, markdownText: string): Promise<number> {
+  private async sendMiniAppPlanMessage(
+    context: TurnContext,
+    markdownText: string,
+    options?: { mentionTurnStarter?: boolean }
+  ): Promise<number> {
     try {
       const publications = buildPlanArtifactMessages(this.deps.planArtifactPublicUrl!, markdownText);
       let lastMessageId: number | null = null;
 
-      for (const publication of publications) {
+      for (const [index, publication] of publications.entries()) {
+        const renderedMessage: MentionableMessage =
+          options?.mentionTurnStarter && index === 0
+            ? prefixTelegramUsernameMention({ text: publication.text }, context.telegramUsername)
+            : { text: publication.text };
         lastMessageId = (
           await this.deps.messenger.sendMessage({
             chatId: context.chatId,
             topicId: context.topicId,
-            text: publication.text,
+            text: renderedMessage.text,
+            ...(renderedMessage.entities ? { entities: renderedMessage.entities } : {}),
             replyMarkup: publication.replyMarkup,
             disableNotification: lastMessageId === null ? false : true
           })
@@ -483,10 +498,14 @@ export class TurnLifecycleCoordinator {
       return lastMessageId;
     } catch (error) {
       if (error instanceof Error && error.message === "mini_app_artifact_too_large") {
+        const renderedMessage: MentionableMessage = options?.mentionTurnStarter
+          ? prefixTelegramUsernameMention(buildOversizePlanArtifactMessage(), context.telegramUsername)
+          : buildOversizePlanArtifactMessage();
         return this.deps.messenger.sendMessage({
           chatId: context.chatId,
           topicId: context.topicId,
-          ...buildOversizePlanArtifactMessage(),
+          text: renderedMessage.text,
+          ...(renderedMessage.entities ? { entities: renderedMessage.entities } : {}),
           disableNotification: false
         }).then((message) => message.messageId);
       }

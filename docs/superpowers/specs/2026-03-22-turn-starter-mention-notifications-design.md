@@ -1,0 +1,252 @@
+# Turn-Starter Mention Notifications Design
+
+## Summary
+
+Kirbot should mention the Telegram user who started the relevant turn or
+request when it sends a message that intentionally triggers a Telegram
+notification for that specific piece of work. The mention should be a plain
+`@username` prefix, and Kirbot should omit the mention entirely when the
+originating user has no Telegram username.
+
+This applies to turn-scoped assistant notifications and request-scoped
+intervention prompts. It does not apply to silent status updates, generic
+topic-level messages, or other notifications that are not tied to one user's
+request.
+
+## Goals
+
+- Make notification-bearing Kirbot messages visibly target the user who started
+  the relevant turn or request.
+- Preserve current notification behavior, adding a mention only where Kirbot
+  already sends a noisy message.
+- Keep the rule narrow and predictable so Kirbot does not over-mention users in
+  shared topics.
+- Cover edge cases where the only notifying output is an artifact-availability
+  message rather than a normal final assistant reply.
+
+## Non-Goals
+
+- Mentioning users who do not have a Telegram username.
+- Falling back to display names, user IDs, or `text_mention` entities.
+- Adding mentions to silent status bubbles, queue previews, provisioning
+  messages, startup footers, or other generic topic-level messages.
+- Mentioning every message in a completion path. Only the primary notifying
+  message for that turn or request should mention the user.
+- Redesigning Telegram delivery or notification policy beyond this mention
+  behavior.
+
+## Product Decisions
+
+### Mention Format
+
+- Use a literal `@username ` prefix at the start of the message body.
+- Do not create a fallback mention when `username` is absent.
+- Do not attempt direct user mentions by Telegram user ID or display name.
+
+### Mention Scope
+
+- Mention only when the outgoing message belongs to a specific user-started
+  turn or request.
+- Mention only on messages that Kirbot already sends with notifications
+  enabled.
+- Omit mentions on generic topic-level notifications even if they happen near a
+  user action.
+
+### Notification Selection
+
+- Each turn or request should have at most one primary notifying message that
+  gets the mention.
+- For turn completion, the primary notifying message is chosen by semantic
+  precedence, not by raw send order.
+- When a normal final assistant message is present, it is always the primary
+  notifying message for the turn even if standalone commentary is published
+  earlier in transport order.
+- For approval, permissions, or structured user-input requests, the prompt
+  message is the primary notifying message.
+- When no normal final assistant reply is sent, the primary notifying message
+  is whichever notification-enabled artifact or fallback message has the highest
+  precedence among the remaining completion outputs.
+
+### Turn Ownership
+
+- An active turn's starter is the `UserTurnMessage` that originally created that
+  turn.
+- Follow-up steers submitted into an already-active turn do not replace the
+  active turn starter for mention purposes.
+- Pending steers and queued follow-ups retain their own `telegramUsername`
+  while waiting.
+- If a queued follow-up is later promoted into a new turn, that new turn's
+  starter becomes the queued follow-up sender, not the starter of the previous
+  turn in the topic.
+
+## Current State
+
+Kirbot currently captures `userId` and `actorLabel` from Telegram updates but
+drops the sender's `username` before the message reaches the bridge. Outbound
+message paths already distinguish between silent and notifying sends via
+`disableNotification`, but they do not currently have a turn-starter mention
+concept.
+
+The relevant code paths are:
+
+- `apps/bot/src/index.ts` for Telegram ingress.
+- `packages/kirbot-core/src/domain.ts` for `UserTurnMessage`.
+- `packages/kirbot-core/src/bridge/turn-context.ts` and
+  `packages/kirbot-core/src/bridge/turn-lifecycle.ts` for active turn state.
+- `packages/kirbot-core/src/bridge/turn-finalization.ts` for final assistant,
+  commentary, response, and plan completion messages.
+- `packages/kirbot-core/src/bridge/request-coordinator.ts` for approval,
+  permissions, and user-input prompts.
+
+## Proposed Design
+
+### Capture And Carry Username
+
+- Extend inbound Telegram message handling in `apps/bot/src/index.ts` to read
+  `context.message.from.username`.
+- Add an optional `telegramUsername` field to `UserTurnMessage`.
+- Copy that username into active `TurnContext` so completion-time message
+  publishing can use it without reaching back into Telegram update objects.
+- Keep queued follow-ups and pending steers carrying the same
+  `telegramUsername` as the originating message so downstream turn-scoped
+  notifications remain attributable.
+
+### Mention Formatting Helper
+
+- Add a small helper in the bridge layer that prepends `@username ` to an
+  existing `{ text, entities }` payload.
+- If `username` is missing or blank, return the original payload unchanged.
+- When a message already has Telegram entities, shift all entity offsets by the
+  UTF-16 length of the prefix so existing formatting remains correct.
+- Keep the helper string-based. No new Telegram entity type is required because
+  the requested behavior is the visible `@username` text itself.
+
+### Turn-Scoped Notification Publishing
+
+Turn finalization should choose the primary notifying message for the turn, then
+apply the mention only there.
+
+#### Normal Final Assistant Reply
+
+- When finalization publishes a normal final assistant message with
+  `disableNotification: false`, prepend the turn starter's `@username`.
+
+#### Commentary-Only Or Response-Only Output
+
+- If a turn's user-visible notifying output is the first standalone commentary
+  artifact message, prepend the turn starter's `@username` there.
+- If a turn's user-visible notifying output is the first standalone response
+  artifact message, prepend the turn starter's `@username` there.
+- This rule matters when the turn produces a notifying artifact-availability
+  message instead of a normal final assistant reply.
+
+#### Plan-Only Output
+
+- When a completed turn publishes only plan artifact messages, prepend the turn
+  starter's `@username` to the first notification-enabled publication on that
+  path.
+- If a plan-only completion also emits standalone commentary first, the
+  commentary publication remains the mention target because there is no final
+  assistant reply and commentary has higher precedence than plan publication.
+- If the first notification-enabled publication on the plan path is an oversize
+  fallback message, that fallback should receive the mention.
+
+### Request-Scoped Prompt Publishing
+
+- Approval prompts in `request-coordinator.ts` should mention the user who
+  started the associated turn or request.
+- Permissions approval prompts should do the same.
+- Structured user-input prompts should do the same.
+- These are request-scoped notification messages and should stay within the same
+  username-only rule.
+
+### Request Username Source Of Truth
+
+- Request-scoped prompt messages should resolve the username from the active
+  `TurnContext` using the request's `turnId` at the time the initial prompt is
+  created.
+- The initial prompt `sendMessage` is the only request-path message that should
+  receive the mention. Later `editMessageText` updates for the same pending
+  request should not add or preserve a mention prefix.
+- If `request-coordinator.ts` cannot resolve an active turn context or the turn
+  starter has no username, it should send the existing prompt text unchanged.
+- This design does not require persisting `telegramUsername` into
+  `PendingServerRequest` storage because the explicit fallback is to send the
+  prompt unmentioned if active turn state is unavailable at creation time.
+
+## Primary Notifying Message Rule
+
+The implementation should make the "primary notifying message" explicit rather
+than scattered across individual send calls.
+
+- Completion paths should choose the mention target by this precedence list:
+  - final assistant reply, when present
+  - otherwise the first standalone commentary publication, when present
+  - otherwise the first standalone response publication, when present
+  - otherwise the first standalone plan publication
+  - otherwise the first oversize fallback emitted on that path
+- Once that selection is made, only that first notifying message should receive
+  the mention.
+- Additional artifact chunks and any later notification-enabled sends in the
+  same completion path should remain unmentioned.
+
+This keeps shared-topic notification behavior predictable and avoids multiple
+mentions for one user action.
+
+## Messages That Must Not Mention
+
+- Status bubble sends and edits in `telegram-turn-surface.ts`.
+- Queue preview messages and updates.
+- Session provisioning notices.
+- Session startup footers and initial prompt mirrors.
+- Generic bridge messages such as invalid-command feedback or workspace
+  guidance.
+- Completion footer messages unless they become the sole primary notifying
+  message for a user-scoped path, which is not part of the current design.
+
+## Risks
+
+### Username Availability
+
+Some Telegram users do not have usernames. In those cases, Kirbot will emit the
+same notifying message it emits today, just without a mention. That is expected
+behavior, not an error condition.
+
+### Entity Offset Bugs
+
+Prepending text to messages with existing Telegram entities can corrupt
+formatting if offsets are not shifted in UTF-16 code units. The helper should
+centralize this logic rather than duplicating it across send sites.
+
+### Over-Mentioning In Shared Topics
+
+If the primary-notifying-message rule is not explicit, multiple messages in one
+completion path could mention the same user. The implementation should choose
+the notifying message once per path and keep every other message unchanged.
+
+## Verification Targets
+
+Add tests for:
+
+- Telegram ingress capturing `username` into `UserTurnMessage`.
+- Mention helper behavior with no username, simple plain text, and existing
+  entities.
+- Final assistant completion with a username.
+- Final assistant completion without a username.
+- Commentary-only notifying output.
+- Response-only notifying output.
+- Plan-only notifying output.
+- Oversize plan/commentary/response fallback messages when they are the
+  notifying path.
+- Approval prompts with mentions.
+- Permissions approval prompts with mentions.
+- Structured user-input prompts with mentions.
+- Silent status and queue preview paths remaining unmentioned.
+
+## Recommendation
+
+Implement the narrow username-only design: capture the initiating Telegram
+username at ingress, carry it through turn and request state, and prepend
+`@username` only on the primary notifying message for that specific turn or
+request. This solves the shared-topic notification targeting problem without
+changing Kirbot's broader notification policy.
