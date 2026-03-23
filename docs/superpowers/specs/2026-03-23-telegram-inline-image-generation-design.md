@@ -149,16 +149,35 @@ publication path immediately. This keeps image sends independent from:
 Turn finalization should remain focused on the text-centric outputs it already
 owns.
 
+### Concurrency Contract
+
+In the current bridge, turn-scoped Codex notifications are processed serially.
+The first implementation should preserve that model and allow successful
+generated-image publication to delay the per-turn notification chain while the
+download and Telegram upload are in flight.
+
+This is the narrowest correct contract for the first pass because it avoids:
+
+- introducing off-chain publication tasks
+- keeping extra turn state alive after runtime finalization
+- adding deduplication bookkeeping outside the existing notification ordering
+
+To keep this bounded, the remote-image fetch and Telegram send path must use
+explicit timeouts and size limits. If publication fails, Kirbot records the
+failure and then continues processing later turn notifications normally.
+
 ### Telegram Outbound Media Support
 
 Extend the Telegram transport with an outbound binary photo-send primitive.
 
 This should include:
 
-- a new `TelegramApi` method for photo sends
+- a new transport-neutral `TelegramApi` method for photo sends using raw bytes
+  plus optional filename and mime-type hints
 - a matching `TelegramMessenger` method that applies the same scheduling and
   policy discipline as other visible sends
-- bot-process wiring in `apps/bot/src/index.ts` through `grammy`
+- bot-process wiring in `apps/bot/src/index.ts` that translates the transport
+  payload into the corresponding `grammy` photo-send call
 
 The first version only needs single-photo sending. Albums and documents are out
 of scope.
@@ -181,7 +200,9 @@ should not become a general media framework in this pass.
 For each successful `imageGeneration` completion:
 
 1. Kirbot receives the completed item from Codex on `item/completed`.
-2. The lifecycle coordinator recognizes it as a successful generated image.
+2. The lifecycle coordinator recognizes it as a successful generated image using
+   the same first-pass predicate Kirbot already uses for presentation:
+   non-empty `result` plus `status` not matching `/fail/i`.
 3. Kirbot validates and downloads the remote image URL immediately.
 4. Kirbot sends the image into the same chat/topic as a standalone Telegram
    photo with no caption.
@@ -209,6 +230,10 @@ Failure stages should be explicit enough to distinguish:
 - `download`
 - `validation`
 - `telegram_send`
+
+Because the first implementation keeps image publication on the serialized
+notification path, these failures are recorded inline before later turn events
+continue.
 
 The first implementation should not fall back to `sendDocument`. If Telegram
 rejects the photo send, Kirbot should fail cleanly and surface that failure
