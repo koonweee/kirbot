@@ -709,7 +709,12 @@ class FakeTelegram implements TelegramApi {
     messageId: number;
     chatId: number;
     photo: Uint8Array;
-    options?: { message_thread_id?: number; disable_notification?: boolean };
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
   }> = [];
   drafts: Array<{
     chatId: number;
@@ -794,7 +799,12 @@ class FakeTelegram implements TelegramApi {
   async sendPhoto(
     chatId: number,
     photo: Uint8Array,
-    options?: { message_thread_id?: number; disable_notification?: boolean }
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    }
   ): Promise<{ message_id: number }> {
     if (this.nextSendPhotoError) {
       const error = this.nextSendPhotoError;
@@ -3644,6 +3654,12 @@ describe("TelegramCodexBridge", () => {
       const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
       expect(photoIndex).toBeGreaterThanOrEqual(0);
       expect(finalIndex).toBeGreaterThan(photoIndex);
+      expect(telegram.sentPhotos[0]?.options).toMatchObject({
+        message_thread_id: 777,
+        disable_notification: true,
+        file_name: "generated.png",
+        mime_type: "image/png"
+      });
     } finally {
       fetchSpy.mockRestore();
     }
@@ -3710,7 +3726,9 @@ describe("TelegramCodexBridge", () => {
           photo: new Uint8Array([9, 8, 7]),
           options: {
             message_thread_id: 777,
-            disable_notification: true
+            disable_notification: true,
+            file_name: "generated-two.png",
+            mime_type: "image/png"
           }
         }
       ]);

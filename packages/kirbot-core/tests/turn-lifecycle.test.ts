@@ -135,7 +135,12 @@ class FakeTelegram implements TelegramApi {
   sentPhotos: Array<{
     chatId: number;
     photo: Uint8Array;
-    options?: { message_thread_id?: number; disable_notification?: boolean };
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
   }> = [];
   drafts: Array<{
     chatId: number;
@@ -185,7 +190,12 @@ class FakeTelegram implements TelegramApi {
   async sendPhoto(
     chatId: number,
     photo: Uint8Array,
-    options?: { message_thread_id?: number; disable_notification?: boolean }
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    }
   ): Promise<{ message_id: number }> {
     if (this.nextSendPhotoError) {
       const error = this.nextSendPhotoError;
@@ -1473,7 +1483,9 @@ describe("TurnLifecycleCoordinator", () => {
           photo: new Uint8Array([1, 2, 3]),
           options: {
             message_thread_id: 777,
-            disable_notification: true
+            disable_notification: true,
+            file_name: "generated.png",
+            mime_type: "image/png"
           }
         }
       ]);
@@ -1533,7 +1545,10 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("records download failures in the activity log", async () => {
     const harness = createHarness();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("download timeout"));
+    const timeoutError = Object.assign(new Error("The operation was aborted due to timeout"), {
+      name: "TimeoutError"
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(timeoutError);
 
     try {
       harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
@@ -1658,6 +1673,10 @@ describe("TurnLifecycleCoordinator", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(harness.telegram.sentPhotos).toHaveLength(1);
+      expect(harness.telegram.sentPhotos[0]?.options).toMatchObject({
+        file_name: "duplicate.png",
+        mime_type: "image/png"
+      });
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       harness.coordinator.activateTurn(message("Next turn", 2), "thread-1", "turn-2", "gpt-5-codex");
@@ -1672,6 +1691,16 @@ describe("TurnLifecycleCoordinator", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1, 2, 3], [4, 5, 6]]);
+      expect(harness.telegram.sentPhotos.map((entry) => entry.options)).toEqual([
+        expect.objectContaining({
+          file_name: "one.png",
+          mime_type: "image/png"
+        }),
+        expect.objectContaining({
+          file_name: "two.png",
+          mime_type: "image/png"
+        })
+      ]);
     } finally {
       fetchSpy.mockRestore();
     }

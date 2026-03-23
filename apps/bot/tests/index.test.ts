@@ -318,8 +318,13 @@ describe("bot entrypoint routing", () => {
           telegramApi?: {
             sendPhoto?: (
               chatId: number,
-              photo: { source: Uint8Array; filename?: string } | string,
-              options?: { message_thread_id?: number; disable_notification?: boolean }
+              photo: Uint8Array,
+              options?: {
+                fileName?: string;
+                mimeType?: string;
+                message_thread_id?: number;
+                disable_notification?: boolean;
+              }
             ) => Promise<unknown>;
           };
         }
@@ -328,10 +333,13 @@ describe("bot entrypoint routing", () => {
     expect(runtimeArgs?.telegramApi?.sendPhoto).toBeTypeOf("function");
 
     const photo = {
-      source: new Uint8Array([4, 5, 6]),
-      filename: "generated-image.png"
+      bytes: new Uint8Array([4, 5, 6]),
+      fileName: "generated-image.png",
+      mimeType: "image/png"
     };
-    await runtimeArgs!.telegramApi!.sendPhoto!(123, photo, {
+    await runtimeArgs!.telegramApi!.sendPhoto!(123, photo.bytes, {
+      fileName: photo.fileName,
+      mimeType: photo.mimeType,
       message_thread_id: 777,
       disable_notification: true
     });
