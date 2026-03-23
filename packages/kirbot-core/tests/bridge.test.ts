@@ -3710,10 +3710,14 @@ describe("TelegramCodexBridge", () => {
       secondPhotoGate.resolve();
       await waitForAsyncNotifications();
 
-      const photoIndex = telegram.events.findIndex((event) => event.startsWith("photo:"));
+      const photoEvents = telegram.events.filter((event) => event.startsWith("photo:"));
       const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
-      expect(photoIndex).toBeGreaterThanOrEqual(0);
-      expect(finalIndex).toBeGreaterThan(photoIndex);
+      const firstPhotoIndex = telegram.events.indexOf(photoEvents[0]);
+      const secondPhotoIndex = telegram.events.indexOf(photoEvents[1]);
+      expect(photoEvents).toHaveLength(2);
+      expect(firstPhotoIndex).toBeGreaterThanOrEqual(0);
+      expect(secondPhotoIndex).toBeGreaterThan(firstPhotoIndex);
+      expect(finalIndex).toBeGreaterThan(secondPhotoIndex);
       expect(telegram.sentPhotos).toHaveLength(2);
       expect(telegram.sentPhotos.map((entry) => entry.options?.file_name)).toEqual([
         "generated.png",

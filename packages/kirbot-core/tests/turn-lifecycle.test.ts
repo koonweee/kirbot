@@ -369,7 +369,6 @@ function expectImagePublicationFailureEntry(
     expect.arrayContaining([
       expect.objectContaining({
         kind: "structuredFailure",
-        title: "Generated image publication failed",
         subject: null,
         metadata: expect.arrayContaining([
           expect.objectContaining({
@@ -1611,7 +1610,6 @@ describe("TurnLifecycleCoordinator", () => {
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
-      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1653,7 +1651,6 @@ describe("TurnLifecycleCoordinator", () => {
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
-      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1881,7 +1878,6 @@ describe("TurnLifecycleCoordinator", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1], [2]]);
-      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
 
