@@ -166,6 +166,20 @@ To keep this bounded, the remote-image fetch and Telegram send path must use
 explicit timeouts and size limits. If publication fails, Kirbot records the
 failure and then continues processing later turn notifications normally.
 
+### Per-Turn Idempotence
+
+Active turn state should track a per-turn in-memory set of completed
+`imageGeneration` item ids that have already been published successfully or
+attempted definitively.
+
+Before Kirbot downloads or sends a generated image, it should check this set and
+skip publication if the item id is already present. Once Kirbot starts handling
+an item id, it should mark that id so replayed or duplicated notifications
+cannot publish the same image twice.
+
+This set should live with other active turn state and be cleared automatically
+when the turn is finalized.
+
 ### Telegram Outbound Media Support
 
 Extend the Telegram transport with an outbound binary photo-send primitive.
@@ -203,10 +217,12 @@ For each successful `imageGeneration` completion:
 2. The lifecycle coordinator recognizes it as a successful generated image using
    the same first-pass predicate Kirbot already uses for presentation:
    non-empty `result` plus `status` not matching `/fail/i`.
-3. Kirbot validates and downloads the remote image URL immediately.
-4. Kirbot sends the image into the same chat/topic as a standalone Telegram
+3. Kirbot checks the per-turn published-item-id set and skips the item if it
+   was already handled.
+4. Kirbot validates and downloads the remote image URL immediately.
+5. Kirbot sends the image into the same chat/topic as a standalone Telegram
    photo with no caption.
-5. Kirbot continues the turn normally; later text and finalization are
+6. Kirbot continues the turn normally; later text and finalization are
    unaffected.
 
 If multiple generated images arrive during one turn, the same flow runs once per
@@ -221,8 +237,9 @@ rejects the photo send:
 
 - Kirbot logs the failure with turn id, item id, URL, and failure stage
 - the turn continues normally
-- commentary should preserve a compact structured failure entry for the failed
-  image-generation item
+- Kirbot appends a dedicated structured activity-log entry for the publication
+  failure so commentary can surface it even though the upstream Codex
+  `imageGeneration` item itself was successful
 
 Failure stages should be explicit enough to distinguish:
 
@@ -237,7 +254,7 @@ continue.
 
 The first implementation should not fall back to `sendDocument`. If Telegram
 rejects the photo send, Kirbot should fail cleanly and surface that failure
-through the existing commentary/log path.
+through the new image-publication failure activity-log path.
 
 ## Testing
 
@@ -251,6 +268,8 @@ Add focused coverage for:
 - non-image response rejection
 - download timeout or download failure
 - Telegram photo-send failure
+- replay or duplicate notification coverage proving one `imageGeneration` item
+  does not publish twice
 - regression coverage showing turn finalization and final assistant text still
   behave correctly after immediate image publication
 
@@ -267,12 +286,6 @@ will need to adapt.
 Some valid image responses may still be rejected by Telegram as photos. This is
 acceptable in the first version so long as Kirbot fails cleanly and does not
 break the turn.
-
-### Duplicate Publication
-
-The image publication path must be tied to completed-item identity so the same
-`imageGeneration` event cannot send the same image twice during retries or
-replays.
 
 ## Rollout Strategy
 
