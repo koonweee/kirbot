@@ -390,6 +390,62 @@ describe("TelegramMessenger", () => {
     }
   });
 
+  it("logs superseded low-value deliveries when a replaceable edit is coalesced", async () => {
+    const telegram = new FakeTelegram();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn()
+    };
+    const messenger = new TelegramMessenger(telegram, logger);
+
+    const first = messenger.editMessageText({
+      chatId: 1,
+      messageId: 7,
+      text: "First",
+      coalesceKey: "status:1:7",
+      replacePending: true
+    });
+    const second = messenger.editMessageText({
+      chatId: 1,
+      messageId: 7,
+      text: "Second",
+      coalesceKey: "status:1:7",
+      replacePending: true
+    });
+
+    await Promise.all([first, second]);
+
+    expect(logger.info).toHaveBeenCalledWith("Telegram delivery superseded", {
+      deliveryClass: "visible_edit",
+      coalescingKey: "status:1:7"
+    });
+  });
+
+  it("logs non-429 terminal delivery failures", async () => {
+    const telegram = new FakeTelegram();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn()
+    };
+    const messenger = new TelegramMessenger(telegram, logger);
+    telegram.nextSendMessageError = new Error("boom");
+
+    await expect(
+      messenger.sendMessage({
+        chatId: 1,
+        topicId: 2,
+        text: "Fail me"
+      })
+    ).rejects.toThrow("boom");
+
+    expect(logger.warn).toHaveBeenCalledWith("Telegram delivery failed", {
+      deliveryClass: "visible_send",
+      error: expect.any(Error)
+    });
+  });
+
   it("keeps conservative default pacing for visible sends", async () => {
     vi.useFakeTimers();
 

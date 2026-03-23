@@ -20,7 +20,7 @@ import type { SandboxPolicy } from "@kirbot/codex-client/generated/codex/v2/Sand
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import type { ResolvedTurnSnapshot } from "@kirbot/core";
-import { createTelegramHarness, type TelegramHarness } from "../src/index";
+import { createTelegramHarness, RecordingTelegram, type TelegramHarness } from "../src/index";
 import type { AppServerEvent } from "@kirbot/codex-client";
 
 class ScriptedCodex implements BridgeCodexApi {
@@ -462,6 +462,25 @@ class ScriptedCodex implements BridgeCodexApi {
   }
 }
 
+function rateLimitError(retryAfterSeconds: number): Error & {
+  error_code: number;
+  parameters: {
+    retry_after: number;
+  };
+} {
+  const error = new Error("Too Many Requests") as Error & {
+    error_code: number;
+    parameters: {
+      retry_after: number;
+    };
+  };
+  error.error_code = 429;
+  error.parameters = {
+    retry_after: retryAfterSeconds
+  };
+  return error;
+}
+
 const harnesses: TelegramHarness[] = [];
 
 afterEach(async () => {
@@ -699,6 +718,204 @@ describe("Telegram harness", () => {
     expect(approvalEvent.options?.disable_notification).toBeUndefined();
   });
 
+  it("keeps the final assistant message when a visible edit is retried", async () => {
+    const codex = new ScriptedCodex("commandApproval");
+    codex.finalText = "Final answer";
+    const telegram = new RecordingTelegram(-1001);
+    const harness = await buildHarness(
+      codex,
+      telegram,
+      {
+        visibleSendSpacingMs: 0,
+        visibleSendBackoffAfter429Ms: 50,
+        visibleEditSpacingMs: 0,
+        visibleEditBackoffAfter429Ms: 50,
+        topicCreateSpacingMs: 0,
+        topicCreateBackoffAfter429Ms: 50,
+        chatActionSpacingMs: 0,
+        chatActionBackoffAfter429Ms: 50,
+        deleteSpacingMs: 0,
+        deleteBackoffAfter429Ms: 50,
+        callbackAnswerSpacingMs: 0,
+        callbackAnswerBackoffAfter429Ms: 0
+      }
+    );
+    harnesses.push(harness);
+
+    await harness.sendRootText("/thread Repro stuck status");
+    await waitForCondition(() =>
+      harness
+        .getTranscript()
+        .topics.some((topic) =>
+          topic.messages.some(
+            (message) =>
+              message.text.includes("Command approval needed")
+              && Array.isArray(message.inlineButtons)
+              && message.inlineButtons.length > 0
+          )
+        )
+    );
+
+    telegram.setNextEditMessageTextError(rateLimitError(1));
+
+    const approvalMessage = harness
+      .getTranscript()
+      .topics.flatMap((topic) => topic.messages)
+      .find(
+        (message) =>
+          message.text.includes("Command approval needed")
+          && Array.isArray(message.inlineButtons)
+          && message.inlineButtons.length > 0
+      );
+    expect(approvalMessage).toBeDefined();
+
+    await harness.pressButton({
+      messageId: approvalMessage!.messageId,
+      buttonText: "Allow once"
+    });
+    await harness.waitForIdle();
+
+    const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
+    const finalAnswerIndex = topicMessages.findIndex((message) => message.text === "Final answer");
+    const footerIndex = topicMessages.findIndex((message) => message.text.startsWith("<1s • "));
+    expect(finalAnswerIndex).toBeGreaterThanOrEqual(0);
+    expect(footerIndex).toBeGreaterThan(finalAnswerIndex);
+    expect(harness.getTelegramEvents().some((event) => event.type === "telegram.editMessageText")).toBe(true);
+  }, 15_000);
+
+  it("answers callback queries before retrying a queued approval edit", async () => {
+    const codex = new ScriptedCodex("commandApproval");
+    codex.finalText = "Approved result";
+    const telegram = new RecordingTelegram(-1001);
+    const harness = await buildHarness(
+      codex,
+      telegram,
+      {
+        visibleSendSpacingMs: 0,
+        visibleSendBackoffAfter429Ms: 50,
+        visibleEditSpacingMs: 0,
+        visibleEditBackoffAfter429Ms: 50,
+        topicCreateSpacingMs: 0,
+        topicCreateBackoffAfter429Ms: 50,
+        chatActionSpacingMs: 0,
+        chatActionBackoffAfter429Ms: 50,
+        deleteSpacingMs: 0,
+        deleteBackoffAfter429Ms: 50,
+        callbackAnswerSpacingMs: 0,
+        callbackAnswerBackoffAfter429Ms: 0
+      }
+    );
+    harnesses.push(harness);
+
+    await harness.sendRootText("/thread Run the tests");
+    await waitForCondition(() =>
+      harness
+        .getTranscript()
+        .topics.some((topic) =>
+          topic.messages.some(
+            (message) =>
+              message.text.includes("Command approval needed")
+              && Array.isArray(message.inlineButtons)
+              && message.inlineButtons.length > 0
+          )
+        )
+    );
+
+    const approvalMessage = harness
+      .getTranscript()
+      .topics.flatMap((topic) => topic.messages)
+      .find(
+        (message) =>
+          message.text.includes("Command approval needed")
+          && Array.isArray(message.inlineButtons)
+          && message.inlineButtons.length > 0
+      );
+    expect(approvalMessage).toBeDefined();
+
+    telegram.setNextEditMessageTextError(rateLimitError(1));
+
+    const eventsBeforePress = harness.getTelegramEvents().length;
+    await harness.pressButton({
+      messageId: approvalMessage!.messageId,
+      buttonText: "Allow once"
+    });
+    await harness.waitForIdle();
+
+    const callbackEvents = harness.getTelegramEvents().slice(eventsBeforePress);
+    const callbackEventIndex = callbackEvents.findIndex((event) => event.type === "telegram.answerCallbackQuery");
+    const approvalEditIndex = callbackEvents
+      .findIndex(
+        (event) =>
+          event.type === "telegram.editMessageText"
+          && event.text.includes('Resolved item/commandExecution/requestApproval with "accept".')
+      );
+    expect(callbackEventIndex).toBeGreaterThanOrEqual(0);
+    expect(approvalEditIndex).toBeGreaterThan(callbackEventIndex);
+  }, 15_000);
+
+  it("retries temporary 429s on topic creation", async () => {
+    const telegram = new RecordingTelegram(-1001);
+    telegram.setNextCreateForumTopicError(rateLimitError(1));
+    const harness = await buildHarness(
+      new ScriptedCodex("complete"),
+      telegram,
+      {
+        visibleSendSpacingMs: 0,
+        visibleSendBackoffAfter429Ms: 50,
+        visibleEditSpacingMs: 0,
+        visibleEditBackoffAfter429Ms: 50,
+        topicCreateSpacingMs: 0,
+        topicCreateBackoffAfter429Ms: 50,
+        chatActionSpacingMs: 0,
+        chatActionBackoffAfter429Ms: 50,
+        deleteSpacingMs: 0,
+        deleteBackoffAfter429Ms: 50,
+        callbackAnswerSpacingMs: 0,
+        callbackAnswerBackoffAfter429Ms: 0
+      }
+    );
+    harnesses.push(harness);
+
+    await harness.sendRootText("/plan Ship the fix");
+    await harness.waitForIdle();
+
+    const transcript = harness.getTranscript();
+    expect(transcript.topics).toHaveLength(1);
+    expect(transcript.topics[0]?.messages.some((message) => message.text === "Harness reply")).toBe(true);
+    expect(harness.getTelegramEvents().some((event) => event.type === "telegram.createForumTopic")).toBe(true);
+  }, 15_000);
+
+  it("retries temporary 429s on visible completion delivery", async () => {
+    const telegram = new RecordingTelegram(-1001);
+    telegram.setNextSendMessageError(rateLimitError(1));
+    const harness = await buildHarness(
+      new ScriptedCodex("complete"),
+      telegram,
+      {
+        visibleSendSpacingMs: 0,
+        visibleSendBackoffAfter429Ms: 50,
+        visibleEditSpacingMs: 0,
+        visibleEditBackoffAfter429Ms: 50,
+        topicCreateSpacingMs: 0,
+        topicCreateBackoffAfter429Ms: 50,
+        chatActionSpacingMs: 0,
+        chatActionBackoffAfter429Ms: 50,
+        deleteSpacingMs: 0,
+        deleteBackoffAfter429Ms: 50,
+        callbackAnswerSpacingMs: 0,
+        callbackAnswerBackoffAfter429Ms: 0
+      }
+    );
+    harnesses.push(harness);
+
+    await harness.sendRootText("Inspect the repo");
+    await harness.waitForIdle();
+
+    const transcript = harness.getTranscript();
+    expect(transcript.root.messages.some((message) => message.text === "Harness reply")).toBe(true);
+    expect(harness.getTelegramEvents().some((event) => event.type === "telegram.sendMessage")).toBe(true);
+  }, 15_000);
+
   it("does not recreate the status draft when a late approval request arrives during turn finalization", async () => {
     const codex = new ScriptedCodex("lateCommandApprovalDuringCompletion");
     codex.finalText = "Final answer";
@@ -822,12 +1039,31 @@ describe("Telegram harness", () => {
   });
 });
 
-async function buildHarness(codex: BridgeCodexApi): Promise<TelegramHarness> {
+async function buildHarness(
+  codex: BridgeCodexApi,
+  telegram?: RecordingTelegram,
+  messengerDeliveryPolicy?: Partial<{
+    callbackAnswerSpacingMs: number;
+    callbackAnswerBackoffAfter429Ms: number;
+    visibleSendSpacingMs: number;
+    visibleSendBackoffAfter429Ms: number;
+    topicCreateSpacingMs: number;
+    topicCreateBackoffAfter429Ms: number;
+    visibleEditSpacingMs: number;
+    visibleEditBackoffAfter429Ms: number;
+    chatActionSpacingMs: number;
+    chatActionBackoffAfter429Ms: number;
+    deleteSpacingMs: number;
+    deleteBackoffAfter429Ms: number;
+  }>
+): Promise<TelegramHarness> {
   const tempDir = mkdtempSync(join(tmpdir(), "kirbot-harness-test-"));
   const harness = await createTelegramHarness({
     config: createConfig(tempDir),
     stateDir: tempDir,
-    codexApi: codex
+    codexApi: codex,
+    ...(telegram ? { telegram } : {}),
+    ...(messengerDeliveryPolicy ? { messengerDeliveryPolicy } : {})
   });
   await harness.start();
   return harness;

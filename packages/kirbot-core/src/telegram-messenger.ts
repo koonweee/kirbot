@@ -3,9 +3,11 @@ import type { LoggerLike } from "./logging";
 import {
   TelegramDeliveryScheduler,
   type TelegramDeliveryClass,
-  type TelegramDeliveryPolicy,
+  type TelegramDeliveryPolicy as TelegramDeliveryPolicyConfig,
   type TelegramDeliverySupersededResult
 } from "./telegram-delivery-scheduler";
+
+export type { TelegramDeliveryClass, TelegramDeliveryPolicy } from "./telegram-delivery-scheduler";
 
 export type TelegramInlineKeyboardButton =
   | {
@@ -131,9 +133,16 @@ export class TelegramMessenger {
   constructor(
     private readonly telegram: TelegramApi,
     private readonly logger: LoggerLike = console,
-    deliveryPolicy?: Partial<TelegramDeliveryPolicy>
+    deliveryPolicy?: Partial<TelegramDeliveryPolicyConfig>
   ) {
-    this.#scheduler = new TelegramDeliveryScheduler(deliveryPolicy);
+    this.#scheduler = new TelegramDeliveryScheduler(deliveryPolicy, {
+      onSuperseded: event => {
+        this.logger.info("Telegram delivery superseded", event);
+      },
+      onFailure: event => {
+        this.logger.warn("Telegram delivery failed", event);
+      }
+    });
   }
 
   async createForumTopic(input: {
@@ -144,6 +153,9 @@ export class TelegramMessenger {
     const topic = await this.scheduleTelegramRequest("create forum topic", "topic_create", () =>
       this.telegram.createForumTopic(input.chatId, input.name, input.options)
     );
+    if (isTelegramDeliverySupersededResult(topic)) {
+      throw new Error("Unexpected telegram delivery superseded result for topic creation");
+    }
     return {
       topicId: topic.message_thread_id,
       name: topic.name
@@ -172,6 +184,9 @@ export class TelegramMessenger {
         })
       )
     );
+    if (isTelegramDeliverySupersededResult(message)) {
+      throw new Error("Unexpected telegram delivery superseded result for message send");
+    }
     return { messageId: message.message_id };
   }
 
@@ -199,8 +214,8 @@ export class TelegramMessenger {
               : undefined
           ),
         {
-          coalesceKey: input.coalesceKey,
-          replacePending: input.replacePending
+          ...(input.coalesceKey !== undefined ? { coalesceKey: input.coalesceKey } : {}),
+          ...(input.replacePending !== undefined ? { replacePending: input.replacePending } : {})
         }
       )
     );
@@ -228,8 +243,8 @@ export class TelegramMessenger {
               : undefined
           ),
         {
-          coalesceKey: options?.coalesceKey,
-          replacePending: options?.replacePending
+          ...(options?.coalesceKey !== undefined ? { coalesceKey: options.coalesceKey } : {}),
+          ...(options?.replacePending !== undefined ? { replacePending: options.replacePending } : {})
         }
       )
     );
@@ -300,7 +315,7 @@ export class TelegramMessenger {
         }
       },
       replaceable: hints?.replacePending ?? false,
-      coalescingKey: hints?.coalesceKey
+      ...(hints?.coalesceKey !== undefined ? { coalescingKey: hints.coalesceKey } : {})
     });
   }
 

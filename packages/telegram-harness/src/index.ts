@@ -11,6 +11,7 @@ import {
   type AppLogTarget,
   type BridgeCodexApi,
   type KirbotRuntime,
+  type TelegramDeliveryPolicy,
   type UserTurnInput,
   type UserTurnMessage
 } from "@kirbot/core";
@@ -26,6 +27,8 @@ export type CreateTelegramHarnessOptions = {
   codexApi?: BridgeCodexApi;
   workspaceMode?: "empty" | "inherit";
   workspaceDir?: string;
+  telegram?: RecordingTelegram;
+  messengerDeliveryPolicy?: Partial<TelegramDeliveryPolicy>;
 };
 
 export type WaitForIdleOptions = {
@@ -68,7 +71,7 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
   const config = await buildHarnessConfig(baseConfig, stateDir, options);
   const logTarget = new BufferingLogTarget();
   const harnessLogger = createSourceLogger(logTarget, "harness");
-  const telegram = new RecordingTelegram(config.telegram.workspaceChatId);
+  const telegram = options.telegram ?? new RecordingTelegram(config.telegram.workspaceChatId);
 
   let runtime: KirbotRuntime | null = null;
   let nextMessageId = 1;
@@ -85,6 +88,7 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       config,
       telegramApi: telegram,
       logTarget,
+      ...(options.messengerDeliveryPolicy ? { messengerDeliveryPolicy: options.messengerDeliveryPolicy } : {}),
       ...(options.codexApi ? { codexApi: options.codexApi } : {})
     });
     harnessLogger.info(
@@ -268,6 +272,8 @@ class BufferingLogTarget implements AppLogTarget {
     return structuredClone(this.#entries);
   }
 }
+
+export { RecordingTelegram } from "./recording-telegram";
 
 async function buildHarnessConfig(
   baseConfig: AppConfig,
