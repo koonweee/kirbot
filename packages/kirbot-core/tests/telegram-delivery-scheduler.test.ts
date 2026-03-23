@@ -226,7 +226,7 @@ describe("TelegramDeliveryScheduler", () => {
         retryAfterMs: 1000,
         effectivePauseMs: 3000
       });
-      expect(pausedEvents[0].pauseUntil).toEqual(expect.any(Number));
+      expect(pausedEvents[0]?.pauseUntil).toEqual(expect.any(Number));
 
       await vi.advanceTimersByTimeAsync(1000);
       await Promise.resolve();

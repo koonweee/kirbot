@@ -5002,8 +5002,7 @@ describe("TelegramCodexBridge", () => {
       planText: "",
       cwd: "/workspace",
       branch: "main",
-      mode: "default",
-      changedFiles: []
+      changedFiles: 0
     };
 
     const blockedDelete = deferred<void>();
@@ -6376,6 +6375,8 @@ describe("TelegramCodexBridge", () => {
             id: "choice",
             header: "Choice",
             question: "Choose how to proceed",
+            isOther: false,
+            isSecret: false,
             options: [
               {
                 label: "Standard",

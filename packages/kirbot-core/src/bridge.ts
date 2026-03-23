@@ -88,7 +88,7 @@ import {
   type InlineKeyboardMarkup,
   type ReplyKeyboardMarkup,
   type TelegramApi,
-  type TelegramDeliveryHints,
+  type TelegramDeliveryClass,
   type TelegramDeliveryPolicy,
   type TelegramReplyMarkup
 } from "./telegram-messenger";
@@ -2577,7 +2577,7 @@ export class TelegramCodexBridge {
     text: string;
     entities?: MessageEntity[];
     replyMarkup?: InlineKeyboardMarkup;
-    deliveryClass?: TelegramDeliveryHints["deliveryClass"];
+    deliveryClass?: TelegramDeliveryClass;
     coalesceKey?: string;
     replacePending?: boolean;
   }): Promise<unknown> {
@@ -2712,7 +2712,7 @@ export class TelegramCodexBridge {
         queueState,
         activeTurn?.turnId ?? null,
         activeTurn?.stopRequested ?? false
-      )
+      ) ?? null
     });
 
     const existingSync = this.#queuePreviewSyncs.get(key);
@@ -2728,7 +2728,7 @@ export class TelegramCodexBridge {
     await sync;
   }
 
-  private async #drainQueuePreview(key: string): Promise<void> {
+  async #drainQueuePreview(key: string): Promise<void> {
     while (true) {
       const desired = this.#queuePreviewDesiredState.get(key);
       if (!desired) {

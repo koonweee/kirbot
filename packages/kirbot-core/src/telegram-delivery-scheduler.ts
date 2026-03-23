@@ -102,7 +102,6 @@ export class TelegramDeliveryScheduler {
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private pumpScheduled = false;
   private pumpRunning = false;
-  private needsPump = false;
   private nextId = 1;
   private nextOrder = 1;
 
@@ -119,30 +118,30 @@ export class TelegramDeliveryScheduler {
       throw new Error("Replaceable telegram deliveries require a coalescingKey.");
     }
 
-    const pending: PendingTelegramDeliveryOperation<T> = {
+    const pending: PendingTelegramDeliveryOperation<unknown> = {
       id: this.nextId++,
       order: this.nextOrder++,
-      operation,
+      operation: operation as TelegramDeliveryOperation<unknown>,
       resolve: () => {},
       reject: () => {}
     };
 
     const promise = new Promise<T | TelegramDeliverySupersededResult>((resolve, reject) => {
-      pending.resolve = resolve;
-      pending.reject = reject;
+      pending.resolve = resolve as (value: unknown) => void;
+      pending.reject = reject as (reason: unknown) => void;
     });
 
     this.queueFor(operation.deliveryClass).push(pending);
 
-    if (operation.replaceable && operation.coalescingKey) {
+    if (operation.replaceable && operation.coalescingKey !== undefined) {
       this.coalescePending(operation.deliveryClass, operation.coalescingKey, pending);
     }
 
     this.safeInvokeHook(() =>
       this.hooks.onQueued?.({
         deliveryClass: operation.deliveryClass,
-        coalescingKey: operation.coalescingKey,
-        replaceable: operation.replaceable ?? false
+        replaceable: operation.replaceable ?? false,
+        ...(operation.coalescingKey !== undefined ? { coalescingKey: operation.coalescingKey } : {})
       })
     );
 
@@ -217,8 +216,6 @@ export class TelegramDeliveryScheduler {
   }
 
   private requestPump(): void {
-    this.needsPump = true;
-
     if (this.pumpRunning || this.pumpScheduled) {
       return;
     }
@@ -250,7 +247,6 @@ export class TelegramDeliveryScheduler {
           break;
         }
 
-        this.needsPump = false;
         const { pending, replaceableKey } = next;
         const deliveryClass = pending.operation.deliveryClass;
         this.lastDispatchAt.set(deliveryClass, Date.now());
@@ -258,7 +254,9 @@ export class TelegramDeliveryScheduler {
         try {
           const value = await pending.operation.execute();
           if (this.isCurrentReplaceable(replaceableKey, pending)) {
-            this.replaceablePending.delete(replaceableKey);
+            if (replaceableKey) {
+              this.replaceablePending.delete(replaceableKey);
+            }
             pending.resolve(value);
           }
         } catch (error) {
@@ -277,7 +275,9 @@ export class TelegramDeliveryScheduler {
           }
 
           if (isCurrentReplaceable) {
-            this.replaceablePending.delete(replaceableKey);
+            if (replaceableKey) {
+              this.replaceablePending.delete(replaceableKey);
+            }
           }
           pending.reject(error);
           this.safeInvokeHook(() => this.hooks.onFailure?.({ deliveryClass, error }));
@@ -299,10 +299,11 @@ export class TelegramDeliveryScheduler {
     const callbackCandidate = callbackQueue?.[0];
     if (callbackCandidate && this.isClassReady("callback_answer")) {
       callbackQueue?.shift();
+      const callbackKey = callbackCandidate.operation.coalescingKey;
       return {
         pending: callbackCandidate,
-        replaceableKey: callbackCandidate.operation.replaceable && callbackCandidate.operation.coalescingKey
-          ? this.replaceableKey("callback_answer", callbackCandidate.operation.coalescingKey)
+        replaceableKey: callbackCandidate.operation.replaceable && callbackKey !== undefined
+          ? this.replaceableKey("callback_answer", callbackKey)
           : null
       };
     }
@@ -332,12 +333,12 @@ export class TelegramDeliveryScheduler {
     }
 
     this.queues.get(bestClass)?.shift();
+    const coalescingKey = bestCandidate.operation.coalescingKey;
     return {
       pending: bestCandidate,
-      replaceableKey:
-        bestCandidate.operation.replaceable && bestCandidate.operation.coalescingKey
-          ? this.replaceableKey(bestClass, bestCandidate.operation.coalescingKey)
-          : null
+      replaceableKey: bestCandidate.operation.replaceable && coalescingKey !== undefined
+        ? this.replaceableKey(bestClass, coalescingKey)
+        : null
     };
   }
 
@@ -426,7 +427,8 @@ export class TelegramDeliveryScheduler {
   private nextEligibleWakeAt(): number | null {
     let earliest: number | null = null;
 
-    for (const deliveryClass of [...NON_CALLBACK_CLASSES, "callback_answer"]) {
+    const allClasses: TelegramDeliveryClass[] = [...NON_CALLBACK_CLASSES, "callback_answer"];
+    for (const deliveryClass of allClasses) {
       const queue = this.queues.get(deliveryClass);
       const head = queue?.[0];
       if (!head) {
