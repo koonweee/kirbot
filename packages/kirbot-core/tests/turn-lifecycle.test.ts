@@ -369,6 +369,7 @@ function expectImagePublicationFailureEntry(
     expect.arrayContaining([
       expect.objectContaining({
         kind: "structuredFailure",
+        title: "Generated image publication failed",
         subject: null,
         metadata: expect.arrayContaining([
           expect.objectContaining({
@@ -1607,6 +1608,7 @@ describe("TurnLifecycleCoordinator", () => {
         stage: "download",
         url: "https://example.com/download-failure.png"
       });
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
@@ -1648,6 +1650,7 @@ describe("TurnLifecycleCoordinator", () => {
         stage: "validation",
         url: "https://example.com/not-an-image.txt"
       });
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
@@ -1688,6 +1691,7 @@ describe("TurnLifecycleCoordinator", () => {
         stage: "telegram_send",
         url: "https://example.com/send-failure.png"
       });
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
