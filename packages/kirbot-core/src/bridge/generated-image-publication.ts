@@ -236,10 +236,12 @@ function normalizeHostname(hostname: string): string {
 
 function isBlockedIpv4Address(address: string): boolean {
   const octets = address.split(".").map((segment) => Number.parseInt(segment, 10));
-  const [firstOctet, secondOctet] = octets;
   if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
     return false;
   }
+
+  const firstOctet = octets[0]!;
+  const secondOctet = octets[1]!;
 
   return (
     firstOctet === 0 ||
@@ -272,12 +274,12 @@ function isBlockedIpv6Address(address: string): boolean {
 }
 
 async function validateResolvedHostname(url: URL): Promise<void> {
-  let addresses: Awaited<ReturnType<typeof dns.lookup>>;
+  let addresses: Array<{ address: string; family: number }>;
   try {
-    addresses = await dns.lookup(normalizeHostname(url.hostname), {
+    addresses = (await dns.lookup(normalizeHostname(url.hostname), {
       all: true,
       verbatim: true
-    });
+    })) as Array<{ address: string; family: number }>;
   } catch (error) {
     throw new GeneratedImagePublicationError("invalid_url", url.href, "Generated image hostname could not be validated", error);
   }
@@ -302,7 +304,7 @@ function parseIpv6Address(address: string): Uint8Array | null {
     return null;
   }
 
-  const [head, tail = ""] = normalizedAddress.split("::");
+  const [head = "", tail = ""] = normalizedAddress.split("::");
   const headParts = parseIpv6Segments(head);
   const tailParts = parseIpv6Segments(tail);
   if (!headParts || !tailParts) {
@@ -355,8 +357,8 @@ function parseIpv6Segments(input: string): string[] | null {
         return null;
       }
 
-      segments.push(((ipv4Bytes[0] << 8) | ipv4Bytes[1]).toString(16));
-      segments.push(((ipv4Bytes[2] << 8) | ipv4Bytes[3]).toString(16));
+      segments.push(((ipv4Bytes[0]! << 8) | ipv4Bytes[1]!).toString(16));
+      segments.push(((ipv4Bytes[2]! << 8) | ipv4Bytes[3]!).toString(16));
       continue;
     }
 
@@ -380,25 +382,25 @@ function isAllZeroes(bytes: Uint8Array): boolean {
 }
 
 function isIpv6Loopback(bytes: Uint8Array): boolean {
-  return bytes.slice(0, 15).every((value) => value === 0) && bytes[15] === 1;
+  return bytes.slice(0, 15).every((value) => value === 0) && bytes[15]! === 1;
 }
 
 function extractMappedIpv4(bytes: Uint8Array): string | null {
   const mappedPrefixMatches =
-    bytes.slice(0, 10).every((value) => value === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+    bytes.slice(0, 10).every((value) => value === 0) && bytes[10]! === 0xff && bytes[11]! === 0xff;
   if (!mappedPrefixMatches) {
     return null;
   }
 
-  return `${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`;
+  return `${bytes[12]!}.${bytes[13]!}.${bytes[14]!}.${bytes[15]!}`;
 }
 
 function isUniqueLocalIpv6(bytes: Uint8Array): boolean {
-  return (bytes[0] & 0xfe) === 0xfc;
+  return (bytes[0]! & 0xfe) === 0xfc;
 }
 
 function isLinkLocalIpv6(bytes: Uint8Array): boolean {
-  return bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80;
+  return bytes[0]! === 0xfe && (bytes[1]! & 0xc0) === 0x80;
 }
 
 function concatChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
