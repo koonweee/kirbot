@@ -3606,7 +3606,11 @@ describe("TelegramCodexBridge", () => {
     });
 
     const fetchGate = deferred<Response>();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockReturnValue(fetchGate.promise as never);
+    const laterFetchGate = deferred<Response>();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(fetchGate.promise as never)
+      .mockReturnValueOnce(laterFetchGate.promise as never);
 
     try {
       codex.emitNotification({
@@ -3620,6 +3624,20 @@ describe("TelegramCodexBridge", () => {
             status: "completed",
             revisedPrompt: null,
             result: "https://example.com/generated.png"
+          }
+        }
+      });
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-gen-1b",
+            status: "completed",
+            revisedPrompt: null,
+            result: "https://example.com/generated-later.png"
           }
         }
       });
@@ -3640,9 +3658,29 @@ describe("TelegramCodexBridge", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+      expect(telegram.sentPhotos).toHaveLength(0);
 
       fetchGate.resolve(
         new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(telegram.sentPhotos).toHaveLength(1);
+      expect(telegram.sentPhotos[0]?.options).toMatchObject({
+        message_thread_id: 777,
+        disable_notification: true,
+        file_name: "generated.png",
+        mime_type: "image/png"
+      });
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      laterFetchGate.resolve(
+        new Response(new Uint8Array([4, 5, 6]), {
           headers: {
             "Content-Type": "image/png"
           }
@@ -3654,10 +3692,15 @@ describe("TelegramCodexBridge", () => {
       const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
       expect(photoIndex).toBeGreaterThanOrEqual(0);
       expect(finalIndex).toBeGreaterThan(photoIndex);
-      expect(telegram.sentPhotos[0]?.options).toMatchObject({
+      expect(telegram.sentPhotos).toHaveLength(2);
+      expect(telegram.sentPhotos.map((entry) => entry.options?.file_name)).toEqual([
+        "generated.png",
+        "generated-later.png"
+      ]);
+      expect(telegram.sentPhotos[1]?.options).toMatchObject({
         message_thread_id: 777,
         disable_notification: true,
-        file_name: "generated.png",
+        file_name: "generated-later.png",
         mime_type: "image/png"
       });
     } finally {

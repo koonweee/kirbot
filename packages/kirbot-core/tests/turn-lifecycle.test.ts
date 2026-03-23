@@ -1534,7 +1534,11 @@ describe("TurnLifecycleCoordinator", () => {
       text: "Final answer",
       assistantText: "Final answer"
     });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const fetchStub = vi.fn(() => {
+      throw new Error("fetch should not be called for invalid image URLs");
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchStub as typeof fetch;
 
     try {
       harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
@@ -1547,7 +1551,7 @@ describe("TurnLifecycleCoordinator", () => {
         result: "ftp://example.com/generated.png"
       });
 
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fetchStub).not.toHaveBeenCalled();
       expect(harness.telegram.sentPhotos).toHaveLength(0);
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
@@ -1560,7 +1564,7 @@ describe("TurnLifecycleCoordinator", () => {
 
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
     } finally {
-      fetchSpy.mockRestore();
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -1605,13 +1609,15 @@ describe("TurnLifecycleCoordinator", () => {
       text: "Final answer",
       assistantText: "Final answer"
     });
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("plain text payload", {
+    const fetchStub = vi.fn(async () => {
+      return new Response("plain text payload", {
         headers: {
           "Content-Type": "text/plain"
         }
-      })
-    );
+      });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchStub as typeof fetch;
 
     try {
       harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
@@ -1624,7 +1630,7 @@ describe("TurnLifecycleCoordinator", () => {
         result: "https://example.com/not-an-image.txt"
       });
 
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchStub).toHaveBeenCalledTimes(1);
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-validation",
@@ -1635,7 +1641,7 @@ describe("TurnLifecycleCoordinator", () => {
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
     } finally {
-      fetchSpy.mockRestore();
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -1733,16 +1739,69 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
+  it("suppresses a replayed imageGeneration id even when the URL changes", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([7, 8, 9]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 1, 1]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-replay",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/replay-first.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-replay",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/replay-second.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(harness.telegram.sentPhotos).toHaveLength(1);
+      expect(harness.telegram.sentPhotos[0]).toMatchObject({
+        photo: new Uint8Array([7, 8, 9]),
+        options: expect.objectContaining({
+          file_name: "replay-first.png",
+          mime_type: "image/png"
+        })
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("rejects oversized image payloads as validation failures", async () => {
     const harness = createHarness();
     const oversizedBytes = new Uint8Array(12_000_001);
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(oversizedBytes, {
+    const fetchStub = vi.fn(async () => {
+      return new Response(oversizedBytes, {
         headers: {
           "Content-Type": "image/png"
         }
-      })
-    );
+      });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchStub as typeof fetch;
 
     try {
       harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
@@ -1755,7 +1814,7 @@ describe("TurnLifecycleCoordinator", () => {
         result: "https://example.com/oversized.png"
       });
 
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchStub).toHaveBeenCalledTimes(1);
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-oversized",
@@ -1763,7 +1822,7 @@ describe("TurnLifecycleCoordinator", () => {
         url: "https://example.com/oversized.png"
       });
     } finally {
-      fetchSpy.mockRestore();
+      globalThis.fetch = originalFetch;
     }
   });
 
