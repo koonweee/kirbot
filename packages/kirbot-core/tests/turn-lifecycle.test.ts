@@ -221,6 +221,17 @@ class FakeTelegram implements TelegramApi {
   }
 }
 
+function createTestMessenger(telegram: TelegramApi): TelegramMessenger {
+  return new TelegramMessenger(telegram, console, {
+    callbackAnswerSpacingMs: 0,
+    visibleSendSpacingMs: 0,
+    topicCreateSpacingMs: 0,
+    visibleEditSpacingMs: 0,
+    chatActionSpacingMs: 0,
+    deleteSpacingMs: 0
+  });
+}
+
 function createHarness(
   resolvedSnapshot:
     | string
@@ -270,7 +281,7 @@ function createHarness(
 
   const coordinator = new TurnLifecycleCoordinator({
     runtime,
-    messenger: new TelegramMessenger(telegram),
+    messenger: createTestMessenger(telegram),
     telegram,
     planArtifactPublicUrl: "https://example.com/mini-app",
     ...(options?.buildTopicCommandReplyMarkup
@@ -492,7 +503,7 @@ describe("TurnLifecycleCoordinator", () => {
     const telegram = new FakeTelegram();
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
@@ -541,7 +552,7 @@ describe("TurnLifecycleCoordinator", () => {
     const telegram = new FakeTelegram();
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
@@ -600,7 +611,7 @@ describe("TurnLifecycleCoordinator", () => {
     const telegram = new FakeTelegram();
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
@@ -664,7 +675,7 @@ describe("TurnLifecycleCoordinator", () => {
     const commentaryText = "Inspecting the rollout plan";
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`,
       releaseTurnFiles: async () => undefined,
@@ -709,7 +720,7 @@ describe("TurnLifecycleCoordinator", () => {
     const telegram = new FakeTelegram();
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: findSingleButtonSafeDualButtonUnsafeMiniAppUrl(),
       releaseTurnFiles: async () => undefined,
@@ -758,7 +769,7 @@ describe("TurnLifecycleCoordinator", () => {
     const telegram = new FakeTelegram();
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: "https://example.com/mini-app",
       releaseTurnFiles: async () => undefined,
@@ -832,7 +843,7 @@ describe("TurnLifecycleCoordinator", () => {
     const finalAnswer = longText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu", 90);
     const coordinator = new TurnLifecycleCoordinator({
       runtime: new BridgeTurnRuntime(),
-      messenger: new TelegramMessenger(telegram),
+      messenger: createTestMessenger(telegram),
       telegram,
       planArtifactPublicUrl: `https://example.com/${"mini-app/".repeat(1_500)}`,
       releaseTurnFiles: async () => undefined,

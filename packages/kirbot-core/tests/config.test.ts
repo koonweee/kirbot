@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("dotenv", () => ({
+  config: vi.fn()
+}));
+
 const originalEnv = { ...process.env };
 
 afterEach(() => {
