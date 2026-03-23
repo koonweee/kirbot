@@ -46,9 +46,13 @@ class FakeBot {
   async stop(): Promise<void> {}
 }
 
-vi.mock("grammy", () => ({
-  Bot: FakeBot
-}));
+vi.mock("grammy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("grammy")>();
+  return {
+    ...actual,
+    Bot: FakeBot
+  };
+});
 
 vi.mock("@kirbot/core", () => ({
   createKirbotRuntime: vi.fn(async () => ({
@@ -316,16 +320,14 @@ describe("bot entrypoint routing", () => {
     const runtimeArgs = vi.mocked(createKirbotRuntime).mock.calls.at(-1)?.[0] as
       | {
           telegramApi?: {
-            sendPhoto?: (
-              chatId: number,
-              photo: Uint8Array,
-              options?: {
-                file_name?: string;
-                mime_type?: string;
-                message_thread_id?: number;
-                disable_notification?: boolean;
-              }
-            ) => Promise<unknown>;
+            sendPhoto?: (input: {
+              chatId: number;
+              bytes: Uint8Array;
+              fileName?: string | null;
+              mimeType?: string | null;
+              topicId?: number | null;
+              disableNotification?: boolean;
+            }) => Promise<unknown>;
           };
         }
       | undefined;
@@ -337,11 +339,13 @@ describe("bot entrypoint routing", () => {
       file_name: "generated-image.png",
       mime_type: "image/png"
     };
-    await runtimeArgs!.telegramApi!.sendPhoto!(123, photo.bytes, {
-      file_name: photo.file_name,
-      mime_type: photo.mime_type,
-      message_thread_id: 777,
-      disable_notification: true
+    await runtimeArgs!.telegramApi!.sendPhoto!({
+      chatId: 123,
+      bytes: photo.bytes,
+      fileName: photo.file_name,
+      mimeType: photo.mime_type,
+      topicId: 777,
+      disableNotification: true
     });
 
     const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);

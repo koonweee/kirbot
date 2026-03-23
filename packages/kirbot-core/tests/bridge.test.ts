@@ -28,6 +28,7 @@ import {
   type TelegramEditOptions,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
+  type TelegramPhotoSendInput,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
 import { BridgeRequestCoordinator } from "../src/bridge/request-coordinator";
@@ -797,16 +798,7 @@ class FakeTelegram implements TelegramApi {
     return { message_id: this.messageCounter };
   }
 
-  async sendPhoto(
-    chatId: number,
-    photo: Uint8Array,
-    options?: {
-      message_thread_id?: number;
-      disable_notification?: boolean;
-      file_name?: string;
-      mime_type?: string;
-    }
-  ): Promise<{ message_id: number }> {
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
     if (this.nextSendPhotoError) {
       const error = this.nextSendPhotoError;
       this.nextSendPhotoError = null;
@@ -820,10 +812,16 @@ class FakeTelegram implements TelegramApi {
 
     this.messageCounter += 1;
     this.events.push(`photo:${this.messageCounter}`);
+    const options = {
+      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+      ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+      ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+    };
     this.sentPhotos.push(
-      options
-        ? { messageId: this.messageCounter, chatId, photo, options }
-        : { messageId: this.messageCounter, chatId, photo }
+      Object.keys(options).length > 0
+        ? { messageId: this.messageCounter, chatId: input.chatId, photo: input.bytes, options }
+        : { messageId: this.messageCounter, chatId: input.chatId, photo: input.bytes }
     );
     return { message_id: this.messageCounter };
   }

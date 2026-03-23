@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import type { Message } from "grammy/types";
 
 import { createKirbotRuntime, type TelegramApi, type TelegramCommandApi } from "@kirbot/core";
@@ -16,6 +16,11 @@ async function main(): Promise<void> {
     getForumTopicIconStickers: () => bot.api.getForumTopicIconStickers(),
     createForumTopic: (chatId, name, options) => bot.api.createForumTopic(chatId, name, options),
     sendMessage: (chatId, text, options) => bot.api.sendMessage(chatId, text, options),
+    sendPhoto: (input) =>
+      bot.api.sendPhoto(input.chatId, new InputFile(input.bytes, input.fileName ?? undefined), {
+        ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+        ...((input.disableNotification ?? true) ? { disable_notification: true } : {})
+      }),
     sendMessageDraft: (chatId, draftId, text, options) => bot.api.sendMessageDraft(chatId, draftId, text, options),
     sendChatAction: (chatId, action, options) => bot.api.sendChatAction(chatId, action, options),
     editMessageText: (chatId, messageId, text, options) => bot.api.editMessageText(chatId, messageId, text, options),

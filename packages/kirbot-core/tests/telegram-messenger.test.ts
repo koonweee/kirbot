@@ -7,6 +7,7 @@ import {
   type InlineKeyboardMarkup,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
+  type TelegramPhotoSendInput,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
 
@@ -82,16 +83,7 @@ class FakeTelegram implements TelegramApi {
     return { message_id: this.messageCounter };
   }
 
-  async sendPhoto(
-    chatId: number,
-    photo: Uint8Array,
-    options?: {
-      message_thread_id?: number;
-      disable_notification?: boolean;
-      file_name?: string;
-      mime_type?: string;
-    }
-  ): Promise<{ message_id: number }> {
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
     if (this.nextSendPhotoError) {
       const error = this.nextSendPhotoError;
       this.nextSendPhotoError = null;
@@ -99,8 +91,16 @@ class FakeTelegram implements TelegramApi {
     }
 
     this.messageCounter += 1;
-    this.operationLog.push(`photo:${photo.length}`);
-    this.sentPhotos.push(options ? { chatId, photo, options } : { chatId, photo });
+    this.operationLog.push(`photo:${input.bytes.length}`);
+    const options = {
+      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+      ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+      ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+    };
+    this.sentPhotos.push(
+      Object.keys(options).length > 0 ? { chatId: input.chatId, photo: input.bytes, options } : { chatId: input.chatId, photo: input.bytes }
+    );
     return { message_id: this.messageCounter };
   }
 
@@ -379,6 +379,10 @@ describe("TelegramMessenger", () => {
 
       await vi.advanceTimersByTimeAsync(5000);
       await expect(messagePromise).resolves.toEqual({ messageId: 1 });
+      expect(telegram.operationLog).toEqual(["send:Queued text"]);
+      expect(telegram.sentPhotos).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(250);
       await expect(photoPromise).resolves.toEqual({ messageId: 2 });
       expect(telegram.operationLog).toEqual(["send:Queued text", "photo:3"]);
       expect(telegram.sentMessages).toEqual([
