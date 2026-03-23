@@ -336,15 +336,23 @@ describe("bot entrypoint routing", () => {
       disable_notification: true
     });
 
-    expect(FakeBot.instances.at(-1)?.api.sendPhoto).toHaveBeenCalledWith(123, expect.objectContaining({
-      filename: "generated-image.png"
-    }), {
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const uploadedPhoto = sendPhotoCall?.[1] as
+      | {
+          filename?: string;
+          toRaw?: () => Promise<Uint8Array>;
+        }
+      | undefined;
+
+    expect(FakeBot.instances.at(-1)?.api.sendPhoto).toHaveBeenCalledWith(123, expect.anything(), {
       message_thread_id: 777,
       disable_notification: true
     });
-    expect(FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1)?.[1]).toMatchObject({
+    expect(uploadedPhoto).toMatchObject({
       filename: "generated-image.png"
     });
+    expect(uploadedPhoto?.toRaw).toBeTypeOf("function");
+    await expect(uploadedPhoto!.toRaw!()).resolves.toEqual(new Uint8Array([4, 5, 6]));
   });
 
   it("accepts callback queries from the workspace chat regardless of sender id", async () => {

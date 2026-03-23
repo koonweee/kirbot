@@ -348,19 +348,29 @@ function createHarness(
 
 function expectImagePublicationFailureEntry(
   entries: ReturnType<BridgeTurnRuntime["renderActivityLogEntries"]>,
-  stage: "invalid_url" | "download" | "validation" | "telegram_send"
+  input: {
+    stage: "invalid_url" | "download" | "validation" | "telegram_send";
+    result: string;
+  }
 ): void {
-  expect(entries).toEqual([
-    expect.objectContaining({
-      kind: "structuredFailure",
-      metadata: expect.arrayContaining([
-        expect.objectContaining({
-          label: "Stage",
-          value: stage
-        })
-      ])
-    })
-  ]);
+  expect(entries).toHaveLength(1);
+  expect(entries[0]).toMatchObject({
+    kind: "structuredFailure",
+    title: "Image generation failed",
+    subject: null,
+    metadata: [
+      {
+        label: "Status",
+        value: input.stage,
+        code: true
+      }
+    ],
+    detail: {
+      title: "Result",
+      value: input.result,
+      style: "quoteBlock"
+    }
+  });
 }
 
 describe("TurnLifecycleCoordinator", () => {
@@ -1495,26 +1505,30 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("records invalid_url image publication failures in the activity log", async () => {
-    const harness = createHarness();
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+  it("records invalid_url image publication failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
 
-    try {
-      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
-      await harness.coordinator.handleItemCompleted("turn-1", {
-        type: "imageGeneration",
-        id: "image-gen-invalid",
-        status: "completed",
-        revisedPrompt: null,
-        result: "ftp://example.com/generated.png"
-      });
+    await harness.coordinator.handleItemCompleted("turn-1", {
+      type: "imageGeneration",
+      id: "image-gen-invalid",
+      status: "completed",
+      revisedPrompt: null,
+      result: "ftp://example.com/generated.png"
+    });
 
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "invalid_url");
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+      stage: "invalid_url",
+      result: "ftp://example.com/generated.png"
+    });
+
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
   });
 
   it("records download failures in the activity log", async () => {
@@ -1533,7 +1547,10 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "download");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        stage: "download",
+        result: "https://example.com/download-failure.png"
+      });
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1561,7 +1578,10 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "validation");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        stage: "validation",
+        result: "https://example.com/not-an-image.txt"
+      });
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1590,18 +1610,28 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "telegram_send");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        stage: "telegram_send",
+        result: "https://example.com/send-failure.png"
+      });
     } finally {
       fetchSpy.mockRestore();
     }
   });
 
-  it("only publishes a replayed imageGeneration item id once", async () => {
+  it("suppresses duplicate imageGeneration ids within a turn but still publishes the same id on a later turn", async () => {
     const harness = createHarness();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
+      .mockResolvedValueOnce(
         new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([4, 5, 6]), {
           headers: {
             "Content-Type": "image/png"
           }
@@ -1628,6 +1658,20 @@ describe("TurnLifecycleCoordinator", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(harness.telegram.sentPhotos).toHaveLength(1);
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      harness.coordinator.activateTurn(message("Next turn", 2), "thread-1", "turn-2", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-2", {
+        type: "imageGeneration",
+        id: "image-gen-dup",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/duplicate-again.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1, 2, 3], [4, 5, 6]]);
     } finally {
       fetchSpy.mockRestore();
     }
