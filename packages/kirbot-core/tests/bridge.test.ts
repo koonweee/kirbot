@@ -4418,6 +4418,9 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
+    await waitForCondition(() =>
+      miniAppTelegram.sentMessages.some((message) => message.text === "@starter-user Final answer")
+    );
     expect(miniAppTelegram.sentMessages.find((message) => message.text === "@starter-user Final answer")).toBeTruthy();
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("@starter-user Commentary"))).toBe(false);
   });
@@ -4471,6 +4474,11 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
+    await waitForCondition(() =>
+      oversizeMiniAppTelegram.sentMessages.some(
+        (message) => message.text === "@starter-user Plan artifact was too large to encode"
+      )
+    );
     expect(
       oversizeMiniAppTelegram.sentMessages.find(
         (message) => message.text === "@starter-user Plan artifact was too large to encode"
@@ -6875,7 +6883,13 @@ describe("TelegramCodexBridge", () => {
   it("does not let a stale external resolution retry overwrite a later approval summary", async () => {
     const messenger = new TelegramMessenger(telegram, console, ZERO_SPACING_DELIVERY_POLICY);
     const messengerEditSpy = vi.spyOn(messenger, "editMessageText");
-    const coordinator = new BridgeRequestCoordinator(database, messenger, codex, async () => undefined);
+    const coordinator = new BridgeRequestCoordinator(
+      database,
+      messenger,
+      codex,
+      () => undefined,
+      async () => undefined
+    );
     const pending = await database.createPendingRequest({
       requestIdJson: JSON.stringify(90_100),
       method: "item/commandExecution/requestApproval",
@@ -6952,7 +6966,13 @@ describe("TelegramCodexBridge", () => {
   it("does not let a stale external resolution retry overwrite a later user-input completion", async () => {
     const messenger = new TelegramMessenger(telegram, console, ZERO_SPACING_DELIVERY_POLICY);
     const messengerEditSpy = vi.spyOn(messenger, "editMessageText");
-    const coordinator = new BridgeRequestCoordinator(database, messenger, codex, async () => undefined);
+    const coordinator = new BridgeRequestCoordinator(
+      database,
+      messenger,
+      codex,
+      () => undefined,
+      async () => undefined
+    );
     const pending = await database.createPendingRequest({
       requestIdJson: JSON.stringify(90_101),
       method: "item/tool/requestUserInput",
