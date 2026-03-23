@@ -361,6 +361,7 @@ describe("bot entrypoint routing", () => {
     });
     expect(uploadedPhoto?.toRaw).toBeTypeOf("function");
     await expect(uploadedPhoto!.toRaw!()).resolves.toEqual(new Uint8Array([4, 5, 6]));
+    expect(FakeBot.instances.at(-1)?.api.sendMessage).toHaveBeenCalledTimes(0);
   });
 
   it("accepts callback queries from the workspace chat regardless of sender id", async () => {

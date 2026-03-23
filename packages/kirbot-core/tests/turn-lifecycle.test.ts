@@ -1500,6 +1500,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/generated.png");
       expect(harness.telegram.sentPhotos).toEqual([
         {
           chatId: -1001,
@@ -1602,6 +1603,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/download-failure.png");
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-download",
@@ -1644,6 +1646,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchStub).toHaveBeenCalledTimes(1);
+      expect(fetchStub).toHaveBeenCalledWith("https://example.com/not-an-image.txt");
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-validation",
@@ -1685,6 +1688,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenCalledWith("https://example.com/send-failure.png");
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-telegram",
@@ -1738,6 +1742,8 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/duplicate.png");
+      expect(fetchSpy).toHaveBeenNthCalledWith(2, "https://example.com/duplicate.png");
       expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1, 2, 3], [4, 5, 6]]);
       expect(harness.telegram.sentPhotos.map((entry) => entry.options)).toEqual([
         expect.objectContaining({
@@ -1793,6 +1799,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/replay-first.png");
       expect(harness.telegram.sentPhotos).toHaveLength(1);
       expect(harness.telegram.sentPhotos[0]).toMatchObject({
         photo: new Uint8Array([7, 8, 9]),
@@ -1832,6 +1839,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchStub).toHaveBeenCalledTimes(1);
+      expect(fetchStub).toHaveBeenCalledWith("https://example.com/oversized.png");
       expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
         turnId: "turn-1",
         itemId: "image-gen-oversized",
@@ -1881,6 +1889,8 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/one.png");
+      expect(fetchSpy).toHaveBeenNthCalledWith(2, "https://example.com/two.png");
       expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1], [2]]);
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
