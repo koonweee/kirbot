@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createKirbotRuntime } from "@kirbot/core";
 
 const bridgeSpies = {
   handleUserTextMessage: vi.fn(async () => undefined),
@@ -18,6 +19,7 @@ class FakeBot {
     getForumTopicIconStickers: vi.fn(),
     createForumTopic: vi.fn(),
     sendMessage: vi.fn(async () => true),
+    sendPhoto: vi.fn(async () => true),
     sendMessageDraft: vi.fn(),
     sendChatAction: vi.fn(),
     editMessageText: vi.fn(),
@@ -171,6 +173,7 @@ describe("bot entrypoint routing", () => {
   beforeEach(() => {
     FakeBot.instances = [];
     answerCallbackQuery.mockClear();
+    vi.mocked(createKirbotRuntime).mockClear();
     for (const spy of Object.values(bridgeSpies)) {
       spy.mockClear();
     }
@@ -305,6 +308,34 @@ describe("bot entrypoint routing", () => {
 
     expect(bridgeSpies.handleUserTextMessage).not.toHaveBeenCalled();
     expect(FakeBot.instances.at(-1)?.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("wires core sendPhoto requests through grammy sendPhoto", async () => {
+    await loadHandlers();
+
+    const runtimeArgs = vi.mocked(createKirbotRuntime).mock.calls.at(-1)?.[0] as
+      | {
+          telegramApi?: {
+            sendPhoto?: (chatId: number, photo: Uint8Array, options?: { message_thread_id?: number; disable_notification?: boolean }) => Promise<unknown>;
+          };
+        }
+      | undefined;
+
+    expect(runtimeArgs?.telegramApi?.sendPhoto).toBeTypeOf("function");
+
+    await runtimeArgs!.telegramApi!.sendPhoto!(123, new Uint8Array([4, 5, 6]), {
+      message_thread_id: 777,
+      disable_notification: true
+    });
+
+    expect(FakeBot.instances.at(-1)?.api.sendPhoto).toHaveBeenCalledWith(
+      123,
+      new Uint8Array([4, 5, 6]),
+      {
+        message_thread_id: 777,
+        disable_notification: true
+      }
+    );
   });
 
   it("accepts callback queries from the workspace chat regardless of sender id", async () => {

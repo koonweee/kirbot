@@ -683,6 +683,7 @@ class FakeTelegram implements TelegramApi {
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
   nextSendMessageError: Error | null = null;
+  nextSendPhotoError: Error | null = null;
   nextEditMessageTextError: Error | null = null;
   nextDeleteMessageError: Error | null = null;
   nextAnswerCallbackQueryError: Error | null = null;
@@ -703,6 +704,12 @@ class FakeTelegram implements TelegramApi {
     chatId: number;
     text: string;
     options?: TelegramSendOptions;
+  }> = [];
+  sentPhotos: Array<{
+    messageId: number;
+    chatId: number;
+    photo: Uint8Array;
+    options?: { message_thread_id?: number; disable_notification?: boolean };
   }> = [];
   drafts: Array<{
     chatId: number;
@@ -780,6 +787,27 @@ class FakeTelegram implements TelegramApi {
     );
     this.appliedDrafts.push(
       options ? { chatId, draftId: this.messageCounter, text, options } : { chatId, draftId: this.messageCounter, text }
+    );
+    return { message_id: this.messageCounter };
+  }
+
+  async sendPhoto(
+    chatId: number,
+    photo: Uint8Array,
+    options?: { message_thread_id?: number; disable_notification?: boolean }
+  ): Promise<{ message_id: number }> {
+    if (this.nextSendPhotoError) {
+      const error = this.nextSendPhotoError;
+      this.nextSendPhotoError = null;
+      throw error;
+    }
+
+    this.messageCounter += 1;
+    this.events.push(`photo:${this.messageCounter}`);
+    this.sentPhotos.push(
+      options
+        ? { messageId: this.messageCounter, chatId, photo, options }
+        : { messageId: this.messageCounter, chatId, photo }
     );
     return { message_id: this.messageCounter };
   }
@@ -3551,6 +3579,142 @@ describe("TelegramCodexBridge", () => {
       markdownText:
         ':::details Logs (1)\n**Command failed**\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n> FAIL bridge.test.ts\n> Error: expected "waiting · 6s" to equal "waiting · 5s"\n:::'
     });
+  });
+
+  it("preserves item/completed ordering while a generated image is being published", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 80,
+      updateId: 90,
+      userId: 42,
+      text: "Generate an image and then finish the turn"
+    });
+
+    const fetchGate = deferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockReturnValue(fetchGate.promise as never);
+
+    try {
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-gen-1",
+            status: "completed",
+            revisedPrompt: null,
+            result: "https://example.com/generated.png"
+          }
+        }
+      });
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "completed",
+            error: null
+          }
+        }
+      });
+
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      fetchGate.resolve(
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+      await waitForAsyncNotifications();
+
+      const photoIndex = telegram.events.findIndex((event) => event.startsWith("photo:"));
+      const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
+      expect(photoIndex).toBeGreaterThanOrEqual(0);
+      expect(finalIndex).toBeGreaterThan(photoIndex);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("still publishes the final assistant text after an earlier inline image send", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 81,
+      updateId: 91,
+      userId: 42,
+      text: "Generate an image, then provide the answer"
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([9, 8, 7]), {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
+
+    try {
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-gen-2",
+            status: "completed",
+            revisedPrompt: null,
+            result: "https://example.com/generated-two.png"
+          }
+        }
+      });
+      await waitForAsyncNotifications();
+
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "completed",
+            error: null
+          }
+        }
+      });
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(telegram.sentPhotos).toEqual([
+        {
+          messageId: expect.any(Number),
+          chatId: -1001,
+          photo: new Uint8Array([9, 8, 7]),
+          options: {
+            message_thread_id: 777,
+            disable_notification: true
+          }
+        }
+      ]);
+
+      const answerMessage = getFinalAnswerMessage(telegram);
+      expect(answerMessage?.text).toBe("Final answer");
+      expect(telegram.events.findIndex((event) => event.startsWith("photo:"))).toBeLessThan(
+        telegram.events.findIndex((event) => event === "message:Final answer")
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("falls back to a standalone commentary stub when combined response and commentary buttons exceed the markup budget", async () => {
