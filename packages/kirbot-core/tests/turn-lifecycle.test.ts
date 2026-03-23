@@ -69,17 +69,17 @@ function getInlineButtonTexts(entry: { options?: Record<string, unknown> } | und
   );
 }
 
-function getWebAppUrlByButtonText(
+function getButtonUrlByButtonText(
   entry: { options?: Record<string, unknown> } | undefined,
   buttonText: string
 ): string | null {
   return (
     ((entry?.options?.reply_markup as {
-      inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>>;
+      inline_keyboard?: Array<Array<{ text?: string; url?: string }>>;
     } | undefined)
       ?.inline_keyboard?.flat()
       .find((button) => button.text === buttonText)
-      ?.web_app?.url ?? null)
+      ?.url ?? null)
   );
 }
 
@@ -378,75 +378,88 @@ describe("TurnLifecycleCoordinator", () => {
   });
 
   it("renders spawn-agent progress in the live status bubble with fallback agent labels", async () => {
-    const harness = createHarness();
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
 
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-    await harness.coordinator.publishCurrentStatus("turn-1", true);
-    await harness.coordinator.handleItemStarted("turn-1", {
-      type: "collabAgentToolCall",
-      id: "agent-1",
-      tool: "spawnAgent",
-      status: "inProgress",
-      senderThreadId: "thread-1",
-      receiverThreadIds: ["thread-2", "thread-3"],
-      prompt: "Explore the repo",
-      model: "gpt-5",
-      reasoningEffort: "high",
-      agentsStates: {}
-    });
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+      await harness.coordinator.publishCurrentStatus("turn-1", true);
+      await harness.coordinator.handleItemStarted("turn-1", {
+        type: "collabAgentToolCall",
+        id: "agent-1",
+        tool: "spawnAgent",
+        status: "inProgress",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["thread-2", "thread-3"],
+        prompt: "Explore the repo",
+        model: "gpt-5",
+        reasoningEffort: "high",
+        agentsStates: {}
+      });
 
-    expect(harness.telegram.drafts.at(-1)?.text).toBe(
-      "spawning agent · 0s\n\nspawning agent\n- agent 1: pending\n- agent 2: pending"
-    );
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe(
+        "spawning agent · 12s\n\nspawning agent\n- agent 1: pending\n- agent 2: pending"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders wait progress and brief failures in the live status bubble", async () => {
-    const harness = createHarness();
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
 
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-    await harness.coordinator.publishCurrentStatus("turn-1", true);
-    await harness.coordinator.handleItemStarted("turn-1", {
-      type: "collabAgentToolCall",
-      id: "agent-1",
-      tool: "wait",
-      status: "inProgress",
-      senderThreadId: "thread-1",
-      receiverThreadIds: ["thread-2", "thread-3"],
-      prompt: null,
-      model: null,
-      reasoningEffort: null,
-      agentsStates: {}
-    });
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+      await harness.coordinator.publishCurrentStatus("turn-1", true);
+      await harness.coordinator.handleItemStarted("turn-1", {
+        type: "collabAgentToolCall",
+        id: "agent-1",
+        tool: "wait",
+        status: "inProgress",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["thread-2", "thread-3"],
+        prompt: null,
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {}
+      });
 
-    expect(harness.telegram.drafts.at(-1)?.text).toBe(
-      "waiting · 0s\n\nwaiting for 2 agents\n- agent 1: pending\n- agent 2: pending"
-    );
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe(
+        "waiting · 12s\n\nwaiting for 2 agents\n- agent 1: pending\n- agent 2: pending"
+      );
 
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "collabAgentToolCall",
-      id: "agent-1",
-      tool: "wait",
-      status: "completed",
-      senderThreadId: "thread-1",
-      receiverThreadIds: ["thread-2", "thread-3"],
-      prompt: null,
-      model: null,
-      reasoningEffort: null,
-      agentsStates: {
-        "thread-2": {
-          status: "completed",
-          message: "Done"
-        },
-        "thread-3": {
-          status: "errored",
-          message: "timeout while reading"
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "collabAgentToolCall",
+        id: "agent-1",
+        tool: "wait",
+        status: "completed",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["thread-2", "thread-3"],
+        prompt: null,
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {
+          "thread-2": {
+            status: "completed",
+            message: "Done"
+          },
+          "thread-3": {
+            status: "errored",
+            message: "timeout while reading"
+          }
         }
-      }
-    });
+      });
 
-    expect(harness.telegram.drafts.at(-1)?.text).toBe(
-      "waiting · 0s\n\nwaiting for 2 agents\n- agent 1: completed - Done\n- agent 2: failed - timeout while reading"
-    );
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe(
+        "waiting · 24s\n\nwaiting for 2 agents\n- agent 1: completed - Done\n- agent 2: failed - timeout while reading"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("finalizes completed turns through one shared terminal path", async () => {
@@ -583,7 +596,7 @@ describe("TurnLifecycleCoordinator", () => {
 
     const stub = telegram.sentMessages.find((entry) => entry.text.startsWith("Plan"));
     expect(getInlineButtonTexts(stub)).toEqual(["Plan", "Implement"]);
-    const url = getWebAppUrlByButtonText(stub, "Plan");
+    const url = getButtonUrlByButtonText(stub, "Plan");
     expect(url).toBeTruthy();
     expect(getCallbackDataByButtonText(stub, "Implement")).toBe(TOPIC_IMPLEMENT_CALLBACK_DATA);
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
@@ -637,7 +650,7 @@ describe("TurnLifecycleCoordinator", () => {
     const finalAnswer = telegram.sentMessages.find((entry) => entry.text === "Final answer");
     expect(finalAnswer?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response", "Commentary"]);
-    const responseUrl = getWebAppUrlByButtonText(finalAnswer, "Response");
+    const responseUrl = getButtonUrlByButtonText(finalAnswer, "Response");
     const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
     expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
       v: 1,
@@ -645,7 +658,7 @@ describe("TurnLifecycleCoordinator", () => {
       title: "Response",
       markdownText: "Final answer"
     });
-    const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
+    const url = getButtonUrlByButtonText(finalAnswer, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -901,7 +914,7 @@ describe("TurnLifecycleCoordinator", () => {
     const stub = telegram.sentMessages.find((entry) => entry.text === "Commentary is available");
     expect(stub?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(stub)).toEqual(["Commentary"]);
-    const url = getWebAppUrlByButtonText(stub, "Commentary");
+    const url = getButtonUrlByButtonText(stub, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -1071,7 +1084,7 @@ describe("TurnLifecycleCoordinator", () => {
     await coordinator.completeTurn("thread-1", "turn-1");
 
     const finalAnswer = telegram.drafts.findLast((entry) => entry.text === "Final answer");
-    const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
+    const url = getButtonUrlByButtonText(finalAnswer, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -1154,7 +1167,7 @@ describe("TurnLifecycleCoordinator", () => {
     });
   });
 
-  it("keeps elapsed time current every 3 seconds without resetting the timer on status changes", async () => {
+  it("keeps elapsed time anchored to the turn start when throttled status updates publish", async () => {
     vi.useFakeTimers();
 
     try {
@@ -1176,11 +1189,12 @@ describe("TurnLifecycleCoordinator", () => {
         exitCode: null,
         durationMs: null
       });
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s");
+      expect(harness.coordinator.getTurn("turn-1")?.statusDraft?.state).toBe("running");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
       expect(harness.telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
 
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 3s");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 12s");
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
     } finally {
@@ -1239,7 +1253,8 @@ describe("TurnLifecycleCoordinator", () => {
         durationMs: null
       });
 
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s");
+      expect(harness.coordinator.getTurn("turn-1")?.statusDraft?.state).toBe("running");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
       const draftCountBeforeCompletion = harness.telegram.drafts.length;
 
       await harness.coordinator.handleItemCompleted("turn-1", {
@@ -1256,7 +1271,8 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(harness.telegram.drafts).toHaveLength(draftCountBeforeCompletion);
-      expect(harness.telegram.drafts.at(-1)?.text).toBe("running · 2s");
+      expect(harness.coordinator.getTurn("turn-1")?.statusDraft?.state).toBe("running");
+      expect(harness.telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
     } finally {
@@ -1406,7 +1422,7 @@ describe("TurnLifecycleCoordinator", () => {
     expect(finalAnswer).toBeTruthy();
     expect(getInlineButtonTexts(finalAnswer)).toEqual(["Response", "Commentary"]);
 
-    const url = getWebAppUrlByButtonText(finalAnswer, "Commentary");
+    const url = getButtonUrlByButtonText(finalAnswer, "Commentary");
     expect(url).toBeTruthy();
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({

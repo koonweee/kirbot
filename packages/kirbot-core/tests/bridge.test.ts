@@ -97,19 +97,19 @@ function buildRunningMessage(command: string): { text: string; entities: Message
   };
 }
 
-function getWebAppUrlByButtonText(
+function getButtonUrlByButtonText(
   message: { options?: TelegramSendOptions } | undefined,
   buttonText: string
 ): string | null {
-  const replyMarkup = (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> } } | undefined)?.reply_markup
-    ?? (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> } } | undefined)?.replyMarkup;
+  const replyMarkup = (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; url?: string }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; url?: string }>> } } | undefined)?.reply_markup
+    ?? (message?.options as { reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; url?: string }>> }; replyMarkup?: { inline_keyboard?: Array<Array<{ text?: string; url?: string }>> } } | undefined)?.replyMarkup;
   return (
     ((replyMarkup as {
-      inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>>;
+      inline_keyboard?: Array<Array<{ text?: string; url?: string }>>;
     } | undefined)
       ?.inline_keyboard?.flat()
       .find((button) => button.text === buttonText)
-      ?.web_app?.url ?? null)
+      ?.url ?? null)
   );
 }
 
@@ -2083,10 +2083,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    const commandDraft = "running · 0s";
-    await waitForCondition(() => telegram.drafts.at(-1)?.text === commandDraft);
-
-    expect(telegram.drafts.at(-1)?.text).toBe(commandDraft);
+    expect(telegram.drafts.at(-1)?.text).toBe("thinking · 0s");
     expect(telegram.drafts.at(-1)?.options?.entities).toBeUndefined();
   });
 
@@ -3465,7 +3462,7 @@ describe("TelegramCodexBridge", () => {
       ) ?? miniAppTelegram.sentMessages.find((message) => message.text === "Here is the answer.");
     expect(answerMessage?.text).toBe("Here is the answer.");
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
-    const responseUrl = getWebAppUrlByButtonText(answerMessage, "Response");
+    const responseUrl = getButtonUrlByButtonText(answerMessage, "Response");
     expect(responseUrl?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
     const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
     expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
@@ -3474,7 +3471,7 @@ describe("TelegramCodexBridge", () => {
       title: "Response",
       markdownText: "Here is the answer."
     });
-    const url = getWebAppUrlByButtonText(answerMessage, "Commentary");
+    const url = getButtonUrlByButtonText(answerMessage, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -3545,7 +3542,7 @@ describe("TelegramCodexBridge", () => {
     expect((answerMessage?.options as TelegramSendOptions | undefined)?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
 
-    const commentaryUrl = getWebAppUrlByButtonText(answerMessage, "Commentary");
+    const commentaryUrl = getButtonUrlByButtonText(answerMessage, "Commentary");
     const commentaryEncoded = getEncodedMiniAppArtifactFromHash(new URL(commentaryUrl!).hash);
     expect(decodeMiniAppArtifact(commentaryEncoded!)).toEqual({
       v: 1,
@@ -3695,7 +3692,7 @@ describe("TelegramCodexBridge", () => {
     expect(answerMessage?.text).toContain("[response truncated, continue in View]");
     expect(answerMessage?.text.length).toBeLessThanOrEqual(4000);
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response"]);
-    const responseUrl = getWebAppUrlByButtonText(answerMessage, "Response");
+    const responseUrl = getButtonUrlByButtonText(answerMessage, "Response");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -4004,7 +4001,7 @@ describe("TelegramCodexBridge", () => {
     const answerMessage = getFinalAnswerMessage(miniAppTelegram);
     expect(answerMessage?.text).toBe("Final answer");
     expect(getInlineButtonTexts(answerMessage)).toEqual(["Response", "Commentary"]);
-    const responseUrl = getWebAppUrlByButtonText(answerMessage, "Response");
+    const responseUrl = getButtonUrlByButtonText(answerMessage, "Response");
     const responseEncoded = getEncodedMiniAppArtifactFromHash(new URL(responseUrl!).hash);
     expect(decodeMiniAppArtifact(responseEncoded!)).toEqual({
       v: 1,
@@ -4012,7 +4009,7 @@ describe("TelegramCodexBridge", () => {
       title: "Response",
       markdownText: "Final answer"
     });
-    const url = getWebAppUrlByButtonText(answerMessage, "Commentary");
+    const url = getButtonUrlByButtonText(answerMessage, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -4103,7 +4100,7 @@ describe("TelegramCodexBridge", () => {
     const stub = miniAppTelegram.sentMessages.find((message) => message.text === "Plan is ready");
     expect(stub?.options?.disable_notification).toBeUndefined();
     expect(getInlineButtonTexts(stub)).toEqual(["Plan", "Implement"]);
-    const url = getWebAppUrlByButtonText(stub, "Plan");
+    const url = getButtonUrlByButtonText(stub, "Plan");
     expect(url).toBeTruthy();
     expect(url?.startsWith("https://example.com/mini-app/plan#d=")).toBe(true);
     expect(getCallbackDataByButtonText(stub, "Implement")).toBe(TOPIC_IMPLEMENT_CALLBACK_DATA);
@@ -4299,7 +4296,7 @@ describe("TelegramCodexBridge", () => {
     const commentaryStub = miniAppTelegram.sentMessages.find((message) => message.text === "Commentary is available");
     expect(commentaryStub).toBeTruthy();
     expect(getInlineButtonTexts(commentaryStub)).toEqual(["Commentary"]);
-    const url = getWebAppUrlByButtonText(commentaryStub, "Commentary");
+    const url = getButtonUrlByButtonText(commentaryStub, "Commentary");
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
       v: 1,
@@ -4727,8 +4724,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "running · 0s"));
-    expect(telegram.drafts.some((draft) => draft.text === "running · 0s" && !draft.options?.entities)).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.text === "thinking · 0s" && !draft.options?.entities)).toBe(true);
     expect(telegram.chatActions.some((action) => action.action === "typing")).toBe(true);
   });
 
@@ -4769,8 +4765,7 @@ describe("TelegramCodexBridge", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    await waitForCondition(() => telegram.drafts.some((draft) => draft.text === "editing · 0s"));
-    expect(telegram.drafts.some((draft) => draft.text === "editing · 0s" && !draft.options?.entities)).toBe(true);
+    expect(telegram.drafts.some((draft) => draft.text === "thinking · 0s" && !draft.options?.entities)).toBe(true);
   });
 
   it("keeps a stable status draft and sends the final text separately when no assistant delta arrives", async () => {

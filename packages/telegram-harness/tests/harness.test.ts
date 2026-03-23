@@ -565,9 +565,7 @@ describe("Telegram harness", () => {
           [
             {
               text: "Response",
-              web_app: {
-                url: expect.stringContaining("https://example.com/mini-app/plan#")
-              }
+              url: expect.stringContaining("https://example.com/mini-app/plan#")
             }
           ]
         ]
@@ -1014,7 +1012,7 @@ describe("Telegram harness", () => {
     const stub = topicMessages.find((message) => message.text === "Plan is ready");
     const button = stub?.inlineButtons?.[0]?.[0];
     expect(button?.text).toBe("Plan");
-    expect(button && "web_app" in button ? button.web_app.url : null).toMatch(/^https:\/\/example\.com\/mini-app\/plan#d=/);
+    expect(button && "url" in button ? button.url : null).toMatch(/^https:\/\/example\.com\/mini-app\/plan#d=/);
     const stubEvent = harness.getTelegramEvents().find(
       (event) => event.type === "telegram.sendMessage" && event.text === "Plan is ready"
     );

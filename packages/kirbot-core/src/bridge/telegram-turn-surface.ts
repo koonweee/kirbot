@@ -28,6 +28,8 @@ export function createTelegramTurnSurface(input: {
   return new TelegramStatusBubbleTurnSurface(input.messenger, input.chatId, input.topicId);
 }
 
+const STATUS_BUBBLE_MIN_VISIBLE_INTERVAL_MS = 10_000;
+
 class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
   #statusMessageId: number | null = null;
   #closed = false;
@@ -140,8 +142,20 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
         return;
       }
 
+      if (this.#shouldDelayStatusUpdate()) {
+        return;
+      }
+
       await this.#publishStatusMessage(rendered, force, true);
     }
+  }
+
+  #shouldDelayStatusUpdate(): boolean {
+    if (this.#statusMessageId === null) {
+      return false;
+    }
+
+    return Date.now() - this.#lastVisibleActivityAt < STATUS_BUBBLE_MIN_VISIBLE_INTERVAL_MS;
   }
 
   async #publishStatusMessage(

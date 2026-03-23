@@ -16,6 +16,10 @@ export type TelegramInlineKeyboardButton =
     }
   | {
       text: string;
+      url: string;
+    }
+  | {
+      text: string;
       web_app: {
         url: string;
       };
