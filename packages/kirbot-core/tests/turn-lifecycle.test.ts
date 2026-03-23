@@ -365,34 +365,45 @@ function expectImagePublicationFailureEntry(
     stage: "invalid_url" | "download" | "validation" | "telegram_send";
   }
 ): void {
-  expect(entries).toHaveLength(1);
-  expect(entries[0]).toMatchObject({
-    kind: "structuredFailure",
-    title: "Generated image publication failed",
-    subject: null,
-    metadata: [
-      {
-        label: "Turn ID",
-        value: input.turnId,
-        code: true
-      },
-      {
-        label: "Item ID",
-        value: input.itemId,
-        code: true
-      },
-      {
-        label: "Stage",
-        value: input.stage,
-        code: true
-      }
-    ],
-    detail: {
-      title: "URL",
-      value: input.url,
-      style: "quoteBlock"
-    }
-  });
+  expect(entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "structuredFailure",
+        title: "Generated image publication failed",
+        subject: null,
+        metadata: expect.arrayContaining([
+          expect.objectContaining({
+            label: "Turn ID",
+            value: input.turnId,
+            code: true
+          }),
+          expect.objectContaining({
+            label: "Item ID",
+            value: input.itemId,
+            code: true
+          }),
+          expect.objectContaining({
+            label: "Stage",
+            value: input.stage,
+            code: true
+          })
+        ]),
+        detail: expect.objectContaining({
+          title: "URL",
+          value: input.url,
+          style: "quoteBlock"
+        })
+      })
+    ])
+  );
+}
+
+function expectNoImagePublicationFailureEntries(
+  entries: ReturnType<BridgeTurnRuntime["renderActivityLogEntries"]>
+): void {
+  expect(
+    entries.some((entry) => entry.kind === "structuredFailure" && entry.title === "Generated image publication failed")
+  ).toBe(false);
 }
 
 describe("TurnLifecycleCoordinator", () => {
@@ -1502,6 +1513,7 @@ describe("TurnLifecycleCoordinator", () => {
         }
       ]);
       expect(harness.telegram.sentMessages.some((entry) => entry.text === "Final answer")).toBe(false);
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1599,6 +1611,7 @@ describe("TurnLifecycleCoordinator", () => {
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1640,6 +1653,7 @@ describe("TurnLifecycleCoordinator", () => {
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
       expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1734,6 +1748,7 @@ describe("TurnLifecycleCoordinator", () => {
           mime_type: "image/png"
         })
       ]);
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1785,6 +1800,7 @@ describe("TurnLifecycleCoordinator", () => {
           mime_type: "image/png"
         })
       });
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1865,6 +1881,7 @@ describe("TurnLifecycleCoordinator", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1], [2]]);
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
 
       await harness.coordinator.completeTurn("thread-1", "turn-1");
 

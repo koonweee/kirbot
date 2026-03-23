@@ -688,6 +688,7 @@ class FakeTelegram implements TelegramApi {
   nextDeleteMessageError: Error | null = null;
   nextAnswerCallbackQueryError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
+  photoBlocks: Array<Promise<void>> = [];
   editBlocks: Array<Promise<void>> = [];
   deleteBlocks: Array<Promise<void>> = [];
   events: string[] = [];
@@ -810,6 +811,11 @@ class FakeTelegram implements TelegramApi {
       const error = this.nextSendPhotoError;
       this.nextSendPhotoError = null;
       throw error;
+    }
+
+    const blocker = this.photoBlocks.shift();
+    if (blocker) {
+      await blocker;
     }
 
     this.messageCounter += 1;
@@ -3607,6 +3613,9 @@ describe("TelegramCodexBridge", () => {
 
     const fetchGate = deferred<Response>();
     const laterFetchGate = deferred<Response>();
+    const firstPhotoGate = deferred<void>();
+    const secondPhotoGate = deferred<void>();
+    telegram.photoBlocks.push(firstPhotoGate.promise, secondPhotoGate.promise);
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockReturnValueOnce(fetchGate.promise as never)
@@ -3669,6 +3678,13 @@ describe("TelegramCodexBridge", () => {
       );
       await waitForAsyncNotifications();
 
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(telegram.sentPhotos).toHaveLength(0);
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      firstPhotoGate.resolve();
+      await waitForAsyncNotifications();
+
       expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(telegram.sentPhotos).toHaveLength(1);
       expect(telegram.sentPhotos[0]?.options).toMatchObject({
@@ -3686,6 +3702,12 @@ describe("TelegramCodexBridge", () => {
           }
         })
       );
+      await waitForAsyncNotifications();
+
+      expect(telegram.sentPhotos).toHaveLength(1);
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      secondPhotoGate.resolve();
       await waitForAsyncNotifications();
 
       const photoIndex = telegram.events.findIndex((event) => event.startsWith("photo:"));
