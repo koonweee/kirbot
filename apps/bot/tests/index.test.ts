@@ -320,8 +320,8 @@ describe("bot entrypoint routing", () => {
               chatId: number,
               photo: Uint8Array,
               options?: {
-                fileName?: string;
-                mimeType?: string;
+                file_name?: string;
+                mime_type?: string;
                 message_thread_id?: number;
                 disable_notification?: boolean;
               }
@@ -334,12 +334,12 @@ describe("bot entrypoint routing", () => {
 
     const photo = {
       bytes: new Uint8Array([4, 5, 6]),
-      fileName: "generated-image.png",
-      mimeType: "image/png"
+      file_name: "generated-image.png",
+      mime_type: "image/png"
     };
     await runtimeArgs!.telegramApi!.sendPhoto!(123, photo.bytes, {
-      fileName: photo.fileName,
-      mimeType: photo.mimeType,
+      file_name: photo.file_name,
+      mime_type: photo.mime_type,
       message_thread_id: 777,
       disable_notification: true
     });
