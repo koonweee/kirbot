@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
 import { createTelegramTurnSurface } from "../src/bridge/telegram-turn-surface";
-import { TelegramMessenger, type TelegramApi, type TelegramCreateForumTopicOptions } from "../src/telegram-messenger";
+import {
+  TelegramMessenger,
+  type TelegramApi,
+  type TelegramCreateForumTopicOptions,
+  type TelegramPhotoSendInput
+} from "../src/telegram-messenger";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -40,6 +45,16 @@ function rateLimitError(retryAfterSeconds: number): Error & {
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
+  sentPhotos: Array<{
+    chatId: number;
+    photo: Uint8Array;
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
+  }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string; options?: Record<string, unknown> }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
   chatActions: Array<{ chatId: number; action: "typing" | "upload_document"; options?: { message_thread_id?: number } }> = [];
@@ -73,6 +88,20 @@ class FakeTelegram implements TelegramApi {
 
     this.messageCounter += 1;
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
+    return { message_id: this.messageCounter };
+  }
+
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
+    this.messageCounter += 1;
+    const options = {
+      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+      ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+      ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+    };
+    this.sentPhotos.push(
+      Object.keys(options).length > 0 ? { chatId: input.chatId, photo: input.bytes, options } : { chatId: input.chatId, photo: input.bytes }
+    );
     return { message_id: this.messageCounter };
   }
 

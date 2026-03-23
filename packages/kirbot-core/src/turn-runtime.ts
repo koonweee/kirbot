@@ -13,6 +13,19 @@ type PlanItemState = {
   text: string;
 };
 
+export type GeneratedImagePublicationFailureStage =
+  | "invalid_url"
+  | "download"
+  | "validation"
+  | "telegram_send";
+
+export type GeneratedImagePublicationFailureLogInput = {
+  turnId: string;
+  itemId: string;
+  url: string;
+  stage: GeneratedImagePublicationFailureStage;
+};
+
 export type ActivityLogEntry =
   | {
       kind: "commentary";
@@ -65,6 +78,7 @@ export type RuntimeTurn = {
   planItems: Map<string, PlanItemState>;
   activityLogEntries: ActivityLogEntry[];
   commentaryActivityEntryIndexes: Map<string, number>;
+  generatedImagePublicationFailureEntryIndexes: Map<string, number>;
 };
 
 type PendingSteer = {
@@ -115,7 +129,8 @@ export class BridgeTurnRuntime {
       planItemOrder: [],
       planItems: new Map<string, PlanItemState>(),
       activityLogEntries: [],
-      commentaryActivityEntryIndexes: new Map<string, number>()
+      commentaryActivityEntryIndexes: new Map<string, number>(),
+      generatedImagePublicationFailureEntryIndexes: new Map<string, number>()
     };
 
     this.#turns.set(input.turnId, turn);
@@ -303,6 +318,38 @@ export class BridgeTurnRuntime {
     }
 
     turn.activityLogEntries.push(entry);
+  }
+
+  upsertGeneratedImagePublicationFailureEntry(turnId: string, itemId: string, entry: ActivityLogEntry): void {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return;
+    }
+
+    const existingIndex = turn.generatedImagePublicationFailureEntryIndexes.get(itemId);
+    if (existingIndex !== undefined) {
+      turn.activityLogEntries[existingIndex] = entry;
+      return;
+    }
+
+    turn.activityLogEntries.push(entry);
+    turn.generatedImagePublicationFailureEntryIndexes.set(itemId, turn.activityLogEntries.length - 1);
+  }
+
+  clearGeneratedImagePublicationFailureEntry(turnId: string, itemId: string): void {
+    const turn = this.#turns.get(turnId);
+    if (!turn) {
+      return;
+    }
+
+    const index = turn.generatedImagePublicationFailureEntryIndexes.get(itemId);
+    if (index === undefined) {
+      return;
+    }
+
+    turn.activityLogEntries.splice(index, 1);
+    turn.generatedImagePublicationFailureEntryIndexes.delete(itemId);
+    reindexActivityLogEntries(turn, index);
   }
 
   renderActivityLogEntries(turnId: string): ActivityLogEntry[] {
@@ -497,6 +544,20 @@ function getAssistantItemsWithText(turn: RuntimeTurn): AssistantItemState[] {
 
 function renderAssistantText(items: AssistantItemState[]): string {
   return items.map((item) => item.text).join("\n\n");
+}
+
+function reindexActivityLogEntries(turn: RuntimeTurn, removedIndex: number): void {
+  for (const [itemId, index] of turn.commentaryActivityEntryIndexes) {
+    if (index > removedIndex) {
+      turn.commentaryActivityEntryIndexes.set(itemId, index - 1);
+    }
+  }
+
+  for (const [itemId, index] of turn.generatedImagePublicationFailureEntryIndexes) {
+    if (index > removedIndex) {
+      turn.generatedImagePublicationFailureEntryIndexes.set(itemId, index - 1);
+    }
+  }
 }
 
 function topicKey(chatId: number, topicId: number | null): string {

@@ -25,6 +25,7 @@ export type TurnContext = {
   compactionNoticeSent: boolean;
   publishedPlanMessages: number;
   changedFilePaths: Set<string>;
+  handledImageGenerationItemIds: Set<string>;
   telegramUsername?: string;
   mode: SessionMode;
   model: string | null;

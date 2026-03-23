@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
+vi.mock("node:dns/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
+  return {
+    ...actual,
+    lookup: vi.fn(actual.lookup)
+  };
+});
+
+import * as dns from "node:dns/promises";
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
@@ -13,7 +22,8 @@ import {
 import {
   TelegramMessenger,
   type TelegramApi,
-  type TelegramCreateForumTopicOptions
+  type TelegramCreateForumTopicOptions,
+  type TelegramPhotoSendInput
 } from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
 import { TurnFinalizer } from "../src/bridge/turn-finalization";
@@ -130,7 +140,18 @@ function findSingleButtonSafeDualButtonUnsafeMiniAppUrl(): string {
 
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
+  nextSendPhotoError: Error | null = null;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
+  sentPhotos: Array<{
+    chatId: number;
+    photo: Uint8Array;
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
+  }> = [];
   drafts: Array<{
     chatId: number;
     draftId: number;
@@ -172,6 +193,26 @@ class FakeTelegram implements TelegramApi {
             draftId: this.messageCounter,
             text
           }
+    );
+    return { message_id: this.messageCounter };
+  }
+
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
+    if (this.nextSendPhotoError) {
+      const error = this.nextSendPhotoError;
+      this.nextSendPhotoError = null;
+      throw error;
+    }
+
+    this.messageCounter += 1;
+    const options = {
+      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+      ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+      ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+    };
+    this.sentPhotos.push(
+      Object.keys(options).length > 0 ? { chatId: input.chatId, photo: input.bytes, options } : { chatId: input.chatId, photo: input.bytes }
     );
     return { message_id: this.messageCounter };
   }
@@ -251,6 +292,7 @@ function createHarness(
   }
 ): {
   coordinator: TurnLifecycleCoordinator;
+  runtime: BridgeTurnRuntime;
   telegram: FakeTelegram;
   releasedTurnIds: string[];
   queueSyncs: QueueStateSnapshot[];
@@ -314,6 +356,7 @@ function createHarness(
 
   return {
     coordinator,
+    runtime,
     telegram,
     releasedTurnIds,
     queueSyncs,
@@ -321,6 +364,66 @@ function createHarness(
     queuedFollowUps
   };
 }
+
+function expectImagePublicationFailureEntry(
+  entries: ReturnType<BridgeTurnRuntime["renderActivityLogEntries"]>,
+  input: {
+    turnId: string;
+    itemId: string;
+    url: string;
+    stage: "invalid_url" | "download" | "validation" | "telegram_send";
+  }
+): void {
+  expect(entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "structuredFailure",
+        title: "Generated image publication failed",
+        subject: null,
+        metadata: expect.arrayContaining([
+          expect.objectContaining({
+            label: "Turn ID",
+            value: input.turnId,
+            code: true
+          }),
+          expect.objectContaining({
+            label: "Item ID",
+            value: input.itemId,
+            code: true
+          }),
+          expect.objectContaining({
+            label: "Stage",
+            value: input.stage,
+            code: true
+          })
+        ]),
+        detail: expect.objectContaining({
+          title: "URL",
+          value: input.url,
+          style: "quoteBlock"
+        })
+      })
+    ])
+  );
+}
+
+function expectNoImagePublicationFailureEntries(
+  entries: ReturnType<BridgeTurnRuntime["renderActivityLogEntries"]>
+): void {
+  expect(
+    entries.some((entry) => entry.kind === "structuredFailure" && entry.title === "Generated image publication failed")
+  ).toBe(false);
+}
+
+beforeEach(() => {
+  vi.mocked(dns.lookup).mockReset();
+  vi.mocked(dns.lookup).mockResolvedValue([
+    {
+      address: "93.184.216.34",
+      family: 4
+    }
+  ] as unknown as Awaited<ReturnType<typeof dns.lookup>>);
+});
 
 describe("TurnLifecycleCoordinator", () => {
   it("supports root-surface status drafts without a topic id", async () => {
@@ -1282,73 +1385,83 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("surfaces successful collab completions in the status bubble while keeping other successful items transient", async () => {
     const harness = createHarness();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([1]), {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "mcpToolCall",
-      id: "mcp-1",
-      server: "github",
-      tool: "search",
-      status: "completed",
-      arguments: {},
-      result: null,
-      error: null,
-      durationMs: 10
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "dynamicToolCall",
-      id: "tool-1",
-      tool: "lookup_docs",
-      arguments: {},
-      status: "failed",
-      contentItems: null,
-      success: false,
-      durationMs: 10
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "collabAgentToolCall",
-      id: "agent-1",
-      tool: "spawnAgent",
-      status: "completed",
-      senderThreadId: "thread-1",
-      receiverThreadIds: ["thread-2"],
-      prompt: null,
-      model: null,
-      reasoningEffort: null,
-      agentsStates: {}
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "webSearch",
-      id: "search-1",
-      query: "kirbot issues",
-      action: null
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "imageView",
-      id: "image-1",
-      path: "/tmp/screenshots/error.png"
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "imageGeneration",
-      id: "image-gen-1",
-      status: "completed",
-      revisedPrompt: null,
-      result: "https://example.com/image.png"
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "enteredReviewMode",
-      id: "review-1",
-      review: "Security review"
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "exitedReviewMode",
-      id: "review-2",
-      review: ""
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "contextCompaction",
-      id: "compact-1"
-    });
+    try {
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "mcpToolCall",
+        id: "mcp-1",
+        server: "github",
+        tool: "search",
+        status: "completed",
+        arguments: {},
+        result: null,
+        error: null,
+        durationMs: 10
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "dynamicToolCall",
+        id: "tool-1",
+        tool: "lookup_docs",
+        arguments: {},
+        status: "failed",
+        contentItems: null,
+        success: false,
+        durationMs: 10
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "collabAgentToolCall",
+        id: "agent-1",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["thread-2"],
+        prompt: null,
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {}
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "webSearch",
+        id: "search-1",
+        query: "kirbot issues",
+        action: null
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageView",
+        id: "image-1",
+        path: "/tmp/screenshots/error.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-1",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/image.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "enteredReviewMode",
+        id: "review-1",
+        review: "Security review"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "exitedReviewMode",
+        id: "review-2",
+        review: ""
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "contextCompaction",
+        id: "compact-1"
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
     await harness.coordinator.handleItemCompleted("turn-1", {
       type: "contextCompaction",
       id: "compact-2"
@@ -1372,6 +1485,18 @@ describe("TurnLifecycleCoordinator", () => {
         }
       }
     ]);
+    expect(harness.telegram.sentPhotos).toEqual([
+      {
+        chatId: -1001,
+        photo: new Uint8Array([1]),
+        options: {
+          message_thread_id: 777,
+          disable_notification: true,
+          file_name: "image.png",
+          mime_type: "image/png"
+        }
+      }
+    ]);
     expect(harness.telegram.drafts).toEqual([
       {
         chatId: -1001,
@@ -1384,7 +1509,7 @@ describe("TurnLifecycleCoordinator", () => {
       },
       {
         chatId: -1001,
-        draftId: 2,
+        draftId: 3,
         text: "Context compacted",
         options: {
           disable_notification: true,
@@ -1392,6 +1517,486 @@ describe("TurnLifecycleCoordinator", () => {
         }
       }
     ]);
+  });
+
+  it("publishes a successful generated image immediately before turn completion", async () => {
+    const harness = createHarness("Final answer");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-1",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/generated.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated.png");
+      expect(harness.telegram.sentPhotos).toEqual([
+        {
+          chatId: -1001,
+          photo: new Uint8Array([1, 2, 3]),
+          options: {
+            message_thread_id: 777,
+            disable_notification: true,
+            file_name: "generated.png",
+            mime_type: "image/png"
+          }
+        }
+      ]);
+      expect(harness.telegram.sentMessages.some((entry) => entry.text === "Final answer")).toBe(false);
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("does not publish cancelled image generation items inline", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-cancelled",
+        status: "cancelled",
+        revisedPrompt: null,
+        result: "https://example.com/cancelled.png"
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("records invalid_url image publication failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
+    const fetchStub = vi.fn(() => {
+      throw new Error("fetch should not be called for invalid image URLs");
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchStub as typeof fetch;
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-invalid",
+        status: "completed",
+        revisedPrompt: null,
+        result: "ftp://example.com/generated.png"
+      });
+
+      expect(fetchStub).not.toHaveBeenCalled();
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-invalid",
+        stage: "invalid_url",
+        url: "ftp://example.com/generated.png"
+      });
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("records download failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
+    const timeoutError = Object.assign(new Error("The operation was aborted due to timeout"), {
+      name: "TimeoutError"
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(timeoutError);
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-download",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/download-failure.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/download-failure.png");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-download",
+        stage: "download",
+        url: "https://example.com/download-failure.png"
+      });
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("records non-image validation failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
+    const fetchStub = vi.fn(async () => {
+      return new Response("plain text payload", {
+        headers: {
+          "Content-Type": "text/plain"
+        }
+      });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchStub as typeof fetch;
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-validation",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/not-an-image.txt"
+      });
+
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+      const firstFetchCall = fetchStub.mock.calls[0] as [string] | undefined;
+      expect(firstFetchCall?.[0]).toBe("https://example.com/not-an-image.txt");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-validation",
+        stage: "validation",
+        url: "https://example.com/not-an-image.txt"
+      });
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("records Telegram send failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([9, 8, 7]), {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
+    harness.telegram.nextSendPhotoError = new Error("telegram send failed");
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-telegram",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/send-failure.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/send-failure.png");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-telegram",
+        stage: "telegram_send",
+        url: "https://example.com/send-failure.png"
+      });
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("publishes distinct imageGeneration ids even when the same URL is reused", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([4, 5, 6]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-1",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/duplicate.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-2",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/duplicate.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/duplicate.png");
+      expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://example.com/duplicate.png");
+      expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1, 2, 3], [4, 5, 6]]);
+      expect(harness.telegram.sentPhotos.map((entry) => entry.options)).toEqual([
+        expect.objectContaining({
+          file_name: "duplicate.png",
+          mime_type: "image/png"
+        }),
+        expect.objectContaining({
+          file_name: "duplicate.png",
+          mime_type: "image/png"
+        })
+      ]);
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("suppresses a replayed imageGeneration id even when the URL changes", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([7, 8, 9]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 1, 1]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-replay",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/replay-first.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-replay",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/replay-second.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/replay-first.png");
+      expect(harness.telegram.sentPhotos).toHaveLength(1);
+      expect(harness.telegram.sentPhotos[0]).toMatchObject({
+        photo: new Uint8Array([7, 8, 9]),
+        options: expect.objectContaining({
+          file_name: "replay-first.png",
+          mime_type: "image/png"
+        })
+      });
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("retries a replayed imageGeneration id after an earlier publication failure", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new Error("temporary fetch failure"))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([4, 5, 6]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-retry",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/retry-first.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-retry",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/retry-second.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-retry",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/retry-third.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/retry-first.png");
+      expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://example.com/retry-second.png");
+      expect(harness.telegram.sentPhotos).toHaveLength(1);
+      expect(harness.telegram.sentPhotos[0]).toMatchObject({
+        photo: new Uint8Array([4, 5, 6]),
+        options: expect.objectContaining({
+          file_name: "retry-second.png",
+          mime_type: "image/png"
+        })
+      });
+      expectNoImagePublicationFailureEntries(harness.runtime.renderActivityLogEntries("turn-1"));
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("rejects oversized image payloads as validation failures", async () => {
+    const harness = createHarness();
+    const oversizedBytes = new Uint8Array(12_000_001);
+    const fetchStub = vi.fn(async () => {
+      return new Response(oversizedBytes, {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchStub as typeof fetch;
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-oversized",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/oversized.png"
+      });
+
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+      const firstFetchCall = fetchStub.mock.calls[0] as [string] | undefined;
+      expect(firstFetchCall?.[0]).toBe("https://example.com/oversized.png");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-oversized",
+        stage: "validation",
+        url: "https://example.com/oversized.png"
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("publishes multiple generated images in arrival order and still finalizes the turn", async () => {
+    const harness = createHarness("Final answer");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([2]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-1",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/one.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-2",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/two.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/one.png");
+      expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://example.com/two.png");
+      expect(harness.telegram.sentPhotos.map((entry) => Array.from(entry.photo))).toEqual([[1], [2]]);
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("keeps failed command details in commentary without sending a standalone bubble", async () => {

@@ -18,12 +18,18 @@ import type {
   TelegramInlineKeyboardButton,
   TelegramRenderedMessage
 } from "../telegram-messenger";
-import type { ActivityLogEntry, ActivityLogLabel, QueueStateSnapshot } from "../turn-runtime";
+import type {
+  ActivityLogEntry,
+  ActivityLogLabel,
+  GeneratedImagePublicationFailureLogInput,
+  QueueStateSnapshot
+} from "../turn-runtime";
 import {
   buildMiniAppArtifactUrl,
   MiniAppArtifactType,
   type MiniAppArtifact
 } from "../mini-app/url";
+import { isImageGenerationSuccess } from "./generated-image-publication";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const COMMAND_FAILURE_OUTPUT_CHAR_LIMIT = 1200;
@@ -576,6 +582,26 @@ export function buildActivityLogEntryForItemCompleted(item: ThreadItem): Activit
   }
 }
 
+export function buildActivityLogEntryForGeneratedImagePublicationFailure(
+  failure: GeneratedImagePublicationFailureLogInput
+): StructuredFailureEntry {
+  return {
+    kind: "structuredFailure",
+    title: "Generated image publication failed",
+    subject: null,
+    metadata: [
+      { label: "Turn ID", value: failure.turnId, code: true },
+      { label: "Item ID", value: failure.itemId, code: true },
+      { label: "Stage", value: failure.stage, code: true }
+    ],
+    detail: {
+      title: "URL",
+      value: failure.url,
+      style: "quoteBlock"
+    }
+  };
+}
+
 function buildCommentaryMarkdown(entries: ActivityLogEntry[]): string {
   return buildCommentaryMarkdownSections(entries).join("\n\n");
 }
@@ -961,7 +987,9 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
   const model = details.model?.trim() ? details.model : "unknown-model";
   const modelLabel =
     details.serviceTier === "fast"
-      ? `${model} fast`
+      ? details.reasoningEffort
+        ? `${model} ${details.reasoningEffort} fast`
+        : `${model} fast`
       : details.reasoningEffort
         ? `${model} ${details.reasoningEffort}`
         : model;
@@ -1462,8 +1490,4 @@ function summarizeFileChangePaths(changes: Array<{ path: string }>): { paths: st
 
 function isCommandExecutionFailed(item: Extract<ThreadItem, { type: "commandExecution" }>): boolean {
   return item.status === "failed" || item.status === "declined" || (item.exitCode !== null && item.exitCode !== 0);
-}
-
-function isImageGenerationSuccess(item: Extract<ThreadItem, { type: "imageGeneration" }>): boolean {
-  return !/fail/i.test(item.status) && item.result.trim().length > 0;
 }

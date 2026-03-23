@@ -6,6 +6,7 @@ import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadI
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
 import {
+  buildActivityLogEntryForGeneratedImagePublicationFailure,
   buildActivityLogEntryForItemCompleted,
   buildPlanArtifactMessages,
   buildOversizePlanArtifactMessage,
@@ -16,7 +17,15 @@ import {
   type LiveSubagentSnapshot,
   type TurnStatusDraft
 } from "./presentation";
-import { type QueueStateSnapshot } from "../turn-runtime";
+import {
+  fetchUploadReadyGeneratedImage,
+  GeneratedImagePublicationError,
+  isImageGenerationSuccess
+} from "./generated-image-publication";
+import {
+  type GeneratedImagePublicationFailureLogInput,
+  type QueueStateSnapshot
+} from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import { createTelegramTurnSurface } from "./telegram-turn-surface";
 import {
@@ -71,6 +80,7 @@ export class TurnLifecycleCoordinator {
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       changedFilePaths: new Set(),
+      handledImageGenerationItemIds: new Set(),
       ...(message.telegramUsername !== undefined ? { telegramUsername: message.telegramUsername } : {}),
       mode,
       model,
@@ -319,6 +329,24 @@ export class TurnLifecycleCoordinator {
       }
     }
 
+    if (item.type === "imageGeneration" && isImageGenerationSuccess(item)) {
+      if (context.handledImageGenerationItemIds.has(item.id)) {
+        return;
+      }
+
+      const publication = await this.publishGeneratedImage(context, item);
+      if (publication.published) {
+        this.deps.runtime.clearGeneratedImagePublicationFailureEntry(turnId, item.id);
+        context.handledImageGenerationItemIds.add(item.id);
+      } else if (publication.failure) {
+        this.deps.runtime.upsertGeneratedImagePublicationFailureEntry(
+          turnId,
+          item.id,
+          buildActivityLogEntryForGeneratedImagePublicationFailure(publication.failure)
+        );
+      }
+    }
+
     const activityLogEntry = buildActivityLogEntryForItemCompleted(item);
     if (activityLogEntry) {
       this.deps.runtime.appendActivityLogEntry(turnId, activityLogEntry);
@@ -511,6 +539,58 @@ export class TurnLifecycleCoordinator {
       }
 
       throw error;
+    }
+  }
+
+  private async publishGeneratedImage(
+    context: TurnContext,
+    item: Extract<ThreadItem, { type: "imageGeneration" }>
+  ): Promise<{ published: true } | { published: false; failure: GeneratedImagePublicationFailureLogInput | null }> {
+    try {
+      const image = await fetchUploadReadyGeneratedImage(item);
+      try {
+        await this.deps.messenger.sendPhoto({
+          chatId: context.chatId,
+          topicId: context.topicId,
+          bytes: image.bytes,
+          fileName: image.fileName,
+          mimeType: image.mimeType,
+          disableNotification: true
+        });
+        return { published: true };
+      } catch (error) {
+        const failure = {
+          turnId: context.turnId,
+          itemId: item.id,
+          url: image.url,
+          stage: "telegram_send"
+        } satisfies GeneratedImagePublicationFailureLogInput;
+        this.logger.warn("Failed to publish generated image", failure, error);
+        return {
+          published: false,
+          failure
+        };
+      }
+    } catch (error) {
+      if (error instanceof GeneratedImagePublicationError) {
+        const failure = {
+          turnId: context.turnId,
+          itemId: item.id,
+          url: error.url,
+          stage: error.stage
+        } satisfies GeneratedImagePublicationFailureLogInput;
+        this.logger.warn("Failed to publish generated image", failure, error);
+        return {
+          published: false,
+          failure
+        };
+      }
+
+      this.logger.warn(`Failed to publish generated image for turn ${context.turnId} item ${item.id}`, error);
+      return {
+        published: false,
+        failure: null
+      };
     }
   }
 }

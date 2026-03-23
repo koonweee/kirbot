@@ -5,6 +5,15 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
+vi.mock("node:dns/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
+  return {
+    ...actual,
+    lookup: vi.fn(actual.lookup)
+  };
+});
+
+import * as dns from "node:dns/promises";
 import { TelegramCodexBridge, type BridgeCodexApi } from "../src/bridge";
 import type { AppConfig } from "../src/config";
 import { BridgeDatabase } from "../src/db";
@@ -28,6 +37,7 @@ import {
   type TelegramEditOptions,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
+  type TelegramPhotoSendInput,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
 import { BridgeRequestCoordinator } from "../src/bridge/request-coordinator";
@@ -683,10 +693,12 @@ class FakeTelegram implements TelegramApi {
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
   nextSendMessageError: Error | null = null;
+  nextSendPhotoError: Error | null = null;
   nextEditMessageTextError: Error | null = null;
   nextDeleteMessageError: Error | null = null;
   nextAnswerCallbackQueryError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
+  photoBlocks: Array<Promise<void>> = [];
   editBlocks: Array<Promise<void>> = [];
   deleteBlocks: Array<Promise<void>> = [];
   events: string[] = [];
@@ -703,6 +715,17 @@ class FakeTelegram implements TelegramApi {
     chatId: number;
     text: string;
     options?: TelegramSendOptions;
+  }> = [];
+  sentPhotos: Array<{
+    messageId: number;
+    chatId: number;
+    photo: Uint8Array;
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
   }> = [];
   drafts: Array<{
     chatId: number;
@@ -780,6 +803,34 @@ class FakeTelegram implements TelegramApi {
     );
     this.appliedDrafts.push(
       options ? { chatId, draftId: this.messageCounter, text, options } : { chatId, draftId: this.messageCounter, text }
+    );
+    return { message_id: this.messageCounter };
+  }
+
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
+    if (this.nextSendPhotoError) {
+      const error = this.nextSendPhotoError;
+      this.nextSendPhotoError = null;
+      throw error;
+    }
+
+    const blocker = this.photoBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
+
+    this.messageCounter += 1;
+    this.events.push(`photo:${this.messageCounter}`);
+    const options = {
+      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+      ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+      ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+    };
+    this.sentPhotos.push(
+      Object.keys(options).length > 0
+        ? { messageId: this.messageCounter, chatId: input.chatId, photo: input.bytes, options }
+        : { messageId: this.messageCounter, chatId: input.chatId, photo: input.bytes }
     );
     return { message_id: this.messageCounter };
   }
@@ -896,6 +947,14 @@ describe("TelegramCodexBridge", () => {
   let restartKirbot: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
+    vi.mocked(dns.lookup).mockReset();
+    vi.mocked(dns.lookup).mockResolvedValue([
+      {
+        address: "93.184.216.34",
+        family: 4
+      }
+    ] as unknown as Awaited<ReturnType<typeof dns.lookup>>);
+
     tempDir = mkdtempSync(join(tmpdir(), "telegram-codex-bridge-service-"));
     database = new BridgeDatabase(join(tempDir, "bridge.sqlite"));
     await database.migrate();
@@ -3551,6 +3610,230 @@ describe("TelegramCodexBridge", () => {
       markdownText:
         ':::details Logs (1)\n**Command failed**\n```\nnpm test -- --runInBand\n```\n\nCWD: `/workspace/packages/kirbot-core`  \nExit code: `1`  \nDuration: `12s`\n\nError\n> FAIL bridge.test.ts\n> Error: expected "waiting · 6s" to equal "waiting · 5s"\n:::'
     });
+  });
+
+  it("preserves item/completed ordering while a generated image is being published", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 80,
+      updateId: 90,
+      userId: 42,
+      text: "Generate an image and then finish the turn"
+    });
+
+    const fetchGate = deferred<Response>();
+    const laterFetchGate = deferred<Response>();
+    const firstPhotoGate = deferred<void>();
+    const secondPhotoGate = deferred<void>();
+    telegram.photoBlocks.push(firstPhotoGate.promise, secondPhotoGate.promise);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(fetchGate.promise as never)
+      .mockReturnValueOnce(laterFetchGate.promise as never);
+
+    try {
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-gen-1",
+            status: "completed",
+            revisedPrompt: null,
+            result: "https://example.com/generated.png"
+          }
+        }
+      });
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-gen-1b",
+            status: "completed",
+            revisedPrompt: null,
+            result: "https://example.com/generated-later.png"
+          }
+        }
+      });
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "completed",
+            error: null
+          }
+        }
+      });
+
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated.png");
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+      expect(telegram.sentPhotos).toHaveLength(0);
+
+      fetchGate.resolve(
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated.png");
+      expect(telegram.sentPhotos).toHaveLength(0);
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      firstPhotoGate.resolve();
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://example.com/generated-later.png");
+      expect(telegram.sentPhotos).toHaveLength(1);
+      expect(telegram.sentPhotos[0]?.options).toMatchObject({
+        message_thread_id: 777,
+        disable_notification: true,
+        file_name: "generated.png",
+        mime_type: "image/png"
+      });
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      laterFetchGate.resolve(
+        new Response(new Uint8Array([4, 5, 6]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+      await waitForAsyncNotifications();
+
+      expect(telegram.sentPhotos).toHaveLength(1);
+      expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
+
+      secondPhotoGate.resolve();
+      await waitForAsyncNotifications();
+
+      const photoEvents = telegram.events.filter((event) => event.startsWith("photo:"));
+      expect(photoEvents).toHaveLength(2);
+      const [firstPhotoEvent, secondPhotoEvent] = photoEvents;
+      if (!firstPhotoEvent || !secondPhotoEvent) {
+        throw new Error("Expected two photo events");
+      }
+
+      const finalIndex = telegram.events.findIndex((event) => event === "message:Final answer");
+      const firstPhotoIndex = telegram.events.indexOf(firstPhotoEvent);
+      const secondPhotoIndex = telegram.events.indexOf(secondPhotoEvent);
+      expect(firstPhotoIndex).toBeGreaterThanOrEqual(0);
+      expect(secondPhotoIndex).toBeGreaterThan(firstPhotoIndex);
+      expect(finalIndex).toBeGreaterThan(secondPhotoIndex);
+      expect(telegram.sentPhotos).toHaveLength(2);
+      expect(telegram.sentPhotos.map((entry) => entry.options?.file_name)).toEqual([
+        "generated.png",
+        "generated-later.png"
+      ]);
+      expect(telegram.sentPhotos[1]?.options).toMatchObject({
+        message_thread_id: 777,
+        disable_notification: true,
+        file_name: "generated-later.png",
+        mime_type: "image/png"
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("still publishes the final assistant text after an earlier inline image send", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 81,
+      updateId: 91,
+      userId: 42,
+      text: "Generate an image, then provide the answer"
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([9, 8, 7]), {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
+
+    try {
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-gen-2",
+            status: "completed",
+            revisedPrompt: null,
+            result: "https://example.com/generated-two.png"
+          }
+        }
+      });
+      await waitForAsyncNotifications();
+
+      codex.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "completed",
+            error: null
+          }
+        }
+      });
+      await waitForAsyncNotifications();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated-two.png");
+      expect(telegram.sentPhotos).toEqual([
+        {
+          messageId: expect.any(Number),
+          chatId: -1001,
+          photo: new Uint8Array([9, 8, 7]),
+          options: {
+            message_thread_id: 777,
+            disable_notification: true,
+            file_name: "generated-two.png",
+            mime_type: "image/png"
+          }
+        }
+      ]);
+
+      const answerMessage = getFinalAnswerMessage(telegram);
+      expect(answerMessage?.text).toBe("Final answer");
+      expect(telegram.events.findIndex((event) => event.startsWith("photo:"))).toBeLessThan(
+        telegram.events.findIndex((event) => event === "message:Final answer")
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("falls back to a standalone commentary stub when combined response and commentary buttons exceed the markup budget", async () => {

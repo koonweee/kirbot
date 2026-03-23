@@ -7,6 +7,7 @@ import {
   type InlineKeyboardMarkup,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
+  type TelegramPhotoSendInput,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
 
@@ -21,11 +22,22 @@ class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   nextCreateForumTopicError: TelegramError | null = null;
   nextSendMessageError: TelegramError | null = null;
+  nextSendPhotoError: TelegramError | null = null;
   nextEditMessageTextError: TelegramError | null = null;
   nextDeleteMessageError: Error | null = null;
   operationLog: string[] = [];
   createdTopics: Array<{ chatId: number; name: string; options?: TelegramCreateForumTopicOptions }> = [];
   sentMessages: Array<{ chatId: number; text: string; options?: TelegramSendOptions }> = [];
+  sentPhotos: Array<{
+    chatId: number;
+    photo: Uint8Array;
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
+  }> = [];
   edits: Array<{
     chatId: number;
     messageId: number;
@@ -68,6 +80,27 @@ class FakeTelegram implements TelegramApi {
     this.messageCounter += 1;
     this.operationLog.push(`send:${text}`);
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
+    return { message_id: this.messageCounter };
+  }
+
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
+    if (this.nextSendPhotoError) {
+      const error = this.nextSendPhotoError;
+      this.nextSendPhotoError = null;
+      throw error;
+    }
+
+    this.messageCounter += 1;
+    this.operationLog.push(`photo:${input.bytes.length}`);
+    const options = {
+      ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+      ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+      ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+      ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+    };
+    this.sentPhotos.push(
+      Object.keys(options).length > 0 ? { chatId: input.chatId, photo: input.bytes, options } : { chatId: input.chatId, photo: input.bytes }
+    );
     return { message_id: this.messageCounter };
   }
 
@@ -184,6 +217,199 @@ describe("TelegramMessenger", () => {
         }
       }
     ]);
+  });
+
+  it("sends standalone photos with topic routing, file hints, and muted notifications", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+    const sendPhoto = (messenger as unknown as {
+      sendPhoto?: (input: {
+        chatId: number;
+        topicId?: number | null;
+        bytes: Uint8Array;
+        fileName?: string | null;
+        mimeType?: string | null;
+      }) => Promise<{ messageId: number }>;
+    }).sendPhoto;
+
+    expect(sendPhoto).toBeTypeOf("function");
+
+    await sendPhoto!({
+      chatId: 1,
+      topicId: 2,
+      bytes: new Uint8Array([1, 2, 3]),
+      fileName: "generated-image.png",
+      mimeType: "image/png"
+    });
+
+    expect(telegram.sentPhotos).toEqual([
+      {
+        chatId: 1,
+        photo: new Uint8Array([1, 2, 3]),
+        options: {
+          message_thread_id: 2,
+          disable_notification: true,
+          file_name: "generated-image.png",
+          mime_type: "image/png"
+        }
+      }
+    ]);
+  });
+
+  it("sends root-surface photos with muted visible-send behavior and no thread id shortcut", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+    const sendPhoto = (messenger as unknown as {
+      sendPhoto?: (input: {
+        chatId: number;
+        topicId?: number | null;
+        bytes: Uint8Array;
+        fileName?: string | null;
+        mimeType?: string | null;
+      }) => Promise<{ messageId: number }>;
+    }).sendPhoto;
+
+    expect(sendPhoto).toBeTypeOf("function");
+
+    await sendPhoto!({
+      chatId: 1,
+      topicId: null,
+      bytes: new Uint8Array([4, 5, 6]),
+      fileName: "root-image.jpg",
+      mimeType: "image/jpeg"
+    });
+
+    expect(telegram.sentPhotos).toEqual([
+      {
+        chatId: 1,
+        photo: new Uint8Array([4, 5, 6]),
+        options: {
+          disable_notification: true,
+          file_name: "root-image.jpg",
+          mime_type: "image/jpeg"
+        }
+      }
+    ]);
+  });
+
+  it("retries rate-limited photo sends using Telegram retry_after", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+      telegram.nextSendPhotoError = rateLimitError(1);
+      const sendPhoto = (messenger as unknown as {
+        sendPhoto?: (input: {
+          chatId: number;
+          topicId?: number | null;
+          bytes: Uint8Array;
+          fileName?: string | null;
+          mimeType?: string | null;
+        }) => Promise<{ messageId: number }>;
+      }).sendPhoto;
+
+      expect(sendPhoto).toBeTypeOf("function");
+
+      const promise = sendPhoto!({
+        chatId: 1,
+        topicId: 2,
+        bytes: new Uint8Array([7, 8, 9]),
+        fileName: "retry-photo.png",
+        mimeType: "image/png"
+      });
+
+      await Promise.resolve();
+      expect(telegram.sentPhotos).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toEqual({ messageId: 1 });
+      expect(telegram.sentPhotos).toEqual([
+        {
+          chatId: 1,
+          photo: new Uint8Array([7, 8, 9]),
+          options: {
+            message_thread_id: 2,
+            disable_notification: true,
+            file_name: "retry-photo.png",
+            mime_type: "image/png"
+          }
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps photo sends on the shared visible-send queue alongside messages", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+      telegram.nextSendMessageError = rateLimitError(1);
+      const sendPhoto = (messenger as unknown as {
+        sendPhoto?: (input: {
+          chatId: number;
+          topicId?: number | null;
+          bytes: Uint8Array;
+          fileName?: string | null;
+          mimeType?: string | null;
+        }) => Promise<{ messageId: number }>;
+      }).sendPhoto;
+
+      expect(sendPhoto).toBeTypeOf("function");
+
+      const messagePromise = messenger.sendMessage({
+        chatId: 1,
+        topicId: 2,
+        text: "Queued text"
+      });
+      const photoPromise = sendPhoto!({
+        chatId: 1,
+        topicId: 2,
+        bytes: new Uint8Array([7, 8, 9]),
+        fileName: "queued.png",
+        mimeType: "image/png"
+      });
+
+      await Promise.resolve();
+      expect(telegram.operationLog).toEqual([]);
+      expect(telegram.sentPhotos).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(messagePromise).resolves.toEqual({ messageId: 1 });
+      expect(telegram.operationLog).toEqual(["send:Queued text"]);
+      expect(telegram.sentPhotos).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(photoPromise).resolves.toEqual({ messageId: 2 });
+      expect(telegram.operationLog).toEqual(["send:Queued text", "photo:3"]);
+      expect(telegram.sentMessages).toEqual([
+        {
+          chatId: 1,
+          text: "Queued text",
+          options: {
+            message_thread_id: 2,
+            disable_notification: true
+          }
+        }
+      ]);
+      expect(telegram.sentPhotos).toEqual([
+        {
+          chatId: 1,
+          photo: new Uint8Array([7, 8, 9]),
+          options: {
+            message_thread_id: 2,
+            disable_notification: true,
+            file_name: "queued.png",
+            mime_type: "image/png"
+          }
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("edits messages with markup and entities", async () => {

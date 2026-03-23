@@ -95,6 +95,15 @@ export type TelegramDeliveryHints = {
   replacePending?: boolean;
 };
 
+export type TelegramPhotoSendInput = {
+  chatId: number;
+  topicId?: number | null;
+  bytes: Uint8Array;
+  fileName?: string | null;
+  mimeType?: string | null;
+  disableNotification?: boolean;
+};
+
 export interface TelegramApi {
   getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>>;
   createForumTopic(
@@ -103,6 +112,7 @@ export interface TelegramApi {
     options?: TelegramCreateForumTopicOptions
   ): Promise<{ message_thread_id: number; name: string }>;
   sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }>;
+  sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }>;
   sendMessageDraft(chatId: number, draftId: number, text: string, options?: TelegramDraftOptions): Promise<true>;
   sendChatAction(
     chatId: number,
@@ -193,6 +203,19 @@ export class TelegramMessenger {
     }
     return { messageId: message.message_id };
   }
+
+  sendPhoto = async (input: TelegramPhotoSendInput): Promise<{ messageId: number }> => {
+    const photo = await this.scheduleTelegramRequest("send photo", "visible_send", () =>
+      this.telegram.sendPhoto({
+        ...input,
+        disableNotification: input.disableNotification ?? true
+      })
+    );
+    if (isTelegramDeliverySupersededResult(photo)) {
+      throw new Error("Unexpected telegram delivery superseded result for photo send");
+    }
+    return { messageId: photo.message_id };
+  };
 
   async editMessageText(input: {
     chatId: number;
