@@ -3666,7 +3666,7 @@ describe("TelegramCodexBridge", () => {
       await waitForAsyncNotifications();
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/generated.png");
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated.png");
       expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
       expect(telegram.sentPhotos).toHaveLength(0);
 
@@ -3680,7 +3680,7 @@ describe("TelegramCodexBridge", () => {
       await waitForAsyncNotifications();
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/generated.png");
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated.png");
       expect(telegram.sentPhotos).toHaveLength(0);
       expect(telegram.events.some((event) => event === "message:Final answer")).toBe(false);
 
@@ -3688,7 +3688,7 @@ describe("TelegramCodexBridge", () => {
       await waitForAsyncNotifications();
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
-      expect(fetchSpy).toHaveBeenNthCalledWith(2, "https://example.com/generated-later.png");
+      expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://example.com/generated-later.png");
       expect(telegram.sentPhotos).toHaveLength(1);
       expect(telegram.sentPhotos[0]?.options).toMatchObject({
         message_thread_id: 777,
@@ -3791,7 +3791,7 @@ describe("TelegramCodexBridge", () => {
       await waitForAsyncNotifications();
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(fetchSpy).toHaveBeenNthCalledWith(1, "https://example.com/generated-two.png");
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/generated-two.png");
       expect(telegram.sentPhotos).toEqual([
         {
           messageId: expect.any(Number),
