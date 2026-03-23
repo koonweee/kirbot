@@ -1534,27 +1534,34 @@ describe("TurnLifecycleCoordinator", () => {
       text: "Final answer",
       assistantText: "Final answer"
     });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
 
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "imageGeneration",
-      id: "image-gen-invalid",
-      status: "completed",
-      revisedPrompt: null,
-      result: "ftp://example.com/generated.png"
-    });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-invalid",
+        status: "completed",
+        revisedPrompt: null,
+        result: "ftp://example.com/generated.png"
+      });
 
-    expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
-      turnId: "turn-1",
-      itemId: "image-gen-invalid",
-      stage: "invalid_url",
-      url: "ftp://example.com/generated.png"
-    });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-invalid",
+        stage: "invalid_url",
+        url: "ftp://example.com/generated.png"
+      });
 
-    await harness.coordinator.completeTurn("thread-1", "turn-1");
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
 
-    expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("records download failures in the activity log", async () => {
@@ -1587,8 +1594,11 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("records non-image validation failures in the activity log", async () => {
-    const harness = createHarness();
+  it("records non-image validation failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("plain text payload", {
         headers: {
@@ -1615,6 +1625,9 @@ describe("TurnLifecycleCoordinator", () => {
         stage: "validation",
         url: "https://example.com/not-an-image.txt"
       });
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
     } finally {
       fetchSpy.mockRestore();
     }

@@ -292,6 +292,55 @@ describe("TelegramMessenger", () => {
     ]);
   });
 
+  it("retries rate-limited photo sends using Telegram retry_after", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+      telegram.nextSendPhotoError = rateLimitError(1);
+      const sendPhoto = (messenger as unknown as {
+        sendPhoto?: (input: {
+          chatId: number;
+          topicId?: number | null;
+          bytes: Uint8Array;
+          fileName?: string | null;
+          mimeType?: string | null;
+        }) => Promise<{ messageId: number }>;
+      }).sendPhoto;
+
+      expect(sendPhoto).toBeTypeOf("function");
+
+      const promise = sendPhoto!({
+        chatId: 1,
+        topicId: 2,
+        bytes: new Uint8Array([7, 8, 9]),
+        fileName: "retry-photo.png",
+        mimeType: "image/png"
+      });
+
+      await Promise.resolve();
+      expect(telegram.sentPhotos).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toEqual({ messageId: 1 });
+      expect(telegram.sentPhotos).toEqual([
+        {
+          chatId: 1,
+          photo: new Uint8Array([7, 8, 9]),
+          options: {
+            message_thread_id: 2,
+            disable_notification: true,
+            file_name: "retry-photo.png",
+            mime_type: "image/png"
+          }
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("edits messages with markup and entities", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);
