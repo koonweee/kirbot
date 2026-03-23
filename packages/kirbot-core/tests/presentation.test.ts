@@ -21,14 +21,17 @@ import {
 } from "../src/bridge/presentation";
 import { prefixTelegramUsernameMention } from "../src/bridge/telegram-mention-prefix";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
+import type { TelegramInlineKeyboardButton } from "../src/telegram-messenger";
 import type { ActivityLogEntry } from "../src/turn-runtime";
 
-function getWebAppUrl(entry: {
+function getButtonUrl(entry: {
   replyMarkup: {
-    inline_keyboard: Array<Array<{ web_app?: { url?: string }; callback_data?: string }>>;
+    inline_keyboard: Array<Array<TelegramInlineKeyboardButton>>;
   };
 }): string {
-  const url = entry.replyMarkup.inline_keyboard.flatMap((row) => row).find((button) => button.web_app?.url)?.web_app?.url;
+  const url = entry.replyMarkup.inline_keyboard
+    .flatMap((row) => row)
+    .find((button): button is Extract<TelegramInlineKeyboardButton, { url: string }> => "url" in button)?.url;
   expect(url).toBeTruthy();
   return url!;
 }
@@ -294,13 +297,13 @@ describe("plan artifact presentation", () => {
     const [viewButton, implementButton] = message.replyMarkup.inline_keyboard[0] ?? [];
 
     expect(message.text).toBe("Plan is ready");
-    expect(viewButton && "web_app" in viewButton ? viewButton.text : null).toBe("Plan");
+    expect(viewButton && "url" in viewButton ? viewButton.text : null).toBe("Plan");
     expect(implementButton && "callback_data" in implementButton ? implementButton : null).toEqual({
       text: "Implement",
       callback_data: TOPIC_IMPLEMENT_CALLBACK_DATA
     });
 
-    const url = viewButton && "web_app" in viewButton ? viewButton.web_app.url : null;
+    const url = viewButton && "url" in viewButton ? viewButton.url : null;
     expect(url).toBeTruthy();
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
     expect(encoded).toBeTruthy();
@@ -399,7 +402,7 @@ describe("commentary artifact presentation", () => {
     ];
 
     const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
-    const url = "web_app" in button ? button.web_app.url : null;
+    const url = "url" in button ? button.url : null;
     expect(url).toBeTruthy();
 
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
@@ -421,7 +424,7 @@ describe("commentary artifact presentation", () => {
     ];
 
     const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
-    const url = "web_app" in button ? button.web_app.url : null;
+    const url = "url" in button ? button.url : null;
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
 
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
@@ -456,7 +459,7 @@ describe("commentary artifact presentation", () => {
     ];
 
     const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
-    const url = "web_app" in button ? button.web_app.url : null;
+    const url = "url" in button ? button.url : null;
     expect(url).toBeTruthy();
 
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
@@ -484,7 +487,7 @@ describe("commentary artifact presentation", () => {
     ];
 
     const button = buildCommentaryArtifactButton("https://example.com/mini-app", entries);
-    const url = "web_app" in button ? button.web_app.url : null;
+    const url = "url" in button ? button.url : null;
     const encoded = getEncodedMiniAppArtifactFromHash(new URL(url!).hash);
 
     expect(decodeMiniAppArtifact(encoded!)).toEqual({
@@ -508,7 +511,7 @@ describe("commentary artifact presentation", () => {
 
     const reassembled = publication.standaloneMessages
       .map((message) => {
-        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getWebAppUrl(message)).hash);
+        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getButtonUrl(message)).hash);
         return decodeMiniAppArtifact(encoded!).markdownText;
       })
       .join("\n\n");
@@ -529,7 +532,7 @@ describe("multipart artifact presentation", () => {
 
     const reassembled = publication.standaloneMessages
       .map((message) => {
-        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getWebAppUrl(message)).hash);
+        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getButtonUrl(message)).hash);
         return decodeMiniAppArtifact(encoded!).markdownText;
       })
       .join("\n\n");
@@ -550,7 +553,7 @@ describe("multipart artifact presentation", () => {
 
     const reassembled = messages
       .map((message) => {
-        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getWebAppUrl(message)).hash);
+        const encoded = getEncodedMiniAppArtifactFromHash(new URL(getButtonUrl(message)).hash);
         return decodeMiniAppArtifact(encoded!).markdownText;
       })
       .join("\n");

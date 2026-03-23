@@ -521,7 +521,7 @@ function buildMarkdownArtifactButton(input: {
   artifact: MiniAppArtifact;
   buttonText: string;
 }): TelegramInlineKeyboardButton {
-  return { text: input.buttonText, web_app: { url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) } };
+  return { text: input.buttonText, url: buildMiniAppArtifactUrl(input.publicUrl, input.artifact) };
 }
 
 function truncateStatus(text: string): string {
