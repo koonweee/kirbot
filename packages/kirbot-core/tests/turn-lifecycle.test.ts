@@ -1836,6 +1836,60 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
+  it("retries a replayed imageGeneration id after an earlier publication failure", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new Error("temporary fetch failure"))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([4, 5, 6]), {
+          headers: {
+            "Content-Type": "image/png"
+          }
+        })
+      );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-retry",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/retry-first.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-retry",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/retry-second.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-retry",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/retry-third.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/retry-first.png");
+      expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://example.com/retry-second.png");
+      expect(harness.telegram.sentPhotos).toHaveLength(1);
+      expect(harness.telegram.sentPhotos[0]).toMatchObject({
+        photo: new Uint8Array([4, 5, 6]),
+        options: expect.objectContaining({
+          file_name: "retry-second.png",
+          mime_type: "image/png"
+        })
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("rejects oversized image payloads as validation failures", async () => {
     const harness = createHarness();
     const oversizedBytes = new Uint8Array(12_000_001);

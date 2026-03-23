@@ -330,8 +330,10 @@ export class TurnLifecycleCoordinator {
         return;
       }
 
-      context.handledImageGenerationItemIds.add(item.id);
-      await this.publishGeneratedImage(context, item);
+      const published = await this.publishGeneratedImage(context, item);
+      if (published) {
+        context.handledImageGenerationItemIds.add(item.id);
+      }
     }
 
     const activityLogEntry = buildActivityLogEntryForItemCompleted(item);
@@ -532,7 +534,7 @@ export class TurnLifecycleCoordinator {
   private async publishGeneratedImage(
     context: TurnContext,
     item: Extract<ThreadItem, { type: "imageGeneration" }>
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const image = await fetchUploadReadyGeneratedImage(item);
       await this.deps.messenger.sendPhoto({
@@ -543,16 +545,18 @@ export class TurnLifecycleCoordinator {
         mimeType: image.mimeType,
         disableNotification: true
       });
+      return true;
     } catch (error) {
       if (error instanceof GeneratedImagePublicationError) {
         this.logger.warn(
           `Failed to publish generated image for turn ${context.turnId} item ${item.id} at ${error.stage}: ${error.url}`,
           error
         );
-        return;
+        return false;
       }
 
       this.logger.warn(`Failed to publish generated image for turn ${context.turnId} item ${item.id}`, error);
+      return false;
     }
   }
 }
