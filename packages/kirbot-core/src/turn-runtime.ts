@@ -13,6 +13,19 @@ type PlanItemState = {
   text: string;
 };
 
+export type GeneratedImagePublicationFailureStage =
+  | "invalid_url"
+  | "download"
+  | "validation"
+  | "telegram_send";
+
+export type GeneratedImagePublicationFailureLogInput = {
+  turnId: string;
+  itemId: string;
+  url: string;
+  stage: GeneratedImagePublicationFailureStage;
+};
+
 export type ActivityLogEntry =
   | {
       kind: "commentary";

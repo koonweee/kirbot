@@ -6,6 +6,7 @@ import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadI
 import type { ThreadTokenUsage } from "@kirbot/codex-client/generated/codex/v2/ThreadTokenUsage";
 import type { LoggerLike } from "../logging";
 import {
+  buildActivityLogEntryForGeneratedImagePublicationFailure,
   buildActivityLogEntryForItemCompleted,
   buildPlanArtifactMessages,
   buildOversizePlanArtifactMessage,
@@ -21,7 +22,10 @@ import {
   GeneratedImagePublicationError,
   isImageGenerationSuccess
 } from "./generated-image-publication";
-import { type QueueStateSnapshot } from "../turn-runtime";
+import {
+  type GeneratedImagePublicationFailureLogInput,
+  type QueueStateSnapshot
+} from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import { createTelegramTurnSurface } from "./telegram-turn-surface";
 import {
@@ -330,9 +334,14 @@ export class TurnLifecycleCoordinator {
         return;
       }
 
-      const published = await this.publishGeneratedImage(context, item);
-      if (published) {
+      const publication = await this.publishGeneratedImage(context, item);
+      if (publication.published) {
         context.handledImageGenerationItemIds.add(item.id);
+      } else if (publication.failure) {
+        this.deps.runtime.appendActivityLogEntry(
+          turnId,
+          buildActivityLogEntryForGeneratedImagePublicationFailure(publication.failure)
+        );
       }
     }
 
@@ -534,29 +543,52 @@ export class TurnLifecycleCoordinator {
   private async publishGeneratedImage(
     context: TurnContext,
     item: Extract<ThreadItem, { type: "imageGeneration" }>
-  ): Promise<boolean> {
+  ): Promise<{ published: true } | { published: false; failure: GeneratedImagePublicationFailureLogInput | null }> {
     try {
       const image = await fetchUploadReadyGeneratedImage(item);
-      await this.deps.messenger.sendPhoto({
-        chatId: context.chatId,
-        topicId: context.topicId,
-        bytes: image.bytes,
-        fileName: image.fileName,
-        mimeType: image.mimeType,
-        disableNotification: true
-      });
-      return true;
+      try {
+        await this.deps.messenger.sendPhoto({
+          chatId: context.chatId,
+          topicId: context.topicId,
+          bytes: image.bytes,
+          fileName: image.fileName,
+          mimeType: image.mimeType,
+          disableNotification: true
+        });
+        return { published: true };
+      } catch (error) {
+        const failure = {
+          turnId: context.turnId,
+          itemId: item.id,
+          url: image.url,
+          stage: "telegram_send"
+        } satisfies GeneratedImagePublicationFailureLogInput;
+        this.logger.warn("Failed to publish generated image", failure, error);
+        return {
+          published: false,
+          failure
+        };
+      }
     } catch (error) {
       if (error instanceof GeneratedImagePublicationError) {
-        this.logger.warn(
-          `Failed to publish generated image for turn ${context.turnId} item ${item.id} at ${error.stage}: ${error.url}`,
-          error
-        );
-        return false;
+        const failure = {
+          turnId: context.turnId,
+          itemId: item.id,
+          url: error.url,
+          stage: error.stage
+        } satisfies GeneratedImagePublicationFailureLogInput;
+        this.logger.warn("Failed to publish generated image", failure, error);
+        return {
+          published: false,
+          failure
+        };
       }
 
       this.logger.warn(`Failed to publish generated image for turn ${context.turnId} item ${item.id}`, error);
-      return false;
+      return {
+        published: false,
+        failure: null
+      };
     }
   }
 }

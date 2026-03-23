@@ -18,7 +18,12 @@ import type {
   TelegramInlineKeyboardButton,
   TelegramRenderedMessage
 } from "../telegram-messenger";
-import type { ActivityLogEntry, ActivityLogLabel, QueueStateSnapshot } from "../turn-runtime";
+import type {
+  ActivityLogEntry,
+  ActivityLogLabel,
+  GeneratedImagePublicationFailureLogInput,
+  QueueStateSnapshot
+} from "../turn-runtime";
 import {
   buildMiniAppArtifactUrl,
   MiniAppArtifactType,
@@ -575,6 +580,26 @@ export function buildActivityLogEntryForItemCompleted(item: ThreadItem): Activit
     default:
       return null;
   }
+}
+
+export function buildActivityLogEntryForGeneratedImagePublicationFailure(
+  failure: GeneratedImagePublicationFailureLogInput
+): StructuredFailureEntry {
+  return {
+    kind: "structuredFailure",
+    title: "Generated image publication failed",
+    subject: null,
+    metadata: [
+      { label: "Turn ID", value: failure.turnId, code: true },
+      { label: "Item ID", value: failure.itemId, code: true },
+      { label: "Stage", value: failure.stage, code: true }
+    ],
+    detail: {
+      title: "URL",
+      value: failure.url,
+      style: "quoteBlock"
+    }
+  };
 }
 
 function buildCommentaryMarkdown(entries: ActivityLogEntry[]): string {
