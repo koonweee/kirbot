@@ -1366,73 +1366,83 @@ describe("TurnLifecycleCoordinator", () => {
 
   it("surfaces successful collab completions in the status bubble while keeping other successful items transient", async () => {
     const harness = createHarness();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([1]), {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
     harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
-
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "mcpToolCall",
-      id: "mcp-1",
-      server: "github",
-      tool: "search",
-      status: "completed",
-      arguments: {},
-      result: null,
-      error: null,
-      durationMs: 10
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "dynamicToolCall",
-      id: "tool-1",
-      tool: "lookup_docs",
-      arguments: {},
-      status: "failed",
-      contentItems: null,
-      success: false,
-      durationMs: 10
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "collabAgentToolCall",
-      id: "agent-1",
-      tool: "spawnAgent",
-      status: "completed",
-      senderThreadId: "thread-1",
-      receiverThreadIds: ["thread-2"],
-      prompt: null,
-      model: null,
-      reasoningEffort: null,
-      agentsStates: {}
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "webSearch",
-      id: "search-1",
-      query: "kirbot issues",
-      action: null
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "imageView",
-      id: "image-1",
-      path: "/tmp/screenshots/error.png"
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "imageGeneration",
-      id: "image-gen-1",
-      status: "completed",
-      revisedPrompt: null,
-      result: "https://example.com/image.png"
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "enteredReviewMode",
-      id: "review-1",
-      review: "Security review"
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "exitedReviewMode",
-      id: "review-2",
-      review: ""
-    });
-    await harness.coordinator.handleItemCompleted("turn-1", {
-      type: "contextCompaction",
-      id: "compact-1"
-    });
+    try {
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "mcpToolCall",
+        id: "mcp-1",
+        server: "github",
+        tool: "search",
+        status: "completed",
+        arguments: {},
+        result: null,
+        error: null,
+        durationMs: 10
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "dynamicToolCall",
+        id: "tool-1",
+        tool: "lookup_docs",
+        arguments: {},
+        status: "failed",
+        contentItems: null,
+        success: false,
+        durationMs: 10
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "collabAgentToolCall",
+        id: "agent-1",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["thread-2"],
+        prompt: null,
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {}
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "webSearch",
+        id: "search-1",
+        query: "kirbot issues",
+        action: null
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageView",
+        id: "image-1",
+        path: "/tmp/screenshots/error.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-1",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/image.png"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "enteredReviewMode",
+        id: "review-1",
+        review: "Security review"
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "exitedReviewMode",
+        id: "review-2",
+        review: ""
+      });
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "contextCompaction",
+        id: "compact-1"
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
     await harness.coordinator.handleItemCompleted("turn-1", {
       type: "contextCompaction",
       id: "compact-2"
@@ -1456,6 +1466,18 @@ describe("TurnLifecycleCoordinator", () => {
         }
       }
     ]);
+    expect(harness.telegram.sentPhotos).toEqual([
+      {
+        chatId: -1001,
+        photo: new Uint8Array([1]),
+        options: {
+          message_thread_id: 777,
+          disable_notification: true,
+          file_name: "image.png",
+          mime_type: "image/png"
+        }
+      }
+    ]);
     expect(harness.telegram.drafts).toEqual([
       {
         chatId: -1001,
@@ -1468,7 +1490,7 @@ describe("TurnLifecycleCoordinator", () => {
       },
       {
         chatId: -1001,
-        draftId: 2,
+        draftId: 3,
         text: "Context compacted",
         options: {
           disable_notification: true,

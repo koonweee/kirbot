@@ -16,6 +16,11 @@ import {
   type LiveSubagentSnapshot,
   type TurnStatusDraft
 } from "./presentation";
+import {
+  fetchUploadReadyGeneratedImage,
+  GeneratedImagePublicationError,
+  isImageGenerationSuccess
+} from "./generated-image-publication";
 import { type QueueStateSnapshot } from "../turn-runtime";
 import { type TurnContext, transitionTurnPhase } from "./turn-context";
 import { createTelegramTurnSurface } from "./telegram-turn-surface";
@@ -71,6 +76,7 @@ export class TurnLifecycleCoordinator {
       compactionNoticeSent: false,
       publishedPlanMessages: 0,
       changedFilePaths: new Set(),
+      handledImageGenerationItemIds: new Set(),
       ...(message.telegramUsername !== undefined ? { telegramUsername: message.telegramUsername } : {}),
       mode,
       model,
@@ -319,6 +325,15 @@ export class TurnLifecycleCoordinator {
       }
     }
 
+    if (item.type === "imageGeneration" && isImageGenerationSuccess(item)) {
+      if (context.handledImageGenerationItemIds.has(item.id)) {
+        return;
+      }
+
+      context.handledImageGenerationItemIds.add(item.id);
+      await this.publishGeneratedImage(context, item);
+    }
+
     const activityLogEntry = buildActivityLogEntryForItemCompleted(item);
     if (activityLogEntry) {
       this.deps.runtime.appendActivityLogEntry(turnId, activityLogEntry);
@@ -511,6 +526,33 @@ export class TurnLifecycleCoordinator {
       }
 
       throw error;
+    }
+  }
+
+  private async publishGeneratedImage(
+    context: TurnContext,
+    item: Extract<ThreadItem, { type: "imageGeneration" }>
+  ): Promise<void> {
+    try {
+      const image = await fetchUploadReadyGeneratedImage(item);
+      await this.deps.messenger.sendPhoto({
+        chatId: context.chatId,
+        topicId: context.topicId,
+        bytes: image.bytes,
+        fileName: image.fileName,
+        mimeType: image.mimeType,
+        disableNotification: true
+      });
+    } catch (error) {
+      if (error instanceof GeneratedImagePublicationError) {
+        this.logger.warn(
+          `Failed to publish generated image for turn ${context.turnId} item ${item.id} at ${error.stage}: ${error.url}`,
+          error
+        );
+        return;
+      }
+
+      this.logger.warn(`Failed to publish generated image for turn ${context.turnId} item ${item.id}`, error);
     }
   }
 }

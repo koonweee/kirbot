@@ -24,6 +24,7 @@ import {
   MiniAppArtifactType,
   type MiniAppArtifact
 } from "../mini-app/url";
+import { isImageGenerationSuccess } from "./generated-image-publication";
 
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const COMMAND_FAILURE_OUTPUT_CHAR_LIMIT = 1200;
@@ -1464,8 +1465,4 @@ function summarizeFileChangePaths(changes: Array<{ path: string }>): { paths: st
 
 function isCommandExecutionFailed(item: Extract<ThreadItem, { type: "commandExecution" }>): boolean {
   return item.status === "failed" || item.status === "declined" || (item.exitCode !== null && item.exitCode !== 0);
-}
-
-function isImageGenerationSuccess(item: Extract<ThreadItem, { type: "imageGeneration" }>): boolean {
-  return !/fail/i.test(item.status) && item.result.trim().length > 0;
 }
