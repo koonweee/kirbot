@@ -6256,7 +6256,7 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.edits.at(-1)?.text).toBe("Allowed additional permissions for this session");
   });
 
-  it.each([
+  const starterMentionPromptCases: Array<{ label: string; request: ServerRequest; buttonText: string }> = [
     {
       label: "command approval",
       request: {
@@ -6268,7 +6268,7 @@ describe("TelegramCodexBridge", () => {
           itemId: "item-1",
           command: "npm publish",
           cwd: "/workspace",
-          availableDecisions: ["accept", "decline", "cancel"] as const
+          availableDecisions: ["accept", "decline", "cancel"] satisfies CommandExecutionApprovalDecision[]
         }
       },
       buttonText: "Allow once"
@@ -6310,7 +6310,9 @@ describe("TelegramCodexBridge", () => {
       },
       buttonText: "Allow this session"
     }
-  ])("prefixes the initial %s prompt with the starter username", async ({ request, buttonText }) => {
+  ];
+
+  it.each(starterMentionPromptCases)("prefixes the initial %s prompt with the starter username", async ({ request, buttonText }) => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 2000,

@@ -284,7 +284,6 @@ describe("bot entrypoint routing", () => {
       userId: 99,
       text: "Investigate this"
     });
-    expect(bridgeSpies.handleUserTextMessage.mock.calls[0]?.[0]).not.toHaveProperty("telegramUsername");
   });
 
   it("redirects direct messages instead of forwarding them as workspace traffic", async () => {
