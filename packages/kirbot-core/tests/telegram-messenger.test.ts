@@ -30,7 +30,12 @@ class FakeTelegram implements TelegramApi {
   sentPhotos: Array<{
     chatId: number;
     photo: Uint8Array;
-    options?: { message_thread_id?: number; disable_notification?: boolean };
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    };
   }> = [];
   edits: Array<{
     chatId: number;
@@ -80,7 +85,12 @@ class FakeTelegram implements TelegramApi {
   async sendPhoto(
     chatId: number,
     photo: Uint8Array,
-    options?: { message_thread_id?: number; disable_notification?: boolean }
+    options?: {
+      message_thread_id?: number;
+      disable_notification?: boolean;
+      file_name?: string;
+      mime_type?: string;
+    }
   ): Promise<{ message_id: number }> {
     if (this.nextSendPhotoError) {
       const error = this.nextSendPhotoError;
@@ -209,7 +219,7 @@ describe("TelegramMessenger", () => {
     ]);
   });
 
-  it("sends standalone photos with topic routing and muted notifications", async () => {
+  it("sends standalone photos with topic routing, file hints, and muted notifications", async () => {
     const telegram = new FakeTelegram();
     const messenger = new TelegramMessenger(telegram);
     const sendPhoto = (messenger as unknown as {
@@ -238,7 +248,45 @@ describe("TelegramMessenger", () => {
         photo: new Uint8Array([1, 2, 3]),
         options: {
           message_thread_id: 2,
-          disable_notification: true
+          disable_notification: true,
+          file_name: "generated-image.png",
+          mime_type: "image/png"
+        }
+      }
+    ]);
+  });
+
+  it("sends root-surface photos with muted visible-send behavior and no thread id shortcut", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+    const sendPhoto = (messenger as unknown as {
+      sendPhoto?: (input: {
+        chatId: number;
+        topicId?: number | null;
+        bytes: Uint8Array;
+        fileName?: string | null;
+        mimeType?: string | null;
+      }) => Promise<{ messageId: number }>;
+    }).sendPhoto;
+
+    expect(sendPhoto).toBeTypeOf("function");
+
+    await sendPhoto!({
+      chatId: 1,
+      topicId: null,
+      bytes: new Uint8Array([4, 5, 6]),
+      fileName: "root-image.jpg",
+      mimeType: "image/jpeg"
+    });
+
+    expect(telegram.sentPhotos).toEqual([
+      {
+        chatId: 1,
+        photo: new Uint8Array([4, 5, 6]),
+        options: {
+          disable_notification: true,
+          file_name: "root-image.jpg",
+          mime_type: "image/jpeg"
         }
       }
     ]);

@@ -3582,6 +3582,10 @@ describe("TelegramCodexBridge", () => {
   });
 
   it("preserves item/completed ordering while a generated image is being published", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,
@@ -3646,6 +3650,10 @@ describe("TelegramCodexBridge", () => {
   });
 
   it("still publishes the final assistant text after an earlier inline image send", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Final answer",
+      assistantText: "Final answer"
+    };
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: 777,

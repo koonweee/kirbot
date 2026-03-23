@@ -346,6 +346,23 @@ function createHarness(
   };
 }
 
+function expectImagePublicationFailureEntry(
+  entries: ReturnType<BridgeTurnRuntime["renderActivityLogEntries"]>,
+  stage: "invalid_url" | "download" | "validation" | "telegram_send"
+): void {
+  expect(entries).toEqual([
+    expect.objectContaining({
+      kind: "structuredFailure",
+      metadata: expect.arrayContaining([
+        expect.objectContaining({
+          label: "Stage",
+          value: stage
+        })
+      ])
+    })
+  ]);
+}
+
 describe("TurnLifecycleCoordinator", () => {
   it("supports root-surface status drafts without a topic id", async () => {
     const harness = createHarness();
@@ -1456,6 +1473,28 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
+  it("does not publish cancelled image generation items inline", async () => {
+    const harness = createHarness();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-cancelled",
+        status: "cancelled",
+        revisedPrompt: null,
+        result: "https://example.com/cancelled.png"
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(harness.telegram.sentPhotos).toHaveLength(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("records invalid_url image publication failures in the activity log", async () => {
     const harness = createHarness();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -1472,7 +1511,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(JSON.stringify(harness.runtime.renderActivityLogEntries("turn-1"))).toContain("invalid_url");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "invalid_url");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1494,7 +1533,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(harness.runtime.renderActivityLogEntries("turn-1"))).toContain("download");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "download");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1522,7 +1561,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(harness.runtime.renderActivityLogEntries("turn-1"))).toContain("validation");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "validation");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1551,7 +1590,7 @@ describe("TurnLifecycleCoordinator", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(harness.runtime.renderActivityLogEntries("turn-1"))).toContain("telegram_send");
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), "telegram_send");
     } finally {
       fetchSpy.mockRestore();
     }

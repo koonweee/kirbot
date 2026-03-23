@@ -316,26 +316,35 @@ describe("bot entrypoint routing", () => {
     const runtimeArgs = vi.mocked(createKirbotRuntime).mock.calls.at(-1)?.[0] as
       | {
           telegramApi?: {
-            sendPhoto?: (chatId: number, photo: Uint8Array, options?: { message_thread_id?: number; disable_notification?: boolean }) => Promise<unknown>;
+            sendPhoto?: (
+              chatId: number,
+              photo: { source: Uint8Array; filename?: string } | string,
+              options?: { message_thread_id?: number; disable_notification?: boolean }
+            ) => Promise<unknown>;
           };
         }
       | undefined;
 
     expect(runtimeArgs?.telegramApi?.sendPhoto).toBeTypeOf("function");
 
-    await runtimeArgs!.telegramApi!.sendPhoto!(123, new Uint8Array([4, 5, 6]), {
+    const photo = {
+      source: new Uint8Array([4, 5, 6]),
+      filename: "generated-image.png"
+    };
+    await runtimeArgs!.telegramApi!.sendPhoto!(123, photo, {
       message_thread_id: 777,
       disable_notification: true
     });
 
-    expect(FakeBot.instances.at(-1)?.api.sendPhoto).toHaveBeenCalledWith(
-      123,
-      new Uint8Array([4, 5, 6]),
-      {
-        message_thread_id: 777,
-        disable_notification: true
-      }
-    );
+    expect(FakeBot.instances.at(-1)?.api.sendPhoto).toHaveBeenCalledWith(123, expect.objectContaining({
+      filename: "generated-image.png"
+    }), {
+      message_thread_id: 777,
+      disable_notification: true
+    });
+    expect(FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1)?.[1]).toMatchObject({
+      filename: "generated-image.png"
+    });
   });
 
   it("accepts callback queries from the workspace chat regardless of sender id", async () => {
