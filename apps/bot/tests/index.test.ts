@@ -80,7 +80,13 @@ async function loadHandlers(): Promise<Map<string, BotHandler>> {
   return bot!.handlers;
 }
 
-function buildTextMessageContext(chatId: number, chatType: string, userId: number, text: string) {
+function buildTextMessageContext(
+  chatId: number,
+  chatType: string,
+  userId: number,
+  text: string,
+  username?: string
+) {
   return {
     chat: {
       id: chatId,
@@ -91,11 +97,72 @@ function buildTextMessageContext(chatId: number, chatType: string, userId: numbe
     },
     message: {
       from: {
-        id: userId
+        id: userId,
+        ...(username ? { username } : {})
       },
       text,
       message_id: 901,
       is_topic_message: false
+    }
+  };
+}
+
+function buildPhotoMessageContext(
+  chatId: number,
+  chatType: string,
+  userId: number,
+  caption: string,
+  username?: string
+) {
+  return {
+    chat: {
+      id: chatId,
+      type: chatType
+    },
+    update: {
+      update_id: 901
+    },
+    message: {
+      from: {
+        id: userId,
+        ...(username ? { username } : {})
+      },
+      caption,
+      message_id: 902,
+      is_topic_message: false,
+      photo: [{ file_id: "photo-file" }]
+    }
+  };
+}
+
+function buildDocumentMessageContext(
+  chatId: number,
+  chatType: string,
+  userId: number,
+  caption: string,
+  username?: string
+) {
+  return {
+    chat: {
+      id: chatId,
+      type: chatType
+    },
+    update: {
+      update_id: 902
+    },
+    message: {
+      from: {
+        id: userId,
+        ...(username ? { username } : {})
+      },
+      caption,
+      message_id: 903,
+      is_topic_message: false,
+      document: {
+        file_id: "document-file",
+        file_name: "diagram.png",
+        mime_type: "image/png"
+      }
     }
   };
 }
@@ -127,6 +194,96 @@ describe("bot entrypoint routing", () => {
       text: "Investigate this"
     });
     expect(FakeBot.instances.at(-1)?.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("forwards telegram usernames from workspace text, photo, and document ingress", async () => {
+    const handlers = await loadHandlers();
+    const photoMessageInput = {
+      text: "Photo caption",
+      input: [
+        {
+          type: "telegramImage",
+          fileId: "photo-file",
+          fileName: null,
+          mimeType: "image/jpeg"
+        }
+      ]
+    };
+    const documentMessageInput = {
+      text: "Document caption",
+      input: [
+        {
+          type: "telegramImage",
+          fileId: "document-file",
+          fileName: "diagram.png",
+          mimeType: "image/png"
+        }
+      ]
+    };
+    const photoInputMock = vi.mocked(await import("../src/message-input")).buildPhotoMessageInput;
+    const documentInputMock = vi.mocked(await import("../src/message-input")).buildImageDocumentMessageInput;
+    photoInputMock.mockReturnValue(photoMessageInput as never);
+    documentInputMock.mockReturnValue(documentMessageInput as never);
+
+    await handlers.get("message:text")?.(buildTextMessageContext(-1001, "supergroup", 99, "Investigate this", "Jeremy"));
+    await handlers.get("message:photo")?.(
+      buildPhotoMessageContext(-1001, "supergroup", 99, "Photo caption", "Jeremy")
+    );
+    await handlers.get("message:document")?.(
+      buildDocumentMessageContext(-1001, "supergroup", 99, "Document caption", "Jeremy")
+    );
+
+    expect(bridgeSpies.handleUserTextMessage).toHaveBeenCalledWith({
+      chatId: -1001,
+      topicId: null,
+      messageId: 901,
+      updateId: 900,
+      userId: 99,
+      actorLabel: "Jeremy",
+      telegramUsername: "Jeremy",
+      text: "Investigate this"
+    });
+    expect(bridgeSpies.handleUserMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        chatId: -1001,
+        topicId: null,
+        messageId: 902,
+        updateId: 901,
+        userId: 99,
+        telegramUsername: "Jeremy",
+        text: "Photo caption",
+        input: photoMessageInput.input
+      })
+    );
+    expect(bridgeSpies.handleUserMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        chatId: -1001,
+        topicId: null,
+        messageId: 903,
+        updateId: 902,
+        userId: 99,
+        telegramUsername: "Jeremy",
+        text: "Document caption",
+        input: documentMessageInput.input
+      })
+    );
+  });
+
+  it("omits telegram usernames when Telegram does not provide one", async () => {
+    const handlers = await loadHandlers();
+
+    await handlers.get("message:text")?.(buildTextMessageContext(-1001, "supergroup", 99, "Investigate this"));
+
+    expect(bridgeSpies.handleUserTextMessage).toHaveBeenCalledWith({
+      chatId: -1001,
+      topicId: null,
+      messageId: 901,
+      updateId: 900,
+      userId: 99,
+      text: "Investigate this"
+    });
   });
 
   it("redirects direct messages instead of forwarding them as workspace traffic", async () => {
@@ -161,7 +318,8 @@ describe("bot entrypoint routing", () => {
         id: "callback-workspace",
         data: "turn:turn-1:sendNow",
         from: {
-          id: 77
+          id: 77,
+          username: "callback-user"
         },
         message: {
           message_thread_id: 777
@@ -174,7 +332,8 @@ describe("bot entrypoint routing", () => {
       data: "turn:turn-1:sendNow",
       chatId: -1001,
       topicId: 777,
-      userId: 77
+      userId: 77,
+      telegramUsername: "callback-user"
     });
     expect(answerCallbackQuery).not.toHaveBeenCalled();
   });

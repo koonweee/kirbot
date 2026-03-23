@@ -9,6 +9,8 @@ import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/ge
 import type { ServerRequestResolvedNotification } from "@kirbot/codex-client/generated/codex/v2/ServerRequestResolvedNotification";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
 import type { TelegramMessenger } from "../telegram-messenger";
+import { prefixTelegramUsernameMention, type MentionableMessage } from "./telegram-mention-prefix";
+import type { TurnContext } from "./turn-lifecycle";
 import {
   allowCurrentQuestionFreeText,
   answerCurrentUserInputQuestion,
@@ -54,6 +56,7 @@ export class BridgeRequestCoordinator {
     private readonly database: BridgeDatabase,
     private readonly messenger: TelegramMessenger,
     private readonly codex: BridgeCodexRequestsApi,
+    private readonly getTurnContext: (turnId: string) => TurnContext | undefined,
     private readonly updateTurnStatus: (
       turnId: string,
       statusDraft: ReturnType<typeof buildStatusDraft>,
@@ -225,8 +228,7 @@ export class BridgeRequestCoordinator {
     const message = await this.messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: sessionTopicId,
-      text: prompt.text,
-      ...(prompt.entities ? { entities: prompt.entities } : {}),
+      ...this.prefixInitialRequestPrompt(request.params.turnId, prompt),
       replyMarkup: buildApprovalKeyboard(
         pending.id,
         request.method === "item/commandExecution/requestApproval" ? request.params.availableDecisions ?? null : null
@@ -290,8 +292,7 @@ export class BridgeRequestCoordinator {
     const message = await this.messenger.sendMessage({
       chatId: Number.parseInt(session.telegramChatId, 10),
       topicId: sessionTopicId,
-      text: prompt.text,
-      ...(prompt.entities ? { entities: prompt.entities } : {}),
+      ...this.prefixInitialRequestPrompt(request.params.turnId, prompt),
       replyMarkup: buildPermissionsApprovalKeyboard(pending.id),
       disableNotification: false
     });
@@ -458,6 +459,7 @@ export class BridgeRequestCoordinator {
   ): Promise<void> {
     const chatId = Number.parseInt(request.telegramChatId, 10);
     const prompt = buildUserInputPrompt(request.id, payload.questions, state);
+    const prefixedPrompt = this.prefixInitialRequestPrompt(payload.turnId, prompt);
 
     if (request.telegramMessageId) {
       await this.messenger.editMessageText({
@@ -474,7 +476,8 @@ export class BridgeRequestCoordinator {
     const message = await this.messenger.sendMessage({
       chatId,
       topicId: request.telegramTopicId,
-      text: prompt.text,
+      text: prefixedPrompt.text,
+      ...(prefixedPrompt.entities ? { entities: prefixedPrompt.entities } : {}),
       ...(prompt.replyMarkup ? { replyMarkup: prompt.replyMarkup } : {}),
       disableNotification: false
     });
@@ -516,6 +519,14 @@ export class BridgeRequestCoordinator {
     }
 
     return this.database.getSessionByCodexThreadId(threadId);
+  }
+
+  private prefixInitialRequestPrompt<T extends MentionableMessage>(turnId: string, prompt: T): T {
+    const turnContext = this.getTurnContext(turnId);
+    return {
+      ...prompt,
+      ...prefixTelegramUsernameMention(prompt, turnContext?.telegramUsername)
+    } as T;
   }
 }
 

@@ -16,12 +16,13 @@ import {
   type TelegramCreateForumTopicOptions
 } from "../src/telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "../src/turn-runtime";
+import { TurnFinalizer } from "../src/bridge/turn-finalization";
 
 function longText(paragraph: string, count: number): string {
   return Array.from({ length: count }, () => paragraph).join("\n\n");
 }
 
-function message(text: string, updateId = 1): UserTurnMessage {
+function message(text: string, updateId = 1, telegramUsername?: string): UserTurnMessage {
   return {
     chatId: -1001,
     topicId: 777,
@@ -35,11 +36,12 @@ function message(text: string, updateId = 1): UserTurnMessage {
         text,
         text_elements: []
       }
-    ]
-  };
+    ],
+    ...(telegramUsername ? { telegramUsername } : {})
+  } as UserTurnMessage;
 }
 
-function rootMessage(text: string, updateId = 1): UserTurnMessage {
+function rootMessage(text: string, updateId = 1, telegramUsername?: string): UserTurnMessage {
   return {
     chatId: -1001,
     topicId: null,
@@ -53,8 +55,9 @@ function rootMessage(text: string, updateId = 1): UserTurnMessage {
         text,
         text_elements: []
       }
-    ]
-  };
+    ],
+    ...(telegramUsername ? { telegramUsername } : {})
+  } as UserTurnMessage;
 }
 
 function getInlineButtonTexts(entry: { options?: Record<string, unknown> } | undefined): string[] {
@@ -327,6 +330,51 @@ describe("TurnLifecycleCoordinator", () => {
     await harness.coordinator.publishCurrentStatus("turn-root", true);
 
     expect(harness.telegram.drafts[0]?.options?.message_thread_id).toBeUndefined();
+  });
+
+  it("preserves the starter telegram username when activating a turn", async () => {
+    const harness = createHarness();
+
+    const context = harness.coordinator.activateTurn(
+      message("Start", 1, "starter-user"),
+      "thread-1",
+      "turn-1",
+      "gpt-5-codex"
+    );
+
+    expect(context).toMatchObject({
+      telegramUsername: "starter-user"
+    });
+  });
+
+  it("keeps queued follow-up usernames when promoting them into a new turn", async () => {
+    const harness = createHarness();
+
+    harness.coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    const pending = harness.coordinator.queuePendingSteer("turn-1", message("Queued follow-up", 2, "queued-user"));
+    expect(pending).not.toBeNull();
+
+    const queueState = harness.coordinator.movePendingSteerToQueued(-1001, 777, pending!.localId);
+    expect(queueState.queuedFollowUps[0]).toEqual({
+      actorLabel: "User 42",
+      text: "Queued follow-up"
+    });
+
+    const queuedMessage = harness.coordinator.peekNextQueuedFollowUp(-1001, 777);
+    expect(queuedMessage).toMatchObject({
+      telegramUsername: "queued-user"
+    });
+
+    const promotedContext = harness.coordinator.activateTurn(
+      harness.coordinator.shiftNextQueuedFollowUp(-1001, 777)!,
+      "thread-2",
+      "turn-2",
+      "gpt-5-codex"
+    );
+
+    expect(promotedContext).toMatchObject({
+      telegramUsername: "queued-user"
+    });
   });
 
   it("renders spawn-agent progress in the live status bubble with fallback agent labels", async () => {
@@ -605,6 +653,202 @@ describe("TurnLifecycleCoordinator", () => {
       title: "Commentary",
       markdownText: "Inspecting the rollout plan"
     });
+  });
+
+  it("mentions the turn starter on the final assistant reply even when commentary would otherwise publish earlier", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "Final answer",
+        assistantText: "Final answer",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting the rollout plan",
+      phase: "commentary"
+    });
+    await coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(telegram.sentMessages.find((entry) => entry.text === "@starter-user Final answer")).toBeTruthy();
+    expect(telegram.sentMessages.some((entry) => entry.text.startsWith("@starter-user Commentary"))).toBe(false);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("<1s • 100% left • /workspace • main • gpt-5-codex");
+  });
+
+  it("mentions the first standalone commentary publication when no final assistant reply exists", async () => {
+    const telegram = new FakeTelegram();
+    const coordinator = new TurnLifecycleCoordinator({
+      runtime: new BridgeTurnRuntime(),
+      messenger: new TelegramMessenger(telegram),
+      telegram,
+      planArtifactPublicUrl: "https://example.com/mini-app",
+      releaseTurnFiles: async () => undefined,
+      resolveTurnSnapshot: async () => ({
+        text: "",
+        assistantText: "",
+        planText: "",
+        changedFiles: 0,
+        cwd: "/workspace",
+        branch: "main"
+      }),
+      syncQueuePreview: async () => undefined,
+      maybeSendNextQueuedFollowUp: async () => undefined,
+      submitQueuedFollowUp: async () => undefined
+    });
+
+    coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    await coordinator.handleItemStarted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "",
+      phase: "commentary"
+    });
+    await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
+    await coordinator.handleItemCompleted("turn-1", {
+      type: "agentMessage",
+      id: "item-1",
+      text: "Inspecting the rollout plan",
+      phase: "commentary"
+    });
+    await coordinator.finalizeInterruptedTurnById("thread-1", "turn-1");
+
+    const commentaryStub = telegram.sentMessages.find((entry) => entry.text.startsWith("@starter-user Commentary"));
+    expect(commentaryStub?.text).toBe("@starter-user Commentary is available");
+    expect(commentaryStub?.options?.disable_notification).toBeUndefined();
+  });
+
+  it("mentions the first standalone response publication when the final assistant reply cannot be published", async () => {
+    const commentarySpy = vi.spyOn(TurnFinalizer.prototype as any, "buildCommentaryPublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [
+        { text: "Commentary is available", replyMarkup: buildArtifactReplyMarkup([buildCommentaryArtifactButton("https://example.com/mini-app", [{ kind: "commentary", text: "Inspecting files" }])]) },
+        { text: "Commentary is available (2/2)", replyMarkup: buildArtifactReplyMarkup([buildCommentaryArtifactButton("https://example.com/mini-app", [{ kind: "commentary", text: "Inspecting files 2" }])]) }
+      ],
+      oversizeNoticeText: null
+    });
+    const responseSpy = vi.spyOn(TurnFinalizer.prototype as any, "buildResponsePublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [
+        { text: "Response is available", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer")]) },
+        { text: "Response is available (2/2)", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer 2")]) }
+      ],
+      oversizeNoticeText: null
+    });
+    try {
+      const harness = createHarness("Final answer");
+      const context = harness.coordinator.activateTurn(
+        message("Start", 1, "starter-user"),
+        "thread-1",
+        "turn-1",
+        "gpt-5-codex"
+      );
+      const originalSurface = context.visibleMessageHandle;
+      context.visibleMessageHandle = {
+        ...originalSurface,
+        publishFinalAssistantMessage: async () => null
+      };
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+      const commentaryMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Commentary"));
+      const responseMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Response"));
+      expect(commentaryMessages[0]?.text.startsWith("@starter-user Commentary")).toBe(true);
+      expect(commentaryMessages.slice(1).every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+      expect(responseMessages.every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+    } finally {
+      commentarySpy.mockRestore();
+      responseSpy.mockRestore();
+    }
+  });
+
+  it("does not let a commentary oversize notice outrank standalone response publication", async () => {
+    const commentarySpy = vi.spyOn(TurnFinalizer.prototype as any, "buildCommentaryPublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [],
+      oversizeNoticeText: "Commentary artifact was too large to encode"
+    });
+    const responseSpy = vi.spyOn(TurnFinalizer.prototype as any, "buildResponsePublication").mockReturnValue({
+      attachedButton: null,
+      standaloneMessages: [
+        { text: "Response is available", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer")]) },
+        { text: "Response is available (2/2)", replyMarkup: buildArtifactReplyMarkup([buildResponseArtifactButton("https://example.com/mini-app", "Final answer 2")]) }
+      ],
+      oversizeNoticeText: null
+    });
+    try {
+      const harness = createHarness("Final answer");
+      const context = harness.coordinator.activateTurn(
+        message("Start", 1, "starter-user"),
+        "thread-1",
+        "turn-1",
+        "gpt-5-codex"
+      );
+      const originalSurface = context.visibleMessageHandle;
+      context.visibleMessageHandle = {
+        ...originalSurface,
+        publishFinalAssistantMessage: async () => null
+      };
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+      expect(
+        harness.telegram.sentMessages.find((entry) => entry.text === "Commentary artifact was too large to encode")
+      ).toBeTruthy();
+      const responseMessages = harness.telegram.sentMessages.filter((entry) => entry.text.includes("Response"));
+      expect(responseMessages[0]?.text.startsWith("@starter-user Response")).toBe(true);
+      expect(responseMessages.slice(1).every((entry) => !entry.text.startsWith("@starter-user "))).toBe(true);
+    } finally {
+      commentarySpy.mockRestore();
+      responseSpy.mockRestore();
+    }
+  });
+
+  it("mentions the first standalone plan publication when no higher-precedence completion message exists", async () => {
+    const harness = createHarness({
+      text: "1. Draft the rollout",
+      assistantText: "",
+      planText: "1. Draft the rollout"
+    });
+
+    harness.coordinator.activateTurn(message("Start", 1, "starter-user"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    const planStub = harness.telegram.sentMessages.find((entry) => entry.text.startsWith("@starter-user Plan"));
+    expect(planStub?.text).toBe("@starter-user Plan is ready");
+    expect(planStub?.options?.disable_notification).toBeUndefined();
+  });
+
+  it("leaves silent status bubble text unchanged and keeps messages unprefixed when no telegram username exists", async () => {
+    const harness = createHarness("Final answer");
+    harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+    await harness.coordinator.publishCurrentStatus("turn-1", true);
+    await harness.coordinator.completeTurn("thread-1", "turn-1");
+
+    expect(harness.telegram.drafts[0]?.text).toBe("thinking · 0s");
+    expect(harness.telegram.sentMessages[1]?.text).toBe("Final answer");
+    expect(harness.telegram.sentMessages.some((entry) => entry.text.startsWith("@"))).toBe(false);
   });
 
   it("publishes a standalone commentary stub before plan output when no assistant answer follows", async () => {
