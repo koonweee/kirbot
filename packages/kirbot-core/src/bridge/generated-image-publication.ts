@@ -1,3 +1,4 @@
+import * as dns from "node:dns/promises";
 import { isIP } from "node:net";
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 
@@ -35,7 +36,7 @@ export function isImageGenerationSuccess(item: ImageGenerationItem): boolean {
 }
 
 export async function fetchUploadReadyGeneratedImage(item: ImageGenerationItem): Promise<UploadReadyGeneratedImage> {
-  const url = parseGeneratedImageUrl(item.result);
+  const url = await parseGeneratedImageUrl(item.result);
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort(new DOMException("Generated image download timed out", "TimeoutError"));
@@ -62,7 +63,7 @@ export async function fetchUploadReadyGeneratedImage(item: ImageGenerationItem):
   }
 }
 
-function parseGeneratedImageUrl(rawUrl: string): URL {
+async function parseGeneratedImageUrl(rawUrl: string): Promise<URL> {
   const trimmedUrl = rawUrl.trim();
 
   let url: URL;
@@ -78,6 +79,10 @@ function parseGeneratedImageUrl(rawUrl: string): URL {
 
   if (isBlockedGeneratedImageHost(url.hostname)) {
     throw new GeneratedImagePublicationError("invalid_url", url.href, "Generated image URL must target a public host");
+  }
+
+  if (shouldResolveHostname(url.hostname)) {
+    await validateResolvedHostname(url);
   }
 
   return url;
@@ -240,48 +245,160 @@ function isBlockedIpv4Address(address: string): boolean {
     firstOctet === 0 ||
     firstOctet === 10 ||
     firstOctet === 127 ||
+    (firstOctet === 100 && secondOctet >= 64 && secondOctet <= 127) ||
     (firstOctet === 169 && secondOctet === 254) ||
     (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) ||
-    (firstOctet === 192 && secondOctet === 168)
+    (firstOctet === 192 && secondOctet === 168) ||
+    (firstOctet === 198 && (secondOctet === 18 || secondOctet === 19))
   );
 }
 
 function isBlockedIpv6Address(address: string): boolean {
-  const normalizedAddress = address.toLowerCase();
-  if (normalizedAddress === "::1") {
+  const bytes = parseIpv6Address(address);
+  if (!bytes) {
+    return false;
+  }
+
+  if (isAllZeroes(bytes) || isIpv6Loopback(bytes)) {
     return true;
   }
 
-  if (normalizedAddress.startsWith("::ffff:")) {
-    const mappedIpv4 = normalizedAddress.slice("::ffff:".length);
-    return isIP(mappedIpv4) === 4 ? isBlockedIpv4Address(mappedIpv4) : false;
+  const mappedIpv4 = extractMappedIpv4(bytes);
+  if (mappedIpv4) {
+    return isBlockedIpv4Address(mappedIpv4);
   }
 
-  const firstHextet = normalizedAddress.split(":").find((segment) => segment.length > 0) ?? "";
-  if (firstHextet.length < 2) {
-    return false;
-  }
-
-  const firstByte = Number.parseInt(firstHextet.slice(0, 2), 16);
-  if (!Number.isFinite(firstByte)) {
-    return false;
-  }
-
-  return (firstByte & 0xfe) === 0xfc || (firstByte === 0xfe && isLinkLocalIpv6(normalizedAddress));
+  return isUniqueLocalIpv6(bytes) || isLinkLocalIpv6(bytes);
 }
 
-function isLinkLocalIpv6(address: string): boolean {
-  const firstHextet = address.split(":").find((segment) => segment.length > 0) ?? "";
-  if (firstHextet.length < 2) {
-    return false;
+async function validateResolvedHostname(url: URL): Promise<void> {
+  let addresses: Awaited<ReturnType<typeof dns.lookup>>;
+  try {
+    addresses = await dns.lookup(normalizeHostname(url.hostname), {
+      all: true,
+      verbatim: true
+    });
+  } catch (error) {
+    throw new GeneratedImagePublicationError("invalid_url", url.href, "Generated image hostname could not be validated", error);
   }
 
-  const firstTwoBytes = Number.parseInt(firstHextet.padEnd(4, "0"), 16);
-  if (!Number.isFinite(firstTwoBytes)) {
-    return false;
+  if (addresses.length === 0 || addresses.some((entry) => isBlockedGeneratedImageHost(entry.address))) {
+    throw new GeneratedImagePublicationError("invalid_url", url.href, "Generated image hostname resolved to a blocked address");
+  }
+}
+
+function shouldResolveHostname(hostname: string): boolean {
+  return isIP(normalizeHostname(hostname)) === 0;
+}
+
+function parseIpv6Address(address: string): Uint8Array | null {
+  const normalizedAddress = address.toLowerCase().split("%")[0] ?? "";
+  if (!normalizedAddress) {
+    return null;
   }
 
-  return (firstTwoBytes & 0xffc0) === 0xfe80;
+  const doubleColonIndex = normalizedAddress.indexOf("::");
+  if (doubleColonIndex !== normalizedAddress.lastIndexOf("::")) {
+    return null;
+  }
+
+  const [head, tail = ""] = normalizedAddress.split("::");
+  const headParts = parseIpv6Segments(head);
+  const tailParts = parseIpv6Segments(tail);
+  if (!headParts || !tailParts) {
+    return null;
+  }
+
+  const hasDoubleColon = doubleColonIndex !== -1;
+  const zeroSegments = hasDoubleColon ? 8 - (headParts.length + tailParts.length) : 0;
+  if ((hasDoubleColon && zeroSegments < 0) || (!hasDoubleColon && headParts.length !== 8)) {
+    return null;
+  }
+
+  const parts = hasDoubleColon
+    ? [...headParts, ...Array.from({ length: zeroSegments }, () => "0"), ...tailParts]
+    : headParts;
+  if (parts.length !== 8) {
+    return null;
+  }
+
+  const bytes = new Uint8Array(16);
+  for (const [index, part] of parts.entries()) {
+    const value = Number.parseInt(part, 16);
+    if (!Number.isInteger(value) || value < 0 || value > 0xffff) {
+      return null;
+    }
+
+    bytes[index * 2] = value >> 8;
+    bytes[index * 2 + 1] = value & 0xff;
+  }
+
+  return bytes;
+}
+
+function parseIpv6Segments(input: string): string[] | null {
+  if (!input) {
+    return [];
+  }
+
+  const rawSegments = input.split(":");
+  const segments: string[] = [];
+
+  for (const segment of rawSegments) {
+    if (!segment) {
+      return null;
+    }
+
+    if (segment.includes(".")) {
+      const ipv4Bytes = parseIpv4Bytes(segment);
+      if (!ipv4Bytes) {
+        return null;
+      }
+
+      segments.push(((ipv4Bytes[0] << 8) | ipv4Bytes[1]).toString(16));
+      segments.push(((ipv4Bytes[2] << 8) | ipv4Bytes[3]).toString(16));
+      continue;
+    }
+
+    segments.push(segment);
+  }
+
+  return segments;
+}
+
+function parseIpv4Bytes(address: string): Uint8Array | null {
+  const octets = address.split(".").map((segment) => Number.parseInt(segment, 10));
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return null;
+  }
+
+  return Uint8Array.from(octets);
+}
+
+function isAllZeroes(bytes: Uint8Array): boolean {
+  return bytes.every((value) => value === 0);
+}
+
+function isIpv6Loopback(bytes: Uint8Array): boolean {
+  return bytes.slice(0, 15).every((value) => value === 0) && bytes[15] === 1;
+}
+
+function extractMappedIpv4(bytes: Uint8Array): string | null {
+  const mappedPrefixMatches =
+    bytes.slice(0, 10).every((value) => value === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+  if (!mappedPrefixMatches) {
+    return null;
+  }
+
+  return `${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`;
+}
+
+function isUniqueLocalIpv6(bytes: Uint8Array): boolean {
+  return (bytes[0] & 0xfe) === 0xfc;
+}
+
+function isLinkLocalIpv6(bytes: Uint8Array): boolean {
+  return bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80;
 }
 
 function concatChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {

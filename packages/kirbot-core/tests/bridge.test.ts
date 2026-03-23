@@ -5,6 +5,15 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
+vi.mock("node:dns/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
+  return {
+    ...actual,
+    lookup: vi.fn(actual.lookup)
+  };
+});
+
+import * as dns from "node:dns/promises";
 import { TelegramCodexBridge, type BridgeCodexApi } from "../src/bridge";
 import type { AppConfig } from "../src/config";
 import { BridgeDatabase } from "../src/db";
@@ -938,6 +947,14 @@ describe("TelegramCodexBridge", () => {
   let restartKirbot: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
+    vi.mocked(dns.lookup).mockReset();
+    vi.mocked(dns.lookup).mockResolvedValue([
+      {
+        address: "93.184.216.34",
+        family: 4
+      }
+    ] as Awaited<ReturnType<typeof dns.lookup>>);
+
     tempDir = mkdtempSync(join(tmpdir(), "telegram-codex-bridge-service-"));
     database = new BridgeDatabase(join(tempDir, "bridge.sqlite"));
     await database.migrate();

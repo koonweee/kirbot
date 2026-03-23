@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
+vi.mock("node:dns/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
+  return {
+    ...actual,
+    lookup: vi.fn(actual.lookup)
+  };
+});
+
+import * as dns from "node:dns/promises";
 import type { UserTurnMessage } from "../src/domain";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
@@ -405,6 +414,16 @@ function expectNoImagePublicationFailureEntries(
     entries.some((entry) => entry.kind === "structuredFailure" && entry.title === "Generated image publication failed")
   ).toBe(false);
 }
+
+beforeEach(() => {
+  vi.mocked(dns.lookup).mockReset();
+  vi.mocked(dns.lookup).mockResolvedValue([
+    {
+      address: "93.184.216.34",
+      family: 4
+    }
+  ] as Awaited<ReturnType<typeof dns.lookup>>);
+});
 
 describe("TurnLifecycleCoordinator", () => {
   it("supports root-surface status drafts without a topic id", async () => {

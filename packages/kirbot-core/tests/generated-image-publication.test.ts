@@ -1,4 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:dns/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
+  return {
+    ...actual,
+    lookup: vi.fn(actual.lookup)
+  };
+});
+
+import * as dns from "node:dns/promises";
 
 import {
   fetchUploadReadyGeneratedImage,
@@ -57,6 +67,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+beforeEach(() => {
+  vi.mocked(dns.lookup).mockReset();
+  vi.mocked(dns.lookup).mockResolvedValue([
+    {
+      address: "93.184.216.34",
+      family: 4
+    }
+  ] as Awaited<ReturnType<typeof dns.lookup>>);
+});
+
 describe("generated image publication helper", () => {
   it.each([
     "http://localhost/image.png",
@@ -68,7 +88,11 @@ describe("generated image publication helper", () => {
     "https://192.168.1.5/image.png",
     "https://169.254.1.5/image.png",
     "https://0.0.0.0/image.png",
-    "https://[::1]/image.png"
+    "https://[::1]/image.png",
+    "https://[::ffff:127.0.0.1]/image.png",
+    "https://[::]/image.png",
+    "https://100.64.0.1/image.png",
+    "https://198.18.0.1/image.png"
   ])("rejects non-public generated image URL %s before fetch", async (url) => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
       throw new Error("fetch should not be called for non-public image URLs");
@@ -79,7 +103,7 @@ describe("generated image publication helper", () => {
     await expect(publicationPromise).rejects.toBeInstanceOf(GeneratedImagePublicationError);
     await expect(publicationPromise).rejects.toMatchObject({
       stage: "invalid_url",
-      url
+      url: new URL(url).href
     });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -99,6 +123,32 @@ describe("generated image publication helper", () => {
     expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({
       redirect: "error"
     });
+  });
+
+  it("rejects public-looking hostnames that resolve to blocked internal addresses before fetch", async () => {
+    const lookupSpy = vi.mocked(dns.lookup).mockResolvedValue([
+      {
+        address: "10.0.0.25",
+        family: 4
+      }
+    ] as Awaited<ReturnType<typeof dns.lookup>>);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      throw new Error("fetch should not be called for hostnames that resolve internally");
+    });
+
+    const publicationPromise = fetchUploadReadyGeneratedImage(
+      imageGenerationItem("https://public-looking.example/generated.png")
+    );
+
+    await expect(publicationPromise).rejects.toMatchObject({
+      stage: "invalid_url",
+      url: "https://public-looking.example/generated.png"
+    });
+    expect(lookupSpy).toHaveBeenCalledWith("public-looking.example", {
+      all: true,
+      verbatim: true
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("keeps the timeout active while the response body is still streaming", async () => {
