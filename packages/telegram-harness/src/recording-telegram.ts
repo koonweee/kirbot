@@ -117,6 +117,11 @@ export class RecordingTelegram implements TelegramApi {
     drafts: new Map()
   };
   readonly #files = new Map<string, RegisteredTelegramFile>();
+  readonly #nextCreateForumTopicErrors: Error[] = [];
+  readonly #nextSendMessageErrors: Error[] = [];
+  readonly #nextEditMessageTextErrors: Error[] = [];
+  readonly #nextDeleteMessageErrors: Error[] = [];
+  readonly #nextAnswerCallbackQueryErrors: Error[] = [];
 
   #topicCounter = 100;
   #messageCounter = 500;
@@ -161,6 +166,26 @@ export class RecordingTelegram implements TelegramApi {
       messageId: message.messageId,
       text: message.text.trim().length > 0 ? message.text : "[Image]"
     });
+  }
+
+  setNextCreateForumTopicError(error: Error): void {
+    this.#nextCreateForumTopicErrors.push(error);
+  }
+
+  setNextSendMessageError(error: Error): void {
+    this.#nextSendMessageErrors.push(error);
+  }
+
+  setNextEditMessageTextError(error: Error): void {
+    this.#nextEditMessageTextErrors.push(error);
+  }
+
+  setNextDeleteMessageError(error: Error): void {
+    this.#nextDeleteMessageErrors.push(error);
+  }
+
+  setNextAnswerCallbackQueryError(error: Error): void {
+    this.#nextAnswerCallbackQueryErrors.push(error);
   }
 
   getEvents(): HarnessTelegramEvent[] {
@@ -224,6 +249,11 @@ export class RecordingTelegram implements TelegramApi {
     name: string,
     options?: TelegramCreateForumTopicOptions
   ): Promise<{ message_thread_id: number; name: string }> {
+    const nextError = this.#nextCreateForumTopicErrors.shift();
+    if (nextError) {
+      throw nextError;
+    }
+
     this.#topicCounter += 1;
     const topicId = this.#topicCounter;
     this.#transcript.topics.set(topicId, {
@@ -247,6 +277,11 @@ export class RecordingTelegram implements TelegramApi {
   }
 
   async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<{ message_id: number }> {
+    const nextError = this.#nextSendMessageErrors.shift();
+    if (nextError) {
+      throw nextError;
+    }
+
     this.#messageCounter += 1;
     const message = {
       actor: "bot" as const,
@@ -319,6 +354,11 @@ export class RecordingTelegram implements TelegramApi {
     text: string,
     options?: TelegramSendOptions
   ): Promise<unknown> {
+    const nextError = this.#nextEditMessageTextErrors.shift();
+    if (nextError) {
+      throw nextError;
+    }
+
     const message = this.#locateMessage(messageId);
     if (!message) {
       throw new Error(`Could not find Telegram message ${messageId} to edit`);
@@ -352,6 +392,11 @@ export class RecordingTelegram implements TelegramApi {
   }
 
   async deleteMessage(chatId: number, messageId: number): Promise<true> {
+    const nextError = this.#nextDeleteMessageErrors.shift();
+    if (nextError) {
+      throw nextError;
+    }
+
     const store = this.#locateMessageStore(messageId);
     if (store) {
       const index = store.findIndex((message) => message.messageId === messageId);
@@ -370,6 +415,11 @@ export class RecordingTelegram implements TelegramApi {
   }
 
   async answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true> {
+    const nextError = this.#nextAnswerCallbackQueryErrors.shift();
+    if (nextError) {
+      throw nextError;
+    }
+
     this.#recordEvent({
       timestamp: now(),
       type: "telegram.answerCallbackQuery",

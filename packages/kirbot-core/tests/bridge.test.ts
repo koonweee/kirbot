@@ -24,11 +24,13 @@ import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTi
 import { JsonRpcMethodError, type AppServerEvent, type ResolvedTurnSnapshot } from "@kirbot/codex-client";
 import {
   TELEGRAM_FORUM_TOPIC_ICON_COLORS,
+  TelegramMessenger,
   type TelegramEditOptions,
   type TelegramApi,
   type TelegramCreateForumTopicOptions,
   type TelegramSendOptions
 } from "../src/telegram-messenger";
+import { BridgeRequestCoordinator } from "../src/bridge/request-coordinator";
 import { decodeMiniAppArtifact, getEncodedMiniAppArtifactFromHash, MiniAppArtifactType } from "../src/mini-app/url";
 import {
   buildArtifactReplyMarkup,
@@ -38,6 +40,7 @@ import {
 } from "../src/bridge/presentation";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
 import { isAllowedSlashCommandInScope } from "../src/bridge/slash-commands";
+import { createInitialUserInputState, stringifyUserInputState } from "../src/bridge/requests";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
   let resolve!: (value: T) => void;
@@ -188,6 +191,34 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
 
   throw new Error("Timed out waiting for condition");
 }
+
+function rateLimitError(retryAfterSeconds: number): Error & {
+  error_code: number;
+  parameters: {
+    retry_after: number;
+  };
+} {
+  const error = new Error("Too Many Requests") as Error & {
+    error_code: number;
+    parameters: {
+      retry_after: number;
+    };
+  };
+  error.error_code = 429;
+  error.parameters = {
+    retry_after: retryAfterSeconds
+  };
+  return error;
+}
+
+const ZERO_SPACING_DELIVERY_POLICY = {
+  callbackAnswerSpacingMs: 0,
+  visibleSendSpacingMs: 0,
+  topicCreateSpacingMs: 0,
+  visibleEditSpacingMs: 0,
+  chatActionSpacingMs: 0,
+  deleteSpacingMs: 0
+} as const;
 
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
@@ -648,12 +679,16 @@ class FakeCodex implements BridgeCodexApi {
 class FakeTelegram implements TelegramApi {
   topicCounter = 100;
   messageCounter = 500;
+  nextCreateForumTopicError: Error | null = null;
   nextChatActionError: Error | null = null;
   nextDraftError: Error | null = null;
   nextSendMessageError: Error | null = null;
   nextEditMessageTextError: Error | null = null;
+  nextDeleteMessageError: Error | null = null;
+  nextAnswerCallbackQueryError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
   editBlocks: Array<Promise<void>> = [];
+  deleteBlocks: Array<Promise<void>> = [];
   events: string[] = [];
   chatActions: Array<{
     chatId: number;
@@ -706,6 +741,13 @@ class FakeTelegram implements TelegramApi {
     name: string,
     options?: TelegramCreateForumTopicOptions
   ): Promise<{ message_thread_id: number; name: string }> {
+    if (this.nextCreateForumTopicError) {
+      const error = this.nextCreateForumTopicError;
+      this.nextCreateForumTopicError = null;
+      throw error;
+    }
+
+    this.events.push(`topic:${name}`);
     this.createdTopics.push(options ? { chatId, name, options } : { chatId, name });
     this.topicCounter += 1;
     return { message_thread_id: this.topicCounter, name };
@@ -770,6 +812,7 @@ class FakeTelegram implements TelegramApi {
     action: "typing" | "upload_document",
     options?: { message_thread_id?: number }
   ): Promise<true> {
+    this.events.push(`chat-action:${action}`);
     this.chatActions.push(options ? { chatId, action, options } : { chatId, action });
     if (this.nextChatActionError) {
       const error = this.nextChatActionError;
@@ -791,6 +834,7 @@ class FakeTelegram implements TelegramApi {
       throw error;
     }
 
+    this.events.push(`edit:${messageId}:${text}`);
     this.edits.push({ chatId, messageId, text });
     this.editOptions.push(options ? { chatId, messageId, options } : { chatId, messageId });
     this.drafts.push(
@@ -807,11 +851,27 @@ class FakeTelegram implements TelegramApi {
   }
 
   async deleteMessage(chatId: number, messageId: number): Promise<true> {
+    this.events.push(`delete:${messageId}`);
+    if (this.nextDeleteMessageError) {
+      const error = this.nextDeleteMessageError;
+      this.nextDeleteMessageError = null;
+      throw error;
+    }
     this.deletions.push({ chatId, messageId });
+    const blocker = this.deleteBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
     return true;
   }
 
   async answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true> {
+    this.events.push(`callback:${callbackQueryId}`);
+    if (this.nextAnswerCallbackQueryError) {
+      const error = this.nextAnswerCallbackQueryError;
+      this.nextAnswerCallbackQueryError = null;
+      throw error;
+    }
     this.callbackAnswers.push(options ? { callbackQueryId, options } : { callbackQueryId });
     return true;
   }
@@ -871,7 +931,8 @@ describe("TelegramCodexBridge", () => {
     await mediaStore.cleanupStaleFiles();
     restartKirbot = vi.fn(async (_reportStep?: (command: string) => Promise<void>) => undefined);
     bridge = new TelegramCodexBridge(config, database, telegram, codex, mediaStore, console, {
-      restartKirbot
+      restartKirbot,
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
     });
   });
 
@@ -3307,7 +3368,9 @@ describe("TelegramCodexBridge", () => {
     };
     const miniAppCodex = new FakeCodex();
     const miniAppTelegram = new FakeTelegram();
-    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore, console, {
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+    });
 
     await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
@@ -3506,7 +3569,9 @@ describe("TelegramCodexBridge", () => {
     const miniAppCodex = new FakeCodex();
     miniAppCodex.readTurnMessagesResult = "Here is the answer.";
     const miniAppTelegram = new FakeTelegram();
-    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore, console, {
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+    });
 
     await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
@@ -3656,7 +3721,9 @@ describe("TelegramCodexBridge", () => {
       90
     );
     const miniAppTelegram = new FakeTelegram();
-    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore, console, {
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+    });
 
     await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
@@ -3822,7 +3889,9 @@ describe("TelegramCodexBridge", () => {
       assistantText: "Final answer"
     };
     const miniAppTelegram = new FakeTelegram();
-    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore, console, {
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+    });
 
     await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
@@ -3965,7 +4034,9 @@ describe("TelegramCodexBridge", () => {
     };
     const miniAppCodex = new FakeCodex();
     const miniAppTelegram = new FakeTelegram();
-    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore, console, {
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+    });
 
     await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
@@ -4063,7 +4134,11 @@ describe("TelegramCodexBridge", () => {
       database,
       oversizeMiniAppTelegram,
       oversizeMiniAppCodex,
-      mediaStore
+      mediaStore,
+      console,
+      {
+        messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+      }
     );
     const longPlan = Array.from({ length: 250 }, (_, index) =>
       `${index + 1}. ${Array.from({ length: 20 }, (__unused, wordIndex) => `token-${index}-${wordIndex}`).join(" ")}`
@@ -4126,7 +4201,9 @@ describe("TelegramCodexBridge", () => {
     };
     const miniAppCodex = new FakeCodex();
     const miniAppTelegram = new FakeTelegram();
-    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore);
+    const miniAppBridge = new TelegramCodexBridge(miniAppConfig, database, miniAppTelegram, miniAppCodex, mediaStore, console, {
+      messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+    });
 
     await miniAppBridge.handleUserTextMessage({
       chatId: -1001,
@@ -4257,7 +4334,11 @@ describe("TelegramCodexBridge", () => {
       database,
       oversizeMiniAppTelegram,
       oversizeMiniAppCodex,
-      mediaStore
+      mediaStore,
+      console,
+      {
+        messengerDeliveryPolicy: ZERO_SPACING_DELIVERY_POLICY
+      }
     );
 
     await oversizeMiniAppBridge.handleUserTextMessage({
@@ -4337,6 +4418,9 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
+    await waitForCondition(() =>
+      miniAppTelegram.sentMessages.some((message) => message.text === "@starter-user Final answer")
+    );
     expect(miniAppTelegram.sentMessages.find((message) => message.text === "@starter-user Final answer")).toBeTruthy();
     expect(miniAppTelegram.sentMessages.some((message) => message.text.startsWith("@starter-user Commentary"))).toBe(false);
   });
@@ -4390,6 +4474,11 @@ describe("TelegramCodexBridge", () => {
     });
     await waitForAsyncNotifications();
 
+    await waitForCondition(() =>
+      oversizeMiniAppTelegram.sentMessages.some(
+        (message) => message.text === "@starter-user Plan artifact was too large to encode"
+      )
+    );
     expect(
       oversizeMiniAppTelegram.sentMessages.find(
         (message) => message.text === "@starter-user Plan artifact was too large to encode"
@@ -4762,7 +4851,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.deletions.length === (previewMessageId ? 1 : 0));
 
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
@@ -4814,7 +4903,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.deletions.length === (previewMessageId ? 1 : 0));
 
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
@@ -4911,6 +5000,293 @@ describe("TelegramCodexBridge", () => {
     ]);
   });
 
+  it("collapses repeated queue-preview churn to the latest visible preview text for one message", async () => {
+    const previewTelegram = new FakeTelegram();
+    const previewCodex = new FakeCodex();
+    const previewDatabase = new BridgeDatabase(join(tempDir, "preview-bridge.sqlite"));
+    await previewDatabase.migrate();
+    const previewBridge = new TelegramCodexBridge(
+      config,
+      previewDatabase,
+      previewTelegram,
+      previewCodex,
+      mediaStore,
+      console,
+      {
+        messengerDeliveryPolicy: {
+          ...ZERO_SPACING_DELIVERY_POLICY,
+          visibleEditSpacingMs: 100
+        }
+      }
+    );
+
+    await previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 14,
+      updateId: 27,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 15,
+      updateId: 28,
+      userId: 42,
+      text: "First follow-up"
+    });
+
+    const previewMessageId = previewTelegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Queued for current turn:")
+    )?.messageId;
+    expect(previewMessageId).toBeDefined();
+
+    const blockedEdit = deferred<void>();
+    previewTelegram.editBlocks.push(blockedEdit.promise);
+
+    const secondFollowUp = previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 16,
+      updateId: 29,
+      userId: 42,
+      text: "Second follow-up"
+    });
+    await waitForCondition(() => previewTelegram.edits.some((edit) => edit.text.includes("Second follow-up")));
+
+    const thirdFollowUp = previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 17,
+      updateId: 30,
+      userId: 42,
+      text: "Third follow-up"
+    });
+    const fourthFollowUp = previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 18,
+      updateId: 31,
+      userId: 42,
+      text: "Fourth follow-up"
+    });
+
+    blockedEdit.resolve();
+    await Promise.all([secondFollowUp, thirdFollowUp, fourthFollowUp]);
+
+    const previewEdits = previewTelegram.edits.filter((edit) => edit.messageId === previewMessageId);
+    expect(previewEdits[0]?.text).toBe("Queued for current turn:\n- First follow-up\n- Second follow-up");
+    expect(previewEdits.at(-1)?.text).toBe(
+      "Queued for current turn:\n- First follow-up\n- Second follow-up\n- Third follow-up\n- …and 1 more"
+    );
+    expect(
+      new Set(previewEdits.map((edit) => edit.messageId))
+    ).toEqual(new Set([previewMessageId]));
+
+    await previewDatabase.close();
+  });
+
+  it("keeps queue-preview cleanup deletes best effort without blocking final visible sends", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 19,
+      updateId: 32,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 20,
+      updateId: 33,
+      userId: 42,
+      text: "Queued follow-up"
+    });
+    const previewMessageId = telegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Queued for current turn:")
+    )?.messageId;
+    expect(previewMessageId).toBeDefined();
+
+    codex.readTurnSnapshotResult = {
+      assistantText: "Final answer",
+      text: "Final answer",
+      planText: "",
+      cwd: "/workspace",
+      branch: "main",
+      changedFiles: 0
+    };
+
+    const blockedDelete = deferred<void>();
+    telegram.deleteBlocks.push(blockedDelete.promise);
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "item-user-queued",
+          content: [
+            {
+              type: "text",
+              text: "Queued follow-up",
+              text_elements: []
+            }
+          ]
+        }
+      }
+    });
+    await Promise.resolve();
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) => message.text === "Final answer") ||
+      telegram.drafts.some((draft) => draft.text === "Final answer")
+    );
+    expect(telegram.deletions.some((deletion) => deletion.messageId === previewMessageId)).toBe(false);
+
+    blockedDelete.resolve(undefined as unknown as void);
+    await waitForCondition(() => telegram.deletions.some((deletion) => deletion.messageId === previewMessageId));
+
+    expect(telegram.sentMessages.some((message) => message.text === "Final answer")).toBe(true);
+    expect(telegram.deletions.some((deletion) => deletion.messageId === previewMessageId)).toBe(true);
+  });
+
+  it("routes queue-preview cleanup deletes through TelegramMessenger retries", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 21,
+      updateId: 34,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 22,
+      updateId: 35,
+      userId: 42,
+      text: "Queued follow-up"
+    });
+    const previewMessageId = telegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Queued for current turn:")
+    )?.messageId;
+    expect(previewMessageId).toBeDefined();
+
+    telegram.nextDeleteMessageError = rateLimitError(1);
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "item-user-queued-retry",
+          content: [
+            {
+              type: "text",
+              text: "Queued follow-up",
+              text_elements: []
+            }
+          ]
+        }
+      }
+    });
+
+    await waitForCondition(
+      () => telegram.events.filter((event) => event === `delete:${previewMessageId}`).length >= 2,
+      2_000
+    );
+  });
+
+  it("supersedes stale queue-preview edits before preview cleanup deletes the message", async () => {
+    vi.useFakeTimers();
+    try {
+      await bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 23,
+        updateId: 36,
+        userId: 42,
+        text: "Inspect the current failure"
+      });
+
+      await bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 24,
+        updateId: 37,
+        userId: 42,
+        text: "Queued follow-up"
+      });
+      const previewMessageId = telegram.sentMessages.findLast((message) =>
+        message.text.startsWith("Queued for current turn:")
+      )?.messageId;
+      expect(previewMessageId).toBeDefined();
+
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const secondFollowUp = bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 25,
+        updateId: 38,
+        userId: 42,
+        text: "Second follow-up"
+      });
+      await Promise.resolve();
+
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "item-user-queued-cleanup",
+            content: [
+              {
+                type: "text",
+                text: "Queued follow-up",
+                text_elements: []
+              }
+            ]
+          }
+        }
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      await waitForCondition(() => telegram.deletions.some((deletion) => deletion.messageId === previewMessageId));
+      await expect(secondFollowUp).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const previewEditEvents = telegram.events.filter((event) => event.startsWith(`edit:${previewMessageId}:`));
+      expect(previewEditEvents).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects oversized steer input without queueing it for the next turn", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -4957,6 +5333,7 @@ describe("TelegramCodexBridge", () => {
       telegram.edits.some((edit) => edit.text.includes("Queued for next turn")) ||
         telegram.sentMessages.some((message) => message.text.includes("Queued for next turn"))
     ).toBe(false);
+    await waitForCondition(() => telegram.deletions.length === (previewMessageId ? 1 : 0));
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
     );
@@ -6063,6 +6440,164 @@ describe("TelegramCodexBridge", () => {
     ]);
   });
 
+  it("does not let a stale retried user-input prompt overwrite a later completion", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 787,
+      messageId: 422,
+      updateId: 5_220,
+      userId: 42,
+      text: "Start the topic"
+    });
+
+    codex.emitRequest({
+      method: "item/tool/requestUserInput",
+      id: 9_101,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-input-2",
+        questions: [
+          {
+            id: "secret_choice",
+            header: "Secret",
+            question: "Choose how to proceed",
+            isOther: true,
+            isSecret: true,
+            options: [
+              {
+                label: "Standard",
+                description: "Use the default flow"
+              }
+            ]
+          }
+        ]
+      }
+    });
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) =>
+        message.text.includes("Sensitive input. Your reply stays visible in this shared topic.")
+      )
+    );
+
+    const pending = await database.getPendingRequest(JSON.stringify(9_101));
+    const promptMessage = telegram.sentMessages.findLast((message) =>
+      message.text.includes("Sensitive input. Your reply stays visible in this shared topic.")
+    );
+    expect(promptMessage).toBeDefined();
+
+    vi.useFakeTimers();
+
+    try {
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const callbackPromise = bridge.handleCallbackQuery({
+        callbackQueryId: "callback-user-input-race",
+        data: `req:${pending.id}:other`,
+        chatId: -1001,
+        topicId: 787,
+        userId: 42
+      });
+
+      await Promise.resolve();
+
+      const finalAnswer = "Use a custom rollout path";
+      const completionPromise = bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 787,
+        messageId: 423,
+        updateId: 5_221,
+        userId: 42,
+        text: finalAnswer
+      });
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.all([callbackPromise, completionPromise]);
+
+      expect(codex.userInputs).toContainEqual({
+        id: 9_101,
+        answers: {
+          secret_choice: { answers: [finalAnswer] }
+        }
+      });
+      expect(
+        telegram.edits.some((edit) => edit.text.includes("Reply with your own answer in this shared topic"))
+      ).toBe(false);
+      expect(telegram.edits.at(-1)?.text).toBe(`User answered: ${finalAnswer}`);
+      expect(telegram.editOptions.at(-1)?.messageId).toBe(promptMessage?.messageId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start user-input side effects before the callback ack succeeds", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 787,
+      messageId: 422,
+      updateId: 5_230,
+      userId: 42,
+      text: "Start the topic"
+    });
+
+    codex.emitRequest({
+      method: "item/tool/requestUserInput",
+      id: 9_102,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-input-3",
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Choose how to proceed",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Standard",
+                description: "Use the default flow"
+              }
+            ]
+          }
+        ]
+      }
+    });
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) => message.text.includes("Choose how to proceed"))
+    );
+
+    const pendingBefore = await database.getPendingRequest(JSON.stringify(9_102));
+    const promptMessage = telegram.sentMessages.findLast((message) =>
+      message.text.includes("Choose how to proceed")
+    );
+    expect(promptMessage).toBeDefined();
+    const editsBefore = telegram.edits.length;
+
+    telegram.nextAnswerCallbackQueryError = new Error("ack failed");
+
+    await expect(
+      bridge.handleCallbackQuery({
+        callbackQueryId: "callback-user-input-ack-failure",
+        data: `req:${pendingBefore.id}:opt:0`,
+        chatId: -1001,
+        topicId: 787,
+        userId: 42
+      })
+    ).rejects.toThrow("ack failed");
+
+    const pendingAfter = await database.getPendingRequest(JSON.stringify(9_102));
+    expect(codex.userInputs).toEqual([]);
+    expect(telegram.edits).toHaveLength(editsBefore);
+    expect(
+      telegram.edits.some((edit) => edit.messageId === promptMessage?.messageId)
+    ).toBe(false);
+    expect(pendingAfter.status).toBe("pending");
+    expect(pendingAfter.stateJson).toBe(pendingBefore.stateJson);
+  });
+
   it("sends a topic startup footer that explains General and /thread", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -6093,6 +6628,41 @@ describe("TelegramCodexBridge", () => {
         )
       }
     });
+  });
+
+  it("retries temporary 429s when creating a new topic from root /plan", async () => {
+    vi.useFakeTimers();
+
+    try {
+      telegram.nextCreateForumTopicError = rateLimitError(1);
+
+      const promise = bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: null,
+        messageId: 700,
+        updateId: 801,
+        userId: 42,
+        text: "/plan"
+      });
+
+      await Promise.resolve();
+      expect(telegram.createdTopics).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10000);
+      await vi.runOnlyPendingTimersAsync();
+      void promise.catch(() => undefined);
+      expect(telegram.createdTopics).toEqual([
+        expect.objectContaining({
+          chatId: -1001,
+          name: "New Plan Session"
+        })
+      ]);
+      expect(codex.createdThreads).toEqual(["New Plan Session"]);
+      const session = await database.getSessionByTopic(-1001, 101);
+      expect(session?.codexThreadId).toBe("thread-1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stores approval requests and resolves them via callback queries", async () => {
@@ -6141,6 +6711,353 @@ describe("TelegramCodexBridge", () => {
     const resolved = await database.getPendingRequest(JSON.stringify(88));
     expect(resolved.status).toBe("resolved");
     expect(telegram.edits.at(-1)?.text).toContain("accept");
+  });
+
+  it("acknowledges approval callbacks before a blocked resolution edit finishes", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 20_001,
+      userId: 42,
+      text: "Run the deployment fix"
+    });
+
+    codex.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      id: 880,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm publish",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "decline", "cancel"]
+      }
+    });
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) => message.text.startsWith("Command approval needed"))
+    );
+
+    const promptMessage = telegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Command approval needed")
+    );
+    expect(promptMessage).toBeDefined();
+
+    const blocker = deferred<void>();
+    telegram.editBlocks.push(blocker.promise);
+
+    const callbackPromise = bridge.handleCallbackQuery({
+      callbackQueryId: "callback-ack-before-edit",
+      data: getCallbackDataByButtonText(promptMessage, "Allow once")!,
+      chatId: -1001,
+      topicId: 101,
+      userId: 42
+    });
+
+    await waitForCondition(() => telegram.callbackAnswers.length > 0);
+    expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Request updated");
+
+    blocker.resolve(undefined as unknown as void);
+    await callbackPromise;
+
+    expect(telegram.edits.at(-1)?.text).toContain("accept");
+  });
+
+  it("answers callback queries promptly while lower-priority Telegram edits are queued", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 21,
+      userId: 42,
+      text: "Run the deployment fix"
+    });
+
+    codex.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      id: 89,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm publish",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "decline", "cancel"]
+      }
+    });
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) => message.text.startsWith("Command approval needed"))
+    );
+
+    vi.useFakeTimers();
+
+    try {
+      telegram.events = [];
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      codex.emitNotification({
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: 89
+        }
+      });
+      await Promise.resolve();
+
+      await bridge.handleCallbackQuery({
+        callbackQueryId: "callback-priority-1",
+        data: "unsupported",
+        chatId: -1001,
+        topicId: 101,
+        userId: 42
+      });
+
+      expect(telegram.events[0]).toBe("callback:callback-priority-1");
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.runOnlyPendingTimersAsync();
+      expect(telegram.edits.at(-1)?.text).toBe("Request resolved");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries temporary 429s on request callback writes instead of failing the callback path", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 22,
+      userId: 42,
+      text: "Run the deployment fix"
+    });
+
+    codex.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      id: 90,
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm publish",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "decline", "cancel"]
+      }
+    });
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) => message.text.startsWith("Command approval needed"))
+    );
+
+    const promptMessage = telegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Command approval needed")
+    );
+    expect(promptMessage).toBeDefined();
+
+    vi.useFakeTimers();
+
+    try {
+      telegram.nextEditMessageTextError = rateLimitError(1);
+      telegram.nextAnswerCallbackQueryError = rateLimitError(1);
+
+      const promise = bridge.handleCallbackQuery({
+        callbackQueryId: "callback-retry-1",
+        data: getCallbackDataByButtonText(promptMessage, "Allow once")!,
+        chatId: -1001,
+        topicId: 101,
+        userId: 42
+      });
+
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(8000);
+      await vi.runOnlyPendingTimersAsync();
+      await expect(promise).resolves.toBeUndefined();
+      expect(codex.commandApprovals).toEqual([{ id: 90, decision: "accept" }]);
+      expect(telegram.callbackAnswers.at(-1)?.options?.text).toBe("Request updated");
+      expect(telegram.edits.at(-1)?.text).toContain("accept");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stale external resolution retry overwrite a later approval summary", async () => {
+    const messenger = new TelegramMessenger(telegram, console, ZERO_SPACING_DELIVERY_POLICY);
+    const messengerEditSpy = vi.spyOn(messenger, "editMessageText");
+    const coordinator = new BridgeRequestCoordinator(
+      database,
+      messenger,
+      codex,
+      () => undefined,
+      async () => undefined
+    );
+    const pending = await database.createPendingRequest({
+      requestIdJson: JSON.stringify(90_100),
+      method: "item/commandExecution/requestApproval",
+      telegramChatId: "-1001",
+      telegramTopicId: 101,
+      telegramMessageId: 9_001,
+      payloadJson: JSON.stringify({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm publish",
+        cwd: "/workspace",
+        availableDecisions: ["accept", "decline", "cancel"]
+      })
+    });
+
+    const releaseExternal = deferred<void>();
+    const releaseLocalSummary = deferred<void>();
+    const originalResolveRequestExternally = database.resolveRequestExternally.bind(database);
+    const originalRespondToCommandApproval = codex.respondToCommandApproval.bind(codex);
+    const resolveRequestExternallySpy = vi.spyOn(database, "resolveRequestExternally").mockImplementation(async (requestIdJson) => {
+      await releaseExternal.promise;
+      return originalResolveRequestExternally(requestIdJson);
+    });
+    const respondToCommandApprovalSpy = vi.spyOn(codex, "respondToCommandApproval").mockImplementation(async (id, response) => {
+      await releaseLocalSummary.promise;
+      return originalRespondToCommandApproval(id, response);
+    });
+
+    try {
+      const externalPromise = coordinator.handleServerRequestResolved({
+        threadId: "thread-1",
+        requestId: 90_100
+      });
+      await waitForCondition(() => resolveRequestExternallySpy.mock.calls.length === 1);
+
+      vi.useFakeTimers();
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const callbackPromise = coordinator.handleCallbackQuery({
+        callbackQueryId: "callback-summary-race",
+        data: `req:${pending.id}:accept`,
+        chatId: -1001,
+        topicId: 101
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(respondToCommandApprovalSpy).toHaveBeenCalledTimes(1);
+
+      releaseExternal.resolve(undefined as unknown as void);
+      await Promise.resolve();
+      releaseLocalSummary.resolve(undefined as unknown as void);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.all([callbackPromise, externalPromise]);
+
+      const coalesceKeys = messengerEditSpy.mock.calls
+        .map(([options]) => options)
+        .filter((options) => options.messageId === 9_001)
+        .map((options) => options.coalesceKey)
+        .filter((key): key is string => typeof key === "string");
+      expect(telegram.edits.at(-1)?.messageId).toBe(9_001);
+      expect(telegram.edits.at(-1)?.text).toContain("accept");
+      expect(new Set(coalesceKeys)).toHaveLength(1);
+    } finally {
+      messengerEditSpy.mockRestore();
+      resolveRequestExternallySpy.mockRestore();
+      respondToCommandApprovalSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stale external resolution retry overwrite a later user-input completion", async () => {
+    const messenger = new TelegramMessenger(telegram, console, ZERO_SPACING_DELIVERY_POLICY);
+    const messengerEditSpy = vi.spyOn(messenger, "editMessageText");
+    const coordinator = new BridgeRequestCoordinator(
+      database,
+      messenger,
+      codex,
+      () => undefined,
+      async () => undefined
+    );
+    const pending = await database.createPendingRequest({
+      requestIdJson: JSON.stringify(90_101),
+      method: "item/tool/requestUserInput",
+      telegramChatId: "-1001",
+      telegramTopicId: 787,
+      telegramMessageId: 9_002,
+      payloadJson: JSON.stringify({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-input-4",
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Choose how to proceed",
+            options: [
+              {
+                label: "Standard",
+                description: "Use the default flow"
+              }
+            ]
+          }
+        ]
+      })
+    });
+    await database.updateRequestState(
+      pending.requestIdJson,
+      stringifyUserInputState(createInitialUserInputState())
+    );
+
+    const releaseExternal = deferred<void>();
+    const releaseLocalCompletion = deferred<void>();
+    const originalResolveRequestExternally = database.resolveRequestExternally.bind(database);
+    const originalRespondToUserInputRequest = codex.respondToUserInputRequest.bind(codex);
+    const resolveRequestExternallySpy = vi.spyOn(database, "resolveRequestExternally").mockImplementation(async (requestIdJson) => {
+      await releaseExternal.promise;
+      return originalResolveRequestExternally(requestIdJson);
+    });
+    const respondToUserInputRequestSpy = vi.spyOn(codex, "respondToUserInputRequest").mockImplementation(async (id, response) => {
+      await releaseLocalCompletion.promise;
+      return originalRespondToUserInputRequest(id, response);
+    });
+
+    try {
+      const externalPromise = coordinator.handleServerRequestResolved({
+        threadId: "thread-1",
+        requestId: 90_101
+      });
+      await waitForCondition(() => resolveRequestExternallySpy.mock.calls.length === 1);
+
+      vi.useFakeTimers();
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const callbackPromise = coordinator.handleCallbackQuery({
+        callbackQueryId: "callback-completion-race",
+        data: `req:${pending.id}:opt:0`,
+        chatId: -1001,
+        topicId: 787
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(respondToUserInputRequestSpy).toHaveBeenCalledTimes(1);
+
+      releaseExternal.resolve(undefined as unknown as void);
+      await Promise.resolve();
+      releaseLocalCompletion.resolve(undefined as unknown as void);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.all([callbackPromise, externalPromise]);
+
+      const coalesceKeys = messengerEditSpy.mock.calls
+        .map(([options]) => options)
+        .filter((options) => options.messageId === 9_002)
+        .map((options) => options.coalesceKey)
+        .filter((key): key is string => typeof key === "string");
+      expect(telegram.edits.at(-1)?.messageId).toBe(9_002);
+      expect(telegram.edits.at(-1)?.text).toBe("User answered: Standard");
+      expect(new Set(coalesceKeys)).toHaveLength(1);
+    } finally {
+      messengerEditSpy.mockRestore();
+      resolveRequestExternallySpy.mockRestore();
+      respondToUserInputRequestSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("stores file approval requests and resolves them via callback queries", async () => {

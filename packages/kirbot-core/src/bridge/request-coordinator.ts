@@ -8,7 +8,7 @@ import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { ServerRequestResolvedNotification } from "@kirbot/codex-client/generated/codex/v2/ServerRequestResolvedNotification";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
-import type { TelegramApi, TelegramMessenger } from "../telegram-messenger";
+import type { TelegramMessenger } from "../telegram-messenger";
 import { prefixTelegramUsernameMention, type MentionableMessage } from "./telegram-mention-prefix";
 import type { TurnContext } from "./turn-lifecycle";
 import {
@@ -54,7 +54,6 @@ type CallbackQueryEvent = {
 export class BridgeRequestCoordinator {
   constructor(
     private readonly database: BridgeDatabase,
-    private readonly telegram: TelegramApi,
     private readonly messenger: TelegramMessenger,
     private readonly codex: BridgeCodexRequestsApi,
     private readonly getTurnContext: (turnId: string) => TurnContext | undefined,
@@ -73,7 +72,7 @@ export class BridgeRequestCoordinator {
     const [, requestIdText, ...actionParts] = event.data.split(":");
     const requestId = Number.parseInt(requestIdText ?? "", 10);
     if (Number.isNaN(requestId)) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.messenger.answerCallbackQuery(event.callbackQueryId, {
         text: "Invalid callback payload"
       });
       return true;
@@ -81,32 +80,33 @@ export class BridgeRequestCoordinator {
 
     const request = await this.database.getServerRequestById(requestId);
     if (!request || request.status !== "pending") {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.messenger.answerCallbackQuery(event.callbackQueryId, {
         text: "This request is no longer pending"
       });
       return true;
     }
 
     if (request.method === "item/tool/requestUserInput") {
-      const callbackText = await this.resolveUserInputAction(request, actionParts);
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
-        text: callbackText
+      const result = this.resolveUserInputAction(request, actionParts);
+      await this.messenger.answerCallbackQuery(event.callbackQueryId, {
+        text: result.callbackText
       });
+      await result.apply();
       return true;
     }
 
     if (request.method === "item/permissions/requestApproval") {
-      await this.resolvePermissionsApprovalAction(request, actionParts);
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.messenger.answerCallbackQuery(event.callbackQueryId, {
         text: "Permissions request updated"
       });
+      await this.resolvePermissionsApprovalAction(request, actionParts);
       return true;
     }
 
-    await this.resolveApprovalAction(request, actionParts);
-    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+    await this.messenger.answerCallbackQuery(event.callbackQueryId, {
       text: "Request updated"
     });
+    await this.resolveApprovalAction(request, actionParts);
     return true;
   }
 
@@ -190,11 +190,13 @@ export class BridgeRequestCoordinator {
       return;
     }
 
-    await this.telegram.editMessageText(
-      Number.parseInt(resolved.telegramChatId, 10),
-      resolved.telegramMessageId,
-      "Request resolved"
-    );
+    await this.messenger.editMessageText({
+      chatId: Number.parseInt(resolved.telegramChatId, 10),
+      messageId: resolved.telegramMessageId,
+      text: "Request resolved",
+      coalesceKey: this.getRequestMessageCoalesceKey(resolved.requestIdJson),
+      replacePending: true
+    });
   }
 
   private async handleApprovalRequest(session: BridgeSession, request: ApprovalServerRequest): Promise<void> {
@@ -329,11 +331,13 @@ export class BridgeRequestCoordinator {
     }
 
     if (request.telegramMessageId) {
-      await this.telegram.editMessageText(
+      await this.messenger.editMessageText({
         chatId,
-        request.telegramMessageId,
-        `Resolved ${request.method} with "${resolvedActionSummary}".`
-      );
+        messageId: request.telegramMessageId,
+        text: `Resolved ${request.method} with "${resolvedActionSummary}".`,
+        coalesceKey: this.getRequestMessageCoalesceKey(request.requestIdJson),
+        replacePending: true
+      });
     }
   }
 
@@ -356,42 +360,67 @@ export class BridgeRequestCoordinator {
         Object.keys(response.permissions).length === 0
           ? "Denied additional permissions"
           : `Allowed additional permissions for this ${response.scope}`;
-      await this.telegram.editMessageText(chatId, request.telegramMessageId, summary);
+      await this.messenger.editMessageText({
+        chatId,
+        messageId: request.telegramMessageId,
+        text: summary,
+        coalesceKey: this.getRequestMessageCoalesceKey(request.requestIdJson),
+        replacePending: true
+      });
     }
   }
 
-  private async resolveUserInputAction(request: PendingServerRequest, actionParts: string[]): Promise<string> {
+  private resolveUserInputAction(request: PendingServerRequest, actionParts: string[]): {
+    callbackText: string;
+    apply: () => Promise<void>;
+  } {
     const payload = JSON.parse(request.payloadJson) as UserInputServerRequest["params"];
     const state = parseUserInputState(request.stateJson);
     const question = getCurrentUserInputQuestion(payload.questions, state);
     if (!question) {
-      return "Request already completed";
+      return {
+        callbackText: "Request already completed",
+        apply: async () => undefined
+      };
     }
 
     const [action, value] = actionParts;
     if (action === "other") {
       if (!question.isOther) {
-        return "That option is not available";
+        return {
+          callbackText: "That option is not available",
+          apply: async () => undefined
+        };
       }
 
       const nextState = allowCurrentQuestionFreeText(payload.questions, state);
-      await this.progressUserInputRequest(request, payload, nextState, false);
-      return "Reply with your answer";
+      return {
+        callbackText: "Reply with your answer",
+        apply: () => this.progressUserInputRequest(request, payload, nextState, false)
+      };
     }
 
     if (action === "opt") {
       const optionIndex = Number.parseInt(value ?? "", 10);
       const option = question.options?.[optionIndex];
       if (!option) {
-        return "That option is no longer available";
+        return {
+          callbackText: "That option is no longer available",
+          apply: async () => undefined
+        };
       }
 
       const nextState = answerCurrentUserInputQuestion(payload.questions, state, [option.label]);
-      await this.progressUserInputRequest(request, payload, nextState, true, option.label);
-      return "Answer recorded";
+      return {
+        callbackText: "Answer recorded",
+        apply: () => this.progressUserInputRequest(request, payload, nextState, true, option.label)
+      };
     }
 
-    return "Unsupported callback";
+    return {
+      callbackText: "Unsupported callback",
+      apply: async () => undefined
+    };
   }
 
   private async progressUserInputRequest(
@@ -433,8 +462,13 @@ export class BridgeRequestCoordinator {
     const prefixedPrompt = this.prefixInitialRequestPrompt(payload.turnId, prompt);
 
     if (request.telegramMessageId) {
-      await this.telegram.editMessageText(chatId, request.telegramMessageId, prompt.text, {
-        ...(prompt.replyMarkup ? { reply_markup: prompt.replyMarkup } : {})
+      await this.messenger.editMessageText({
+        chatId,
+        messageId: request.telegramMessageId,
+        text: prompt.text,
+        ...(prompt.replyMarkup ? { replyMarkup: prompt.replyMarkup } : {}),
+        coalesceKey: this.getRequestMessageCoalesceKey(request.requestIdJson),
+        replacePending: true
       });
       return;
     }
@@ -464,14 +498,18 @@ export class BridgeRequestCoordinator {
       return;
     }
 
-    await this.telegram.editMessageText(
-      Number.parseInt(request.telegramChatId, 10),
-      request.telegramMessageId,
-      completionPrompt.text,
-      {
-        ...(completionPrompt.entities ? { entities: completionPrompt.entities } : {})
-      }
-    );
+    await this.messenger.editMessageText({
+      chatId: Number.parseInt(request.telegramChatId, 10),
+      messageId: request.telegramMessageId,
+      text: completionPrompt.text,
+      ...(completionPrompt.entities ? { entities: completionPrompt.entities } : {}),
+      coalesceKey: this.getRequestMessageCoalesceKey(request.requestIdJson),
+      replacePending: true
+    });
+  }
+
+  private getRequestMessageCoalesceKey(requestIdJson: string): string {
+    return `server-request:${requestIdJson}:message`;
   }
 
   private async findSessionForRequest(request: ServerRequest): Promise<BridgeSession | undefined> {

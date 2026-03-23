@@ -33,11 +33,9 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
   #closed = false;
   #currentStatusMessage: TelegramRenderedMessage | null = null;
   #latestStatusMessage: TelegramRenderedMessage | null = null;
-  #lastEditAt = 0;
-  #lastChatActionAt = 0;
-  #flushTimer: NodeJS.Timeout | null = null;
-
-  readonly #statusCooldownMs = 500;
+  #lastVisibleActivityAt = 0;
+  #statusDrain: Promise<void> | null = null;
+  #lifecycleQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly messenger: TelegramMessenger,
@@ -51,20 +49,22 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
     }
 
     this.#latestStatusMessage = rendered;
-    await this.#runExclusive(() => this.#flushStatus(force));
+    await this.#ensureStatusDrain(force);
   }
 
   async publishFinalAssistantMessage(
     rendered: TelegramRenderedMessage,
     options?: TelegramVisibleMessageRenderOptions
   ): Promise<number | null> {
-    return this.#runExclusive(async () => {
+    return this.#runLifecycleExclusive(async () => {
       if (this.#closed) {
         return null;
       }
 
       this.#closed = true;
-      this.#clearFlushTimer();
+      this.#latestStatusMessage = null;
+      this.#cancelLowValuePendingWork();
+      await this.#awaitStatusDrain();
 
       try {
         const message = await this.messenger.sendMessage({
@@ -75,6 +75,7 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
           disableNotification: options?.disableNotification ?? false,
           ...(options?.replyMarkup ? { replyMarkup: options.replyMarkup } : {})
         });
+        this.#markVisibleActivity();
 
         if (this.#statusMessageId !== null) {
           try {
@@ -105,42 +106,49 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
   }
 
   async publishTerminalStatus(rendered: TelegramRenderedMessage, force = true): Promise<number | null> {
-    return this.#runExclusive(async () => {
+    return this.#runLifecycleExclusive(async () => {
       this.#closed = true;
-      this.#clearFlushTimer();
-      return this.#publishStatusMessage(rendered, force, false);
+      this.#latestStatusMessage = null;
+      this.#cancelLowValuePendingWork();
+      await this.#awaitStatusDrain();
+      return this.#publishStatusMessage(rendered, force, false, true);
     });
   }
 
   async clear(): Promise<void> {
-    this.#clearFlushTimer();
     this.#closed = true;
+    this.#latestStatusMessage = null;
+    this.#cancelLowValuePendingWork();
+    await this.#awaitStatusDrain();
   }
 
-  async #flushStatus(force: boolean): Promise<void> {
-    if (this.#closed || !this.#latestStatusMessage) {
-      return;
+  #ensureStatusDrain(force: boolean): Promise<void> {
+    if (this.#statusDrain) {
+      return this.#statusDrain;
     }
 
-    await this.#maybeSendTypingAction();
-    const rendered = this.#latestStatusMessage;
-    if (sameRenderedMessage(this.#currentStatusMessage, rendered)) {
-      return;
-    }
+    this.#statusDrain = this.#drainStatusUpdates(force).finally(() => {
+      this.#statusDrain = null;
+    });
+    return this.#statusDrain;
+  }
 
-    const canEditNow = force || this.#statusMessageId === null || this.#cooldownElapsed(this.#statusCooldownMs);
-    if (!canEditNow) {
-      this.#scheduleFlush(this.#remainingCooldownMs(this.#statusCooldownMs));
-      return;
-    }
+  async #drainStatusUpdates(force: boolean): Promise<void> {
+    while (!this.#closed) {
+      const rendered = this.#latestStatusMessage;
+      if (!rendered || sameRenderedMessage(this.#currentStatusMessage, rendered)) {
+        return;
+      }
 
-    await this.#publishStatusMessage(rendered, true, true);
+      await this.#publishStatusMessage(rendered, force, true);
+    }
   }
 
   async #publishStatusMessage(
     rendered: TelegramRenderedMessage,
     _force: boolean,
-    sendTypingAction: boolean
+    sendTypingAction: boolean,
+    allowClosedCommit = false
   ): Promise<number> {
     if (sendTypingAction) {
       await this.#maybeSendTypingAction();
@@ -160,14 +168,18 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
         chatId: this.chatId,
         messageId: this.#statusMessageId,
         text: rendered.text,
-        ...(rendered.entities ? { entities: rendered.entities } : {})
+        ...(rendered.entities ? { entities: rendered.entities } : {}),
+        coalesceKey: this.#statusEditCoalesceKey(this.#statusMessageId),
+        replacePending: true
       });
     }
 
+    if (this.#closed && !allowClosedCommit) {
+      return this.#statusMessageId;
+    }
+
+    this.#markVisibleActivity();
     this.#currentStatusMessage = rendered;
-    this.#lastEditAt = Date.now();
-    this.#latestStatusMessage = rendered;
-    this.#clearFlushTimer();
     return this.#statusMessageId;
   }
 
@@ -177,62 +189,53 @@ class TelegramStatusBubbleTurnSurface implements TelegramTurnSurface {
     }
 
     const now = Date.now();
-    if (!force && this.#lastChatActionAt !== 0 && now - this.#lastChatActionAt < 3000) {
+    if (!force && this.#statusMessageId !== null) {
       return;
     }
 
-    this.#lastChatActionAt = now;
+    if (!force && this.#lastVisibleActivityAt !== 0 && now - this.#lastVisibleActivityAt < 3000) {
+      return;
+    }
+
     await this.messenger.sendChatAction(this.chatId, "typing", {
-      ...(this.topicId !== null ? { message_thread_id: this.topicId } : {})
+      ...(this.topicId !== null ? { message_thread_id: this.topicId } : {}),
+      coalesceKey: this.#chatActionCoalesceKey("typing"),
+      replacePending: true
     });
   }
 
-  #scheduleFlush(delayMs: number): void {
-    if (this.#closed) {
-      return;
-    }
-
-    this.#clearFlushTimer();
-    this.#flushTimer = setTimeout(() => {
-      this.#flushTimer = null;
-      void this.#runExclusive(() => this.#flushStatus(true));
-    }, Math.max(0, delayMs));
-    this.#flushTimer.unref?.();
+  #statusEditCoalesceKey(messageId: number): string {
+    return `status:${this.chatId}:${messageId}`;
   }
 
-  #clearFlushTimer(): void {
-    if (this.#flushTimer) {
-      clearTimeout(this.#flushTimer);
-      this.#flushTimer = null;
-    }
+  #chatActionCoalesceKey(action: "typing" | "upload_document"): string {
+    return `chat-action:${this.chatId}:${this.topicId ?? "root"}:${action}`;
   }
 
-  #cooldownElapsed(cooldownMs: number): boolean {
-    if (this.#lastEditAt === 0) {
-      return true;
-    }
-
-    return Date.now() - this.#lastEditAt >= cooldownMs;
+  #markVisibleActivity(): void {
+    this.#lastVisibleActivityAt = Date.now();
   }
 
-  #remainingCooldownMs(cooldownMs: number): number {
-    if (this.#lastEditAt === 0) {
-      return 0;
+  #cancelLowValuePendingWork(): void {
+    if (this.#statusMessageId !== null) {
+      this.messenger.cancelPendingDelivery("visible_edit", this.#statusEditCoalesceKey(this.#statusMessageId));
     }
 
-    return Math.max(0, cooldownMs - (Date.now() - this.#lastEditAt));
+    this.messenger.cancelPendingDelivery("chat_action", this.#chatActionCoalesceKey("typing"));
   }
 
-  #runExclusive<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.#queue.then(() => task(), () => task());
-    this.#queue = next.then(
+  async #awaitStatusDrain(): Promise<void> {
+    await this.#statusDrain;
+  }
+
+  #runLifecycleExclusive<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.#lifecycleQueue.then(() => task(), () => task());
+    this.#lifecycleQueue = next.then(
       () => undefined,
       () => undefined
     );
     return next;
   }
-
-  #queue: Promise<void> = Promise.resolve();
 }
 
 function sameRenderedMessage(left: TelegramRenderedMessage | null, right: TelegramRenderedMessage | null): boolean {

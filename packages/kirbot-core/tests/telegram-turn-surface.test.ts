@@ -1,14 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MessageEntity } from "grammy/types";
 
 import { createTelegramTurnSurface } from "../src/bridge/telegram-turn-surface";
 import { TelegramMessenger, type TelegramApi, type TelegramCreateForumTopicOptions } from "../src/telegram-messenger";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error("Timed out waiting for condition");
+}
+
+function rateLimitError(retryAfterSeconds: number): Error & {
+  error_code: number;
+  parameters: {
+    retry_after: number;
+  };
+} {
+  const error = new Error("Too Many Requests") as Error & {
+    error_code: number;
+    parameters: {
+      retry_after: number;
+    };
+  };
+  error.error_code = 429;
+  error.parameters = {
+    retry_after: retryAfterSeconds
+  };
+  return error;
+}
 
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
   sentMessages: Array<{ chatId: number; text: string; options?: Record<string, unknown> }> = [];
   edits: Array<{ chatId: number; messageId: number; text: string; options?: Record<string, unknown> }> = [];
   deletions: Array<{ chatId: number; messageId: number }> = [];
+  chatActions: Array<{ chatId: number; action: "typing" | "upload_document"; options?: { message_thread_id?: number } }> = [];
+  editBlocks: Array<Promise<void>> = [];
+  deleteBlocks: Array<Promise<void>> = [];
+  nextEditMessageTextError: Error | null = null;
   failNextSend = false;
   failNextDelete = false;
 
@@ -49,10 +93,11 @@ class FakeTelegram implements TelegramApi {
   }
 
   async sendChatAction(
-    _chatId: number,
-    _action: "typing" | "upload_document",
-    _options?: { message_thread_id?: number }
+    chatId: number,
+    action: "typing" | "upload_document",
+    options?: { message_thread_id?: number }
   ): Promise<true> {
+    this.chatActions.push(options ? { chatId, action, options } : { chatId, action });
     return true;
   }
 
@@ -62,7 +107,17 @@ class FakeTelegram implements TelegramApi {
     text: string,
     options?: Record<string, unknown>
   ): Promise<unknown> {
+    if (this.nextEditMessageTextError) {
+      const error = this.nextEditMessageTextError;
+      this.nextEditMessageTextError = null;
+      throw error;
+    }
+
     this.edits.push(options ? { chatId, messageId, text, options } : { chatId, messageId, text });
+    const blocker = this.editBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
     return true;
   }
 
@@ -73,6 +128,10 @@ class FakeTelegram implements TelegramApi {
     }
 
     this.deletions.push({ chatId, messageId });
+    const blocker = this.deleteBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
     return true;
   }
 
@@ -202,5 +261,198 @@ describe("Telegram turn surfaces", () => {
     expect(messageId).toBe(2);
     expect(telegram.sentMessages.map((entry) => entry.text)).toEqual(["thinking", "Final answer"]);
     expect(telegram.deletions).toHaveLength(0);
+  });
+
+  it("collapses multiple rapid status updates to the latest pending edit", async () => {
+    const telegram = new FakeTelegram();
+    const surface = createTelegramTurnSurface({
+      messenger: new TelegramMessenger(telegram),
+      chatId: -1001,
+      topicId: 777
+    });
+
+    await surface.updateStatus({ text: "thinking" }, true);
+
+    const blockedEdit = deferred();
+    telegram.editBlocks.push(blockedEdit.promise);
+
+    const firstUpdate = surface.updateStatus({ text: "running" }, true);
+    await waitForCondition(() => telegram.edits.some((edit) => edit.text === "running"));
+    const secondUpdate = surface.updateStatus({ text: "searching" }, true);
+    const thirdUpdate = surface.updateStatus({ text: "editing" }, true);
+
+    blockedEdit.resolve();
+    await Promise.all([firstUpdate, secondUpdate, thirdUpdate]);
+
+    expect(telegram.edits.map((edit) => edit.text)).toEqual(["running", "editing"]);
+  });
+
+  it("lets final assistant publish supersede queued intermediate status edits", async () => {
+    const telegram = new FakeTelegram();
+    const surface = createTelegramTurnSurface({
+      messenger: new TelegramMessenger(telegram),
+      chatId: -1001,
+      topicId: 777
+    });
+
+    await surface.updateStatus({ text: "thinking" }, true);
+
+    const blockedEdit = deferred();
+    telegram.editBlocks.push(blockedEdit.promise);
+
+    const runningUpdate = surface.updateStatus({ text: "running" }, true);
+    await waitForCondition(() => telegram.edits.some((edit) => edit.text === "running"));
+    const searchingUpdate = surface.updateStatus({ text: "searching" }, true);
+    const finalPublish = surface.publishFinalAssistantMessage({ text: "Final answer" });
+
+    blockedEdit.resolve();
+    const [, , finalMessageId] = await Promise.all([runningUpdate, searchingUpdate, finalPublish]);
+
+    expect(finalMessageId).toBe(2);
+    expect(telegram.edits.map((edit) => edit.text)).toEqual(["running"]);
+    expect(telegram.sentMessages.map((entry) => entry.text)).toEqual(["thinking", "Final answer"]);
+  });
+
+  it("keeps terminal status after an older blocked status edit completes", async () => {
+    const telegram = new FakeTelegram();
+    const surface = createTelegramTurnSurface({
+      messenger: new TelegramMessenger(telegram),
+      chatId: -1001,
+      topicId: 777
+    });
+
+    await surface.updateStatus({ text: "thinking" }, true);
+
+    const blockedEdit = deferred();
+    telegram.editBlocks.push(blockedEdit.promise);
+
+    const runningUpdate = surface.updateStatus({ text: "running" }, true);
+    await waitForCondition(() => telegram.edits.some((edit) => edit.text === "running"));
+
+    const terminalPublish = surface.publishTerminalStatus({ text: "completed" });
+    blockedEdit.resolve();
+
+    const [, messageId] = await Promise.all([runningUpdate, terminalPublish]);
+
+    expect(messageId).toBe(1);
+    expect(telegram.edits.map((edit) => edit.text)).toEqual(["running", "completed"]);
+    expect(telegram.edits.at(-1)?.text).toBe("completed");
+  });
+
+  it("keeps failed fallback after an older blocked status edit completes", async () => {
+    const telegram = new FakeTelegram();
+    const surface = createTelegramTurnSurface({
+      messenger: new TelegramMessenger(telegram),
+      chatId: -1001,
+      topicId: 777
+    });
+
+    await surface.updateStatus({ text: "thinking" }, true);
+
+    const blockedEdit = deferred();
+    telegram.editBlocks.push(blockedEdit.promise);
+
+    const runningUpdate = surface.updateStatus({ text: "running" }, true);
+    await waitForCondition(() => telegram.edits.some((edit) => edit.text === "running"));
+
+    telegram.failNextSend = true;
+    const finalPublish = surface.publishFinalAssistantMessage({ text: "Final answer" });
+    blockedEdit.resolve();
+
+    const [, messageId] = await Promise.all([runningUpdate, finalPublish]);
+
+    expect(messageId).toBeNull();
+    expect(telegram.edits.map((edit) => edit.text)).toEqual(["running", "failed"]);
+    expect(telegram.edits.at(-1)?.text).toBe("failed");
+  });
+
+  it("does not let a retried 429 status edit delay final assistant publish", async () => {
+    vi.useFakeTimers();
+    try {
+      const telegram = new FakeTelegram();
+      const surface = createTelegramTurnSurface({
+        messenger: new TelegramMessenger(telegram, console, {
+          visibleSendSpacingMs: 0,
+          visibleEditSpacingMs: 0,
+          deleteSpacingMs: 0
+        }),
+        chatId: -1001,
+        topicId: 777
+      });
+
+      await surface.updateStatus({ text: "thinking" }, true);
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const staleStatusUpdate = surface.updateStatus({ text: "running" }, true);
+      await Promise.resolve();
+
+      const finalPublish = surface.publishFinalAssistantMessage({ text: "Final answer" });
+      const publishResult = await Promise.race([
+        finalPublish.then((messageId) => ({ kind: "final" as const, messageId })),
+        vi.advanceTimersByTimeAsync(100).then(() => ({ kind: "timeout" as const }))
+      ]);
+
+      expect(publishResult).toEqual({
+        kind: "final",
+        messageId: 2
+      });
+      expect(telegram.sentMessages.map((entry) => entry.text)).toEqual(["thinking", "Final answer"]);
+      await expect(staleStatusUpdate).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.runOnlyPendingTimersAsync();
+      expect(telegram.edits).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips chat actions when a visible status bubble already exists", async () => {
+    vi.useFakeTimers();
+    try {
+      const telegram = new FakeTelegram();
+      const surface = createTelegramTurnSurface({
+        messenger: new TelegramMessenger(telegram),
+        chatId: -1001,
+        topicId: 777
+      });
+
+      await surface.updateStatus({ text: "thinking" }, true);
+      vi.advanceTimersByTime(4_000);
+
+      await surface.updateStatus({ text: "running" }, true);
+
+      expect(telegram.chatActions).toEqual([
+        {
+          chatId: -1001,
+          action: "typing",
+          options: { message_thread_id: 777 }
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not repeat chat actions when only low-value churn is happening", async () => {
+    vi.useFakeTimers();
+    try {
+      const telegram = new FakeTelegram();
+      const surface = createTelegramTurnSurface({
+        messenger: new TelegramMessenger(telegram),
+        chatId: -1001,
+        topicId: 777
+      });
+
+      await surface.updateStatus({ text: "thinking" }, true);
+      vi.advanceTimersByTime(4_000);
+
+      await surface.updateStatus({ text: "thinking" }, false);
+
+      expect(telegram.chatActions).toHaveLength(1);
+      expect(telegram.edits).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

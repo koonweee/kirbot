@@ -83,7 +83,15 @@ import {
 import { BridgeRequestCoordinator } from "./bridge/request-coordinator";
 import { TurnLifecycleCoordinator, type TurnContext } from "./bridge/turn-lifecycle";
 import type { LoggerLike } from "./logging";
-import { TelegramMessenger, type ReplyKeyboardMarkup, type TelegramApi, type TelegramReplyMarkup } from "./telegram-messenger";
+import {
+  TelegramMessenger,
+  type InlineKeyboardMarkup,
+  type ReplyKeyboardMarkup,
+  type TelegramApi,
+  type TelegramDeliveryClass,
+  type TelegramDeliveryPolicy,
+  type TelegramReplyMarkup
+} from "./telegram-messenger";
 import { BridgeTurnRuntime, type QueueStateSnapshot } from "./turn-runtime";
 
 export type CallbackQueryEvent = {
@@ -159,6 +167,7 @@ type ThreadSettingsTarget =
 export type TelegramCodexBridgeOptions = {
   topicIconPicker?: TopicIconPicker;
   restartKirbot?: (reportStep: (command: string) => Promise<void>) => Promise<void>;
+  messengerDeliveryPolicy?: Partial<TelegramDeliveryPolicy>;
 };
 
 const INVALID_COMMAND_TEXT = "This command is not valid here";
@@ -188,6 +197,16 @@ const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
+  readonly #queuePreviewDesiredState = new Map<
+    string,
+    {
+      chatId: number;
+      topicId: number | null;
+      previewText: string | null;
+      replyMarkup: InlineKeyboardMarkup | null;
+    }
+  >();
+  readonly #queuePreviewSyncs = new Map<string, Promise<void>>();
   readonly #compactionNoticeMessageIds = new Map<string, number>();
   readonly #notificationChains = new Map<string, Promise<void>>();
   readonly #sessionProvisioningBySurface = new Map<string, Promise<void>>();
@@ -209,7 +228,7 @@ export class TelegramCodexBridge {
     private readonly logger: LoggerLike = console,
     options?: TelegramCodexBridgeOptions
   ) {
-    this.#messenger = new TelegramMessenger(telegram, logger);
+    this.#messenger = new TelegramMessenger(telegram, logger, options?.messengerDeliveryPolicy);
     this.#topicIconPicker = options?.topicIconPicker ?? new RandomTopicIconPicker(telegram, logger);
     this.#restartKirbot = options?.restartKirbot ?? null;
     this.#lifecycle = new TurnLifecycleCoordinator({
@@ -225,7 +244,6 @@ export class TelegramCodexBridge {
     }, logger);
     this.#requestCoordinator = new BridgeRequestCoordinator(
       database,
-      telegram,
       this.#messenger,
       codex,
       this.getTurnContext.bind(this),
@@ -304,7 +322,7 @@ export class TelegramCodexBridge {
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
     if (event.chatId !== this.config.telegram.workspaceChatId) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: WORKSPACE_CHAT_ONLY_TEXT
       });
       return;
@@ -334,7 +352,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+    await this.answerCallbackQuery(event.callbackQueryId, {
       text: "Unsupported callback"
     });
   }
@@ -344,32 +362,35 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.telegram.sendMessage(message.chatId, WORKSPACE_CHAT_ONLY_TEXT);
+    await this.#messenger.sendMessage({
+      chatId: message.chatId,
+      text: WORKSPACE_CHAT_ONLY_TEXT
+    });
   }
 
   private async handleTopicImplementCallbackQuery(event: CallbackQueryEvent): Promise<void> {
     if (event.topicId === null) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "This action requires a topic"
       });
       return;
     }
 
-    await this.telegram.answerCallbackQuery(event.callbackQueryId);
+    await this.answerCallbackQuery(event.callbackQueryId);
     await this.implementLatestPlan(buildSyntheticCallbackMessage(event, "/implement"), "");
   }
 
   private async handleTurnCallbackQuery(event: CallbackQueryEvent): Promise<void> {
     const [, turnId, action] = event.data.split(":");
     if (action !== "sendNow" || !turnId) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Unsupported callback"
       });
       return;
     }
 
     if (event.topicId === null) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "This action requires a topic"
       });
       return;
@@ -377,14 +398,14 @@ export class TelegramCodexBridge {
 
     const activeTurn = this.findActiveTurnByTopic(event.chatId, event.topicId);
     if (!activeTurn || activeTurn.turnId !== turnId) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "This turn is no longer active"
       });
       return;
     }
 
     if (activeTurn.stopRequested) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Interrupt already requested"
       });
       return;
@@ -392,7 +413,7 @@ export class TelegramCodexBridge {
 
     const queueState = this.#lifecycle.getQueueState(event.chatId, event.topicId);
     if (queueState.pendingSteers.length === 0) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "No pending steer instructions to send"
       });
       return;
@@ -402,7 +423,7 @@ export class TelegramCodexBridge {
 
     try {
       await this.codex.interruptTurn(activeTurn.threadId, activeTurn.turnId);
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Submitting queued steer instructions"
       });
     } catch (error) {
@@ -410,7 +431,7 @@ export class TelegramCodexBridge {
       if (classification.kind === "stale_or_missing_active_turn") {
         this.#lifecycle.requestPendingSteerSubmissionAfterInterrupt(turnId);
         await this.#lifecycle.finalizeInterruptedTurnById(activeTurn.threadId, activeTurn.turnId);
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Previous turn already ended. Submitting queued steer instructions"
         });
         return;
@@ -424,7 +445,7 @@ export class TelegramCodexBridge {
         topicId: event.topicId,
         text: `Failed to interrupt the current turn: ${formatError(error)}`
       });
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Failed to interrupt turn"
       });
     }
@@ -818,7 +839,7 @@ export class TelegramCodexBridge {
   private async handleCustomCommandCallbackQuery(event: CallbackQueryEvent): Promise<void> {
     const parsed = parsePendingCustomCommandCallbackData(event.data);
     if (!parsed) {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Unsupported callback"
       });
       return;
@@ -826,7 +847,7 @@ export class TelegramCodexBridge {
 
     const pending = await this.database.getPendingCustomCommandAddById(parsed.pendingId);
     if (!pending || pending.status !== "pending") {
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT
       });
       return;
@@ -835,7 +856,7 @@ export class TelegramCodexBridge {
     if (parsed.action === "cancel") {
       await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
       await this.maybeEditPendingCustomCommandMessage(pending, buildCustomCommandCanceledText(pending.command));
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Canceled"
       });
       return;
@@ -845,7 +866,7 @@ export class TelegramCodexBridge {
     if (conflict) {
       await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
       await this.maybeEditPendingCustomCommandMessage(pending, conflict);
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Could not add command"
       });
       return;
@@ -861,14 +882,14 @@ export class TelegramCodexBridge {
       if (duplicateConflict) {
         await this.database.updatePendingCustomCommandAddStatus(pending.id, "canceled");
         await this.maybeEditPendingCustomCommandMessage(pending, duplicateConflict);
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Could not add command"
         });
         return;
       }
 
       this.logger.error("Failed to add custom command", error);
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: "Failed to add command"
       });
       return;
@@ -876,7 +897,7 @@ export class TelegramCodexBridge {
 
     await this.database.updatePendingCustomCommandAddStatus(pending.id, "confirmed");
     await this.maybeEditPendingCustomCommandMessage(pending, buildCustomCommandAddedText(pending.command));
-    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+    await this.answerCallbackQuery(event.callbackQueryId, {
       text: "Command added"
     });
   }
@@ -904,11 +925,13 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.telegram.editMessageText(
-      Number.parseInt(pending.telegramChatId, 10),
-      pending.telegramMessageId,
-      text
-    );
+    await this.editBridgeMessage({
+      chatId: Number.parseInt(pending.telegramChatId, 10),
+      messageId: pending.telegramMessageId,
+      text,
+      coalesceKey: `custom-command:${pending.id}`,
+      replacePending: true
+    });
   }
 
   private async enterPlanMode(message: UserTurnMessage, promptText: string): Promise<void> {
@@ -1617,7 +1640,7 @@ export class TelegramCodexBridge {
     if (area === "scope" && (action === "model" || action === "permissions")) {
       const scope = rest[0];
       if (scope !== "root" && scope !== "spawn") {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Unsupported callback"
         });
         return;
@@ -1627,7 +1650,7 @@ export class TelegramCodexBridge {
         action === "model"
           ? await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, 0, scope)
           : await this.openScopedPermissionsSelection({ chatId: event.chatId, topicId: event.topicId }, scope);
-      await this.telegram.answerCallbackQuery(
+      await this.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
           text: `${action === "model" ? "Model" : "Permissions"} picker unavailable`
@@ -1639,14 +1662,14 @@ export class TelegramCodexBridge {
     if (area === "fast" && action === "apply") {
       const [scope, fastAction] = rest;
       if ((scope !== "root" && scope !== "spawn") || !isFastSelectionAction(fastAction)) {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Unsupported callback"
         });
         return;
       }
 
       const updated = await this.applyRootFastSelection(event.chatId, scope, fastAction);
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: updated ? "Fast mode updated" : "Fast mode not updated"
       });
       return;
@@ -1657,7 +1680,7 @@ export class TelegramCodexBridge {
       const scope = maybePreset ? maybeScope : "thread";
       const presetId = maybePreset ?? maybeScope;
       if ((scope !== "thread" && scope !== "root" && scope !== "spawn") || !isCodexPermissionPresetId(presetId)) {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Unsupported callback"
         });
         return;
@@ -1668,7 +1691,7 @@ export class TelegramCodexBridge {
         presetId,
         scope
       );
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: updated ? "Permissions updated" : "Permissions not updated"
       });
       return;
@@ -1679,21 +1702,21 @@ export class TelegramCodexBridge {
       const scope = maybePage ? maybeScope : "thread";
       const page = Number.parseInt((maybePage ?? maybeScope) ?? "", 10);
       if (Number.isNaN(page)) {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model page"
         });
         return;
       }
 
       if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model page"
         });
         return;
       }
 
       const opened = await this.openModelSelection({ chatId: event.chatId, topicId: event.topicId }, page, scope);
-      await this.telegram.answerCallbackQuery(
+      await this.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
           text: "Model picker unavailable"
@@ -1708,14 +1731,14 @@ export class TelegramCodexBridge {
       const modelIndexText = maybeModelIndex ?? maybeScope;
       const modelIndex = Number.parseInt(modelIndexText ?? "", 10);
       if (Number.isNaN(modelIndex)) {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model selection"
         });
         return;
       }
 
       if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid model selection"
         });
         return;
@@ -1726,7 +1749,7 @@ export class TelegramCodexBridge {
         modelIndex,
         scope
       );
-      await this.telegram.answerCallbackQuery(
+      await this.answerCallbackQuery(
         event.callbackQueryId,
         opened ? undefined : {
           text: "Model picker unavailable"
@@ -1742,14 +1765,14 @@ export class TelegramCodexBridge {
       const reasoningEffort = third ?? second;
       const modelIndex = Number.parseInt(modelIndexText ?? "", 10);
       if (scope !== "thread" && scope !== "root" && scope !== "spawn") {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid reasoning selection"
         });
         return;
       }
 
       if (Number.isNaN(modelIndex) || !isReasoningEffort(reasoningEffort)) {
-        await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+        await this.answerCallbackQuery(event.callbackQueryId, {
           text: "Invalid reasoning selection"
         });
         return;
@@ -1761,13 +1784,13 @@ export class TelegramCodexBridge {
         reasoningEffort,
         scope
       );
-      await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+      await this.answerCallbackQuery(event.callbackQueryId, {
         text: updated ? "Model updated" : "Model not updated"
       });
       return;
     }
 
-    await this.telegram.answerCallbackQuery(event.callbackQueryId, {
+    await this.answerCallbackQuery(event.callbackQueryId, {
       text: "Unsupported callback"
     });
   }
@@ -1810,14 +1833,14 @@ export class TelegramCodexBridge {
   private async startPlanSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
     const trimmedPrompt = promptText.trim();
     const title = trimmedPrompt ? deriveTopicTitle(trimmedPrompt) : DEFAULT_NEW_PLAN_SESSION_TITLE;
-    const forumTopic = await this.telegram.createForumTopic(
-      message.chatId,
-      title,
-      await this.#topicIconPicker.pickCreateForumTopicOptions()
-    );
+    const forumTopic = await this.#messenger.createForumTopic({
+      chatId: message.chatId,
+      name: title,
+      options: await this.#topicIconPicker.pickCreateForumTopicOptions()
+    });
     const topicMessage = {
       ...message,
-      topicId: forumTopic.message_thread_id
+      topicId: forumTopic.topicId
     };
 
     await this.startSessionInTopic(
@@ -1846,15 +1869,15 @@ export class TelegramCodexBridge {
     }
 
     const title = deriveTopicTitle(trimmedPrompt);
-    const forumTopic = await this.telegram.createForumTopic(
-      message.chatId,
-      title,
-      await this.#topicIconPicker.pickCreateForumTopicOptions()
-    );
+    const forumTopic = await this.#messenger.createForumTopic({
+      chatId: message.chatId,
+      name: title,
+      options: await this.#topicIconPicker.pickCreateForumTopicOptions()
+    });
 
     const topicMessage = {
       ...message,
-      topicId: forumTopic.message_thread_id
+      topicId: forumTopic.topicId
     };
 
     await this.startSessionInTopic(topicMessage, title, {
@@ -2451,7 +2474,13 @@ export class TelegramCodexBridge {
     const messageId = this.#compactionNoticeMessageIds.get(threadId);
     if (messageId !== undefined) {
       try {
-        await this.telegram.editMessageText(Number.parseInt(session.telegramChatId, 10), messageId, "Context compacted");
+        await this.editBridgeMessage({
+          chatId: Number.parseInt(session.telegramChatId, 10),
+          messageId,
+          text: "Context compacted",
+          coalesceKey: `compaction:${threadId}`,
+          replacePending: true
+        });
         return;
       } catch (error) {
         this.logger.warn("Failed to edit compaction notice", error);
@@ -2542,6 +2571,23 @@ export class TelegramCodexBridge {
       ...input,
       ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {})
     });
+  }
+
+  private async answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true> {
+    return this.#messenger.answerCallbackQuery(callbackQueryId, options);
+  }
+
+  private async editBridgeMessage(input: {
+    chatId: number;
+    messageId: number;
+    text: string;
+    entities?: MessageEntity[];
+    replyMarkup?: InlineKeyboardMarkup;
+    deliveryClass?: TelegramDeliveryClass;
+    coalesceKey?: string;
+    replacePending?: boolean;
+  }): Promise<unknown> {
+    return this.#messenger.editMessageText(input);
   }
 
   private async resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {
@@ -2662,49 +2708,93 @@ export class TelegramCodexBridge {
   }
 
   private async syncQueuePreview(queueState: QueueStateSnapshot): Promise<void> {
-    const previewText = renderQueuePreview(queueState);
     const key = topicKey(queueState.chatId, queueState.topicId);
-    const existingMessageId = this.#queuePreviewMessageIds.get(key) ?? null;
     const activeTurn = this.findActiveTurnByTopic(queueState.chatId, queueState.topicId);
-    const replyMarkup = buildQueuePreviewKeyboard(
-      queueState,
-      activeTurn?.turnId ?? null,
-      activeTurn?.stopRequested ?? false
-    );
+    this.#queuePreviewDesiredState.set(key, {
+      chatId: queueState.chatId,
+      topicId: queueState.topicId,
+      previewText: renderQueuePreview(queueState),
+      replyMarkup: buildQueuePreviewKeyboard(
+        queueState,
+        activeTurn?.turnId ?? null,
+        activeTurn?.stopRequested ?? false
+      ) ?? null
+    });
 
-    if (!previewText) {
-      if (existingMessageId !== null) {
-        try {
-          await this.telegram.deleteMessage(queueState.chatId, existingMessageId);
-        } catch {
-          // Ignore preview cleanup failures.
-        }
-        this.#queuePreviewMessageIds.delete(key);
-      }
+    const existingSync = this.#queuePreviewSyncs.get(key);
+    if (existingSync) {
+      await existingSync;
       return;
     }
 
-    if (existingMessageId !== null) {
-      try {
-        const options = replyMarkup
-          ? {
-              reply_markup: replyMarkup
-            }
-          : undefined;
-        await this.telegram.editMessageText(queueState.chatId, existingMessageId, previewText, options);
-        return;
-      } catch {
-        this.#queuePreviewMessageIds.delete(key);
-      }
-    }
-
-    const message = await this.#messenger.sendMessage({
-      chatId: queueState.chatId,
-      topicId: queueState.topicId,
-      text: previewText,
-      ...(replyMarkup ? { replyMarkup } : {})
+    const sync = this.#drainQueuePreview(key).finally(() => {
+      this.#queuePreviewSyncs.delete(key);
     });
-    this.#queuePreviewMessageIds.set(key, message.messageId);
+    this.#queuePreviewSyncs.set(key, sync);
+    await sync;
+  }
+
+  async #drainQueuePreview(key: string): Promise<void> {
+    while (true) {
+      const desired = this.#queuePreviewDesiredState.get(key);
+      if (!desired) {
+        return;
+      }
+
+      this.#queuePreviewDesiredState.delete(key);
+
+      const existingMessageId = this.#queuePreviewMessageIds.get(key) ?? null;
+      if (!desired.previewText) {
+        if (existingMessageId !== null) {
+          this.#messenger.cancelPendingDelivery("visible_edit", `queue-preview:${desired.chatId}:${existingMessageId}`);
+          this.#queuePreviewMessageIds.delete(key);
+          this.#scheduleQueuePreviewDelete(desired.chatId, existingMessageId);
+        }
+
+        if (!this.#queuePreviewDesiredState.has(key)) {
+          return;
+        }
+        continue;
+      }
+
+      if (existingMessageId !== null) {
+        try {
+          await this.editBridgeMessage({
+            chatId: desired.chatId,
+            messageId: existingMessageId,
+            text: desired.previewText,
+            ...(desired.replyMarkup ? { replyMarkup: desired.replyMarkup } : {}),
+            coalesceKey: `queue-preview:${desired.chatId}:${existingMessageId}`,
+            replacePending: true
+          });
+        } catch {
+          this.#queuePreviewMessageIds.delete(key);
+          continue;
+        }
+      } else {
+        const message = await this.#messenger.sendMessage({
+          chatId: desired.chatId,
+          topicId: desired.topicId,
+          text: desired.previewText,
+          ...(desired.replyMarkup ? { replyMarkup: desired.replyMarkup } : {})
+        });
+        this.#queuePreviewMessageIds.set(key, message.messageId);
+      }
+
+      if (!this.#queuePreviewDesiredState.has(key)) {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  #scheduleQueuePreviewDelete(chatId: number, messageId: number): void {
+    setTimeout(() => {
+      void this.#messenger.deleteMessage(chatId, messageId).catch(() => {
+        // Ignore preview cleanup failures.
+      });
+    }, 25).unref?.();
   }
 
   private async maybeSendNextQueuedFollowUp(chatId: number, topicId: number | null): Promise<void> {
