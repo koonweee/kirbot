@@ -19,8 +19,12 @@ type TelegramError = Error & {
 
 class FakeTelegram implements TelegramApi {
   messageCounter = 0;
+  nextCreateForumTopicError: TelegramError | null = null;
   nextSendMessageError: TelegramError | null = null;
   nextEditMessageTextError: TelegramError | null = null;
+  nextDeleteMessageError: Error | null = null;
+  operationLog: string[] = [];
+  createdTopics: Array<{ chatId: number; name: string; options?: TelegramCreateForumTopicOptions }> = [];
   sentMessages: Array<{ chatId: number; text: string; options?: TelegramSendOptions }> = [];
   edits: Array<{
     chatId: number;
@@ -39,10 +43,18 @@ class FakeTelegram implements TelegramApi {
   }
 
   async createForumTopic(
-    _chatId: number,
+    chatId: number,
     name: string,
-    _options?: TelegramCreateForumTopicOptions
+    options?: TelegramCreateForumTopicOptions
   ): Promise<{ message_thread_id: number; name: string }> {
+    if (this.nextCreateForumTopicError) {
+      const error = this.nextCreateForumTopicError;
+      this.nextCreateForumTopicError = null;
+      throw error;
+    }
+
+    this.operationLog.push(`topic:${name}`);
+    this.createdTopics.push(options ? { chatId, name, options } : { chatId, name });
     return { message_thread_id: 1, name };
   }
 
@@ -54,6 +66,7 @@ class FakeTelegram implements TelegramApi {
     }
 
     this.messageCounter += 1;
+    this.operationLog.push(`send:${text}`);
     this.sentMessages.push(options ? { chatId, text, options } : { chatId, text });
     return { message_id: this.messageCounter };
   }
@@ -72,6 +85,7 @@ class FakeTelegram implements TelegramApi {
     action: "typing" | "upload_document",
     options?: { message_thread_id?: number }
   ): Promise<true> {
+    this.operationLog.push(`chat-action:${action}`);
     this.chatActions.push(options ? { chatId, action, options } : { chatId, action });
     return true;
   }
@@ -88,15 +102,23 @@ class FakeTelegram implements TelegramApi {
       throw error;
     }
 
+    this.operationLog.push(`edit:${messageId}:${text}`);
     this.edits.push(options ? { chatId, messageId, text, options } : { chatId, messageId, text });
     return true;
   }
 
-  async deleteMessage(): Promise<true> {
+  async deleteMessage(chatId: number, messageId: number): Promise<true> {
+    this.operationLog.push(`delete:${chatId}:${messageId}`);
+    if (this.nextDeleteMessageError) {
+      const error = this.nextDeleteMessageError;
+      this.nextDeleteMessageError = null;
+      throw error;
+    }
     return true;
   }
 
-  async answerCallbackQuery(): Promise<true> {
+  async answerCallbackQuery(callbackQueryId: string): Promise<true> {
+    this.operationLog.push(`callback:${callbackQueryId}`);
     return true;
   }
 
@@ -210,7 +232,7 @@ describe("TelegramMessenger", () => {
       await Promise.resolve();
       expect(telegram.sentMessages).toEqual([]);
 
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5000);
       await expect(promise).resolves.toEqual({ messageId: 1 });
       expect(telegram.sentMessages).toEqual([
         {
@@ -244,13 +266,182 @@ describe("TelegramMessenger", () => {
       await Promise.resolve();
       expect(telegram.edits).toEqual([]);
 
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5000);
       await expect(promise).resolves.toBe(true);
       expect(telegram.edits).toEqual([
         {
           chatId: 1,
           messageId: 7,
           text: "Retry edit"
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes topic creation through the scheduler retry path", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+      telegram.nextCreateForumTopicError = rateLimitError(1);
+
+      const promise = messenger.createForumTopic({
+        chatId: 1,
+        name: "Release Plan"
+      });
+
+      await Promise.resolve();
+      expect(telegram.createdTopics).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10000);
+      await expect(promise).resolves.toEqual({
+        topicId: 1,
+        name: "Release Plan"
+      });
+      expect(telegram.createdTopics).toEqual([
+        {
+          chatId: 1,
+          name: "Release Plan"
+        }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prioritizes callback answers over queued low-priority deliveries", async () => {
+    const telegram = new FakeTelegram();
+    const messenger = new TelegramMessenger(telegram);
+
+    const deletePromise = messenger.deleteMessage(1, 10);
+    const actionPromise = messenger.sendChatAction(1, "typing");
+    const callbackPromise = messenger.answerCallbackQuery("callback-1", {
+      text: "Done"
+    });
+
+    await Promise.all([deletePromise, actionPromise, callbackPromise]);
+
+    expect(telegram.operationLog.slice(0, 3)).toEqual([
+      "callback:callback-1",
+      "delete:1:10",
+      "chat-action:typing"
+    ]);
+  });
+
+  it("keeps deleteMessage best effort and lower priority than visible sends", async () => {
+    const telegram = new FakeTelegram();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn()
+    };
+    const messenger = new TelegramMessenger(telegram, logger);
+    telegram.nextDeleteMessageError = new Error("message already gone");
+
+    const deletePromise = messenger.deleteMessage(1, 10);
+    const sendPromise = messenger.sendMessage({
+      chatId: 1,
+      topicId: 2,
+      text: "Keep going"
+    });
+
+    await expect(deletePromise).resolves.toBe(true);
+    await expect(sendPromise).resolves.toEqual({ messageId: 1 });
+    expect(telegram.operationLog.slice(0, 2)).toEqual([
+      "send:Keep going",
+      "delete:1:10"
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith("Telegram delete message failed; continuing", expect.any(Error));
+  });
+
+  it("logs scheduled retries after Telegram 429 responses", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn()
+      };
+      const messenger = new TelegramMessenger(telegram, logger);
+      telegram.nextSendMessageError = rateLimitError(1);
+
+      const promise = messenger.sendMessage({
+        chatId: 1,
+        topicId: 2,
+        text: "Retry with logging"
+      });
+
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toEqual({ messageId: 1 });
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Telegram send message rate limited; retrying in 1000ms",
+        expect.objectContaining({
+          error_code: 429
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps conservative default pacing for visible sends", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const telegram = new FakeTelegram();
+      const messenger = new TelegramMessenger(telegram);
+
+      const first = messenger.sendMessage({
+        chatId: 1,
+        topicId: 2,
+        text: "First"
+      });
+      const second = messenger.sendMessage({
+        chatId: 1,
+        topicId: 2,
+        text: "Second"
+      });
+
+      await Promise.resolve();
+      await expect(first).resolves.toEqual({ messageId: 1 });
+      expect(telegram.sentMessages).toEqual([
+        {
+          chatId: 1,
+          text: "First",
+          options: {
+            message_thread_id: 2,
+            disable_notification: true
+          }
+        }
+      ]);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(telegram.sentMessages).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(second).resolves.toEqual({ messageId: 2 });
+      expect(telegram.sentMessages).toEqual([
+        {
+          chatId: 1,
+          text: "First",
+          options: {
+            message_thread_id: 2,
+            disable_notification: true
+          }
+        },
+        {
+          chatId: 1,
+          text: "Second",
+          options: {
+            message_thread_id: 2,
+            disable_notification: true
+          }
         }
       ]);
     } finally {

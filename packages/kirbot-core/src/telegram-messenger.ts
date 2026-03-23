@@ -1,5 +1,11 @@
 import type { MessageEntity } from "grammy/types";
 import type { LoggerLike } from "./logging";
+import {
+  TelegramDeliveryScheduler,
+  type TelegramDeliveryClass,
+  type TelegramDeliveryPolicy,
+  type TelegramDeliverySupersededResult
+} from "./telegram-delivery-scheduler";
 
 export type TelegramInlineKeyboardButton =
   | {
@@ -77,6 +83,12 @@ export type TelegramCreateForumTopicOptions = {
   icon_custom_emoji_id?: string;
 };
 
+export type TelegramDeliveryHints = {
+  deliveryClass?: TelegramDeliveryClass;
+  coalesceKey?: string;
+  replacePending?: boolean;
+};
+
 export interface TelegramApi {
   getForumTopicIconStickers(): Promise<Array<{ custom_emoji_id?: string }>>;
   createForumTopic(
@@ -114,10 +126,29 @@ type TelegramPersistentMessageOptions = {
 };
 
 export class TelegramMessenger {
+  readonly #scheduler: TelegramDeliveryScheduler;
+
   constructor(
     private readonly telegram: TelegramApi,
-    private readonly logger: LoggerLike = console
-  ) {}
+    private readonly logger: LoggerLike = console,
+    deliveryPolicy?: Partial<TelegramDeliveryPolicy>
+  ) {
+    this.#scheduler = new TelegramDeliveryScheduler(deliveryPolicy);
+  }
+
+  async createForumTopic(input: {
+    chatId: number;
+    name: string;
+    options?: TelegramCreateForumTopicOptions;
+  }): Promise<{ topicId: number; name: string }> {
+    const topic = await this.scheduleTelegramRequest("create forum topic", "topic_create", () =>
+      this.telegram.createForumTopic(input.chatId, input.name, input.options)
+    );
+    return {
+      topicId: topic.message_thread_id,
+      name: topic.name
+    };
+  }
 
   async sendMessage(input: {
     chatId: number;
@@ -128,7 +159,7 @@ export class TelegramMessenger {
     replyMarkup?: TelegramReplyMarkup;
     disableNotification?: boolean;
   }): Promise<{ messageId: number }> {
-    const message = await this.retryTelegramRequest("send message", () =>
+    const message = await this.scheduleTelegramRequest("send message", "visible_send", () =>
       this.telegram.sendMessage(
         input.chatId,
         input.text,
@@ -150,18 +181,27 @@ export class TelegramMessenger {
     text: string;
     entities?: MessageEntity[];
     replyMarkup?: InlineKeyboardMarkup;
-  }): Promise<unknown> {
-    return this.retryTelegramRequest("edit message", () =>
-      this.telegram.editMessageText(
-        input.chatId,
-        input.messageId,
-        input.text,
-        input.replyMarkup || input.entities
-          ? {
-              ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}),
-              ...(input.entities ? { entities: input.entities } : {})
-            }
-          : undefined
+  } & TelegramDeliveryHints): Promise<unknown> {
+    return this.unwrapSuperseded(
+      await this.scheduleTelegramRequest(
+        "edit message",
+        input.deliveryClass ?? "visible_edit",
+        () =>
+          this.telegram.editMessageText(
+            input.chatId,
+            input.messageId,
+            input.text,
+            input.replyMarkup || input.entities
+              ? {
+                  ...(input.replyMarkup ? { reply_markup: input.replyMarkup } : {}),
+                  ...(input.entities ? { entities: input.entities } : {})
+                }
+              : undefined
+          ),
+        {
+          coalesceKey: input.coalesceKey,
+          replacePending: input.replacePending
+        }
       )
     );
   }
@@ -171,9 +211,28 @@ export class TelegramMessenger {
     action: TelegramChatAction,
     options?: {
       message_thread_id?: number;
-    }
+    } & TelegramDeliveryHints
   ): Promise<true> {
-    return this.telegram.sendChatAction(chatId, action, options);
+    return this.unwrapSuperseded(
+      await this.scheduleTelegramRequest(
+        "send chat action",
+        options?.deliveryClass ?? "chat_action",
+        () =>
+          this.telegram.sendChatAction(
+            chatId,
+            action,
+            options?.message_thread_id !== undefined
+              ? {
+                  message_thread_id: options.message_thread_id
+                }
+              : undefined
+          ),
+        {
+          coalesceKey: options?.coalesceKey,
+          replacePending: options?.replacePending
+        }
+      )
+    );
   }
 
   async sendMessageDraft(
@@ -186,31 +245,67 @@ export class TelegramMessenger {
   }
 
   async deleteMessage(chatId: number, messageId: number): Promise<true> {
-    return this.telegram.deleteMessage(chatId, messageId);
+    return this.unwrapSuperseded(
+      await this.scheduleTelegramRequest("delete message", "delete", async () => {
+        try {
+          return await this.telegram.deleteMessage(chatId, messageId);
+        } catch (error) {
+          if (getTelegramRetryAfterMs(error) !== null) {
+            throw error;
+          }
+
+          this.logger.warn("Telegram delete message failed; continuing", error);
+          return true;
+        }
+      })
+    );
   }
 
   async answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true> {
-    return this.telegram.answerCallbackQuery(callbackQueryId, options);
+    return this.unwrapSuperseded(
+      await this.scheduleTelegramRequest("answer callback query", "callback_answer", () =>
+        this.telegram.answerCallbackQuery(callbackQueryId, options)
+      )
+    );
   }
 
   async downloadFile(fileId: string): Promise<{ bytes: Uint8Array; filePath?: string }> {
     return this.telegram.downloadFile(fileId);
   }
 
-  private async retryTelegramRequest<T>(action: string, operation: () => Promise<T>): Promise<T> {
-    while (true) {
-      try {
-        return await operation();
-      } catch (error) {
-        const retryAfterMs = getTelegramRetryAfterMs(error);
-        if (retryAfterMs === null) {
+  private async scheduleTelegramRequest<T>(
+    action: string,
+    deliveryClass: TelegramDeliveryClass,
+    operation: () => Promise<T>,
+    hints?: {
+      coalesceKey?: string;
+      replacePending?: boolean;
+    }
+  ): Promise<T | TelegramDeliverySupersededResult> {
+    return this.#scheduler.enqueue({
+      deliveryClass,
+      execute: async () => {
+        try {
+          return await operation();
+        } catch (error) {
+          const retryAfterMs = getTelegramRetryAfterMs(error);
+          if (retryAfterMs !== null) {
+            this.logger.warn(`Telegram ${action} rate limited; retrying in ${retryAfterMs}ms`, error);
+          }
           throw error;
         }
+      },
+      replaceable: hints?.replacePending ?? false,
+      coalescingKey: hints?.coalesceKey
+    });
+  }
 
-        this.logger.warn(`Telegram ${action} rate limited; retrying in ${retryAfterMs}ms`, error);
-        await delay(retryAfterMs);
-      }
+  private unwrapSuperseded<T>(value: T | TelegramDeliverySupersededResult): T {
+    if (!isTelegramDeliverySupersededResult(value)) {
+      return value;
     }
+
+    return true as T;
   }
 }
 
@@ -230,7 +325,15 @@ function buildTelegramSendOptions(input: {
   };
 }
 
-function getTelegramRetryAfterMs(error: unknown): number | null {
+function isTelegramDeliverySupersededResult(value: unknown): value is TelegramDeliverySupersededResult {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (value as { kind?: unknown }).kind === "telegram_delivery_superseded"
+  );
+}
+
+export function getTelegramRetryAfterMs(error: unknown): number | null {
   if (!error || typeof error !== "object") {
     return null;
   }
@@ -251,18 +354,14 @@ function getTelegramRetryAfterMs(error: unknown): number | null {
 
   const message = typeof asRecord.description === "string" ? asRecord.description : "";
   const match = /retry after (\d+)/i.exec(message);
-  if (match) {
-    const retryAfter = Number(match[1]);
-    if (Number.isFinite(retryAfter) && retryAfter > 0) {
-      return retryAfter * 1000;
-    }
+  if (!match) {
+    return null;
   }
 
-  return 1000;
-}
+  const retryAfter = Number(match[1]);
+  if (!Number.isFinite(retryAfter) || retryAfter <= 0) {
+    return null;
+  }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  return retryAfter * 1000;
 }
