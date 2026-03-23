@@ -961,7 +961,9 @@ function buildCompletionFooterText(details: CompletionFooterDetails): string {
   const model = details.model?.trim() ? details.model : "unknown-model";
   const modelLabel =
     details.serviceTier === "fast"
-      ? `${model} fast`
+      ? details.reasoningEffort
+        ? `${model} ${details.reasoningEffort} fast`
+        : `${model} fast`
       : details.reasoningEffort
         ? `${model} ${details.reasoningEffort}`
         : model;

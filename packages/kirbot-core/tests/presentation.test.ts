@@ -231,6 +231,32 @@ describe("status presentation", () => {
     });
   });
 
+  it("shows both reasoning effort and fast mode in completion footers", () => {
+    expect(
+      buildRenderedCompletionFooter({
+        mode: "default",
+        model: "gpt-5",
+        reasoningEffort: "high",
+        serviceTier: "fast",
+        durationMs: 60_000,
+        changedFiles: 0,
+        contextLeftPercent: 75,
+        cwd: "/workspace",
+        branch: "main"
+      })
+    ).toEqual({
+      text: "1m 0s • 75% left • /workspace • main • gpt-5 high fast",
+      entities: [
+        {
+          type: "pre",
+          offset: 0,
+          length: "1m 0s • 75% left • /workspace • main • gpt-5 high fast".length,
+          language: "status"
+        }
+      ]
+    });
+  });
+
   it("renders the completion notification as inline code", () => {
     expect(buildRenderedCompletionNotification()).toEqual({
       text: "> done",
