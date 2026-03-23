@@ -416,6 +416,85 @@ describe("bot entrypoint routing", () => {
     await expect(uploadedPhoto!.toRaw!()).resolves.toEqual(new Uint8Array([7, 8, 9]));
   });
 
+  it("synthesizes a stable photo filename when fileName is blank", async () => {
+    await loadHandlers();
+
+    const runtimeArgs = vi.mocked(createKirbotRuntime).mock.calls.at(-1)?.[0] as
+      | {
+          telegramApi?: {
+            sendPhoto?: (input: {
+              chatId: number;
+              bytes: Uint8Array;
+              fileName?: string | null;
+              mimeType?: string | null;
+              topicId?: number | null;
+              disableNotification?: boolean;
+            }) => Promise<unknown>;
+          };
+        }
+      | undefined;
+
+    await runtimeArgs!.telegramApi!.sendPhoto!({
+      chatId: 123,
+      bytes: new Uint8Array([1, 2, 3]),
+      fileName: "   ",
+      mimeType: "image/png",
+      topicId: null,
+      disableNotification: true
+    });
+
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const uploadedPhoto = sendPhotoCall?.[1] as
+      | {
+          filename?: string;
+          toRaw?: () => Promise<Uint8Array>;
+        }
+      | undefined;
+
+    expect(uploadedPhoto).toMatchObject({
+      filename: "telegram-photo.png"
+    });
+  });
+
+  it("synthesizes a stable photo filename from a parameterized mimeType", async () => {
+    await loadHandlers();
+
+    const runtimeArgs = vi.mocked(createKirbotRuntime).mock.calls.at(-1)?.[0] as
+      | {
+          telegramApi?: {
+            sendPhoto?: (input: {
+              chatId: number;
+              bytes: Uint8Array;
+              fileName?: string | null;
+              mimeType?: string | null;
+              topicId?: number | null;
+              disableNotification?: boolean;
+            }) => Promise<unknown>;
+          };
+        }
+      | undefined;
+
+    await runtimeArgs!.telegramApi!.sendPhoto!({
+      chatId: 123,
+      bytes: new Uint8Array([4, 5, 6]),
+      mimeType: "image/png; charset=binary",
+      topicId: null,
+      disableNotification: true
+    });
+
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const uploadedPhoto = sendPhotoCall?.[1] as
+      | {
+          filename?: string;
+          toRaw?: () => Promise<Uint8Array>;
+        }
+      | undefined;
+
+    expect(uploadedPhoto).toMatchObject({
+      filename: "telegram-photo.png"
+    });
+  });
+
   it("accepts callback queries from the workspace chat regardless of sender id", async () => {
     const handlers = await loadHandlers();
 
