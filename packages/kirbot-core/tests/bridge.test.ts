@@ -687,6 +687,7 @@ class FakeTelegram implements TelegramApi {
   nextAnswerCallbackQueryError: Error | null = null;
   draftBlocks: Array<Promise<void>> = [];
   editBlocks: Array<Promise<void>> = [];
+  deleteBlocks: Array<Promise<void>> = [];
   events: string[] = [];
   chatActions: Array<{
     chatId: number;
@@ -856,6 +857,10 @@ class FakeTelegram implements TelegramApi {
       throw error;
     }
     this.deletions.push({ chatId, messageId });
+    const blocker = this.deleteBlocks.shift();
+    if (blocker) {
+      await blocker;
+    }
     return true;
   }
 
@@ -4731,7 +4736,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.deletions.length === (previewMessageId ? 1 : 0));
 
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
@@ -4783,7 +4788,7 @@ describe("TelegramCodexBridge", () => {
         }
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForCondition(() => telegram.deletions.length === (previewMessageId ? 1 : 0));
 
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
@@ -4880,6 +4885,294 @@ describe("TelegramCodexBridge", () => {
     ]);
   });
 
+  it("collapses repeated queue-preview churn to the latest visible preview text for one message", async () => {
+    const previewTelegram = new FakeTelegram();
+    const previewCodex = new FakeCodex();
+    const previewDatabase = new BridgeDatabase(join(tempDir, "preview-bridge.sqlite"));
+    await previewDatabase.migrate();
+    const previewBridge = new TelegramCodexBridge(
+      config,
+      previewDatabase,
+      previewTelegram,
+      previewCodex,
+      mediaStore,
+      console,
+      {
+        messengerDeliveryPolicy: {
+          ...ZERO_SPACING_DELIVERY_POLICY,
+          visibleEditSpacingMs: 100
+        }
+      }
+    );
+
+    await previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 14,
+      updateId: 27,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 15,
+      updateId: 28,
+      userId: 42,
+      text: "First follow-up"
+    });
+
+    const previewMessageId = previewTelegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Queued for current turn:")
+    )?.messageId;
+    expect(previewMessageId).toBeDefined();
+
+    const blockedEdit = deferred<void>();
+    previewTelegram.editBlocks.push(blockedEdit.promise);
+
+    const secondFollowUp = previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 16,
+      updateId: 29,
+      userId: 42,
+      text: "Second follow-up"
+    });
+    await waitForCondition(() => previewTelegram.edits.some((edit) => edit.text.includes("Second follow-up")));
+
+    const thirdFollowUp = previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 17,
+      updateId: 30,
+      userId: 42,
+      text: "Third follow-up"
+    });
+    const fourthFollowUp = previewBridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 18,
+      updateId: 31,
+      userId: 42,
+      text: "Fourth follow-up"
+    });
+
+    blockedEdit.resolve();
+    await Promise.all([secondFollowUp, thirdFollowUp, fourthFollowUp]);
+
+    const previewEdits = previewTelegram.edits.filter((edit) => edit.messageId === previewMessageId);
+    expect(previewEdits[0]?.text).toBe("Queued for current turn:\n- First follow-up\n- Second follow-up");
+    expect(previewEdits.at(-1)?.text).toBe(
+      "Queued for current turn:\n- First follow-up\n- Second follow-up\n- Third follow-up\n- …and 1 more"
+    );
+    expect(
+      new Set(previewEdits.map((edit) => edit.messageId))
+    ).toEqual(new Set([previewMessageId]));
+
+    await previewDatabase.close();
+  });
+
+  it("keeps queue-preview cleanup deletes best effort without blocking final visible sends", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 19,
+      updateId: 32,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 20,
+      updateId: 33,
+      userId: 42,
+      text: "Queued follow-up"
+    });
+    const previewMessageId = telegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Queued for current turn:")
+    )?.messageId;
+    expect(previewMessageId).toBeDefined();
+
+    codex.readTurnSnapshotResult = {
+      assistantText: "Final answer",
+      text: "Final answer",
+      planText: "",
+      cwd: "/workspace",
+      branch: "main",
+      mode: "default",
+      changedFiles: []
+    };
+
+    const blockedDelete = deferred<void>();
+    telegram.deleteBlocks.push(blockedDelete.promise);
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "item-user-queued",
+          content: [
+            {
+              type: "text",
+              text: "Queued follow-up",
+              text_elements: []
+            }
+          ]
+        }
+      }
+    });
+    await Promise.resolve();
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+
+    await waitForCondition(() =>
+      telegram.sentMessages.some((message) => message.text === "Final answer") ||
+      telegram.drafts.some((draft) => draft.text === "Final answer")
+    );
+    expect(telegram.deletions.some((deletion) => deletion.messageId === previewMessageId)).toBe(false);
+
+    blockedDelete.resolve(undefined as unknown as void);
+    await waitForCondition(() => telegram.deletions.some((deletion) => deletion.messageId === previewMessageId));
+
+    expect(telegram.sentMessages.some((message) => message.text === "Final answer")).toBe(true);
+    expect(telegram.deletions.some((deletion) => deletion.messageId === previewMessageId)).toBe(true);
+  });
+
+  it("routes queue-preview cleanup deletes through TelegramMessenger retries", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 21,
+      updateId: 34,
+      userId: 42,
+      text: "Inspect the current failure"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 22,
+      updateId: 35,
+      userId: 42,
+      text: "Queued follow-up"
+    });
+    const previewMessageId = telegram.sentMessages.findLast((message) =>
+      message.text.startsWith("Queued for current turn:")
+    )?.messageId;
+    expect(previewMessageId).toBeDefined();
+
+    telegram.nextDeleteMessageError = rateLimitError(1);
+
+    codex.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "item-user-queued-retry",
+          content: [
+            {
+              type: "text",
+              text: "Queued follow-up",
+              text_elements: []
+            }
+          ]
+        }
+      }
+    });
+
+    await waitForCondition(
+      () => telegram.events.filter((event) => event === `delete:${previewMessageId}`).length >= 2,
+      2_000
+    );
+  });
+
+  it("supersedes stale queue-preview edits before preview cleanup deletes the message", async () => {
+    vi.useFakeTimers();
+    try {
+      await bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 23,
+        updateId: 36,
+        userId: 42,
+        text: "Inspect the current failure"
+      });
+
+      await bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 24,
+        updateId: 37,
+        userId: 42,
+        text: "Queued follow-up"
+      });
+      const previewMessageId = telegram.sentMessages.findLast((message) =>
+        message.text.startsWith("Queued for current turn:")
+      )?.messageId;
+      expect(previewMessageId).toBeDefined();
+
+      telegram.nextEditMessageTextError = rateLimitError(1);
+
+      const secondFollowUp = bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 777,
+        messageId: 25,
+        updateId: 38,
+        userId: 42,
+        text: "Second follow-up"
+      });
+      await Promise.resolve();
+
+      codex.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "item-user-queued-cleanup",
+            content: [
+              {
+                type: "text",
+                text: "Queued follow-up",
+                text_elements: []
+              }
+            ]
+          }
+        }
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      await waitForCondition(() => telegram.deletions.some((deletion) => deletion.messageId === previewMessageId));
+      await expect(secondFollowUp).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const previewEditEvents = telegram.events.filter((event) => event.startsWith(`edit:${previewMessageId}:`));
+      expect(previewEditEvents).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects oversized steer input without queueing it for the next turn", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -4926,6 +5219,7 @@ describe("TelegramCodexBridge", () => {
       telegram.edits.some((edit) => edit.text.includes("Queued for next turn")) ||
         telegram.sentMessages.some((message) => message.text.includes("Queued for next turn"))
     ).toBe(false);
+    await waitForCondition(() => telegram.deletions.length === (previewMessageId ? 1 : 0));
     expect(telegram.deletions).toEqual(
       previewMessageId ? [{ chatId: -1001, messageId: previewMessageId }] : []
     );

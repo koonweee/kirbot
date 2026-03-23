@@ -150,6 +150,29 @@ export class TelegramDeliveryScheduler {
     return promise;
   }
 
+  supersede(deliveryClass: TelegramDeliveryClass, coalescingKey: string): boolean {
+    const key = this.replaceableKey(deliveryClass, coalescingKey);
+    const pending = this.replaceablePending.get(key);
+    if (!pending) {
+      return false;
+    }
+
+    const queue = this.queueFor(deliveryClass);
+    const index = queue.indexOf(pending);
+    if (index >= 0) {
+      queue.splice(index, 1);
+    }
+
+    this.replaceablePending.delete(key);
+    pending.resolve({
+      kind: "telegram_delivery_superseded",
+      deliveryClass,
+      coalescingKey
+    });
+    this.safeInvokeHook(() => this.hooks.onSuperseded?.({ deliveryClass, coalescingKey }));
+    return true;
+  }
+
   private queueFor(deliveryClass: TelegramDeliveryClass): Array<PendingTelegramDeliveryOperation<unknown>> {
     const queue = this.queues.get(deliveryClass);
     if (queue) {

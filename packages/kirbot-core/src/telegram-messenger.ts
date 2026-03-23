@@ -273,6 +273,10 @@ export class TelegramMessenger {
     return this.telegram.downloadFile(fileId);
   }
 
+  cancelPendingDelivery(deliveryClass: TelegramDeliveryClass, coalescingKey: string): boolean {
+    return this.#scheduler.supersede(deliveryClass, coalescingKey);
+  }
+
   private async scheduleTelegramRequest<T>(
     action: string,
     deliveryClass: TelegramDeliveryClass,

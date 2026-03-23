@@ -471,6 +471,49 @@ describe("TelegramDeliveryScheduler", () => {
     expect(started).toEqual(["second"]);
   });
 
+  it("lets callers explicitly supersede an in-flight replaceable job before its 429 retry", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const scheduler = new TelegramDeliveryScheduler({
+        ...zeroPolicy(),
+        visibleEditBackoffAfter429Ms: 0
+      });
+      const gate = createDeferred<void>();
+      let attempts = 0;
+
+      const stale = scheduler.enqueue({
+        deliveryClass: "visible_edit",
+        replaceable: true,
+        coalescingKey: "edit:cancel",
+        execute: async () => {
+          attempts += 1;
+          await gate.promise;
+          throw rateLimitError(1);
+        }
+      });
+
+      await Promise.resolve();
+      expect(attempts).toBe(1);
+
+      expect(scheduler.supersede("visible_edit", "edit:cancel")).toBe(true);
+      gate.resolve();
+
+      await expect(stale).resolves.toEqual({
+        kind: "telegram_delivery_superseded",
+        deliveryClass: "visible_edit",
+        coalescingKey: "edit:cancel"
+      } satisfies TelegramDeliverySupersededResult);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.resolve();
+      expect(attempts).toBe(1);
+      expect(scheduler.supersede("visible_edit", "edit:cancel")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("deduplicates chat actions by chat id, topic id, and action", async () => {
     const scheduler = new TelegramDeliveryScheduler(zeroPolicy());
     const blocker = createDeferred<string>();

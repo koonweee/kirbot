@@ -196,6 +196,16 @@ const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
+  readonly #queuePreviewDesiredState = new Map<
+    string,
+    {
+      chatId: number;
+      topicId: number | null;
+      previewText: string | null;
+      replyMarkup: InlineKeyboardMarkup | null;
+    }
+  >();
+  readonly #queuePreviewSyncs = new Map<string, Promise<void>>();
   readonly #compactionNoticeMessageIds = new Map<string, number>();
   readonly #notificationChains = new Map<string, Promise<void>>();
   readonly #sessionProvisioningBySurface = new Map<string, Promise<void>>();
@@ -2692,51 +2702,93 @@ export class TelegramCodexBridge {
   }
 
   private async syncQueuePreview(queueState: QueueStateSnapshot): Promise<void> {
-    const previewText = renderQueuePreview(queueState);
     const key = topicKey(queueState.chatId, queueState.topicId);
-    const existingMessageId = this.#queuePreviewMessageIds.get(key) ?? null;
     const activeTurn = this.findActiveTurnByTopic(queueState.chatId, queueState.topicId);
-    const replyMarkup = buildQueuePreviewKeyboard(
-      queueState,
-      activeTurn?.turnId ?? null,
-      activeTurn?.stopRequested ?? false
-    );
+    this.#queuePreviewDesiredState.set(key, {
+      chatId: queueState.chatId,
+      topicId: queueState.topicId,
+      previewText: renderQueuePreview(queueState),
+      replyMarkup: buildQueuePreviewKeyboard(
+        queueState,
+        activeTurn?.turnId ?? null,
+        activeTurn?.stopRequested ?? false
+      )
+    });
 
-    if (!previewText) {
-      if (existingMessageId !== null) {
-        try {
-          await this.#messenger.deleteMessage(queueState.chatId, existingMessageId);
-        } catch {
-          // Ignore preview cleanup failures.
-        }
-        this.#queuePreviewMessageIds.delete(key);
-      }
+    const existingSync = this.#queuePreviewSyncs.get(key);
+    if (existingSync) {
+      await existingSync;
       return;
     }
 
-    if (existingMessageId !== null) {
-      try {
-        await this.editBridgeMessage({
-          chatId: queueState.chatId,
-          messageId: existingMessageId,
-          text: previewText,
-          ...(replyMarkup ? { replyMarkup } : {}),
-          coalesceKey: `queue-preview:${key}`,
-          replacePending: true
-        });
-        return;
-      } catch {
-        this.#queuePreviewMessageIds.delete(key);
-      }
-    }
-
-    const message = await this.#messenger.sendMessage({
-      chatId: queueState.chatId,
-      topicId: queueState.topicId,
-      text: previewText,
-      ...(replyMarkup ? { replyMarkup } : {})
+    const sync = this.#drainQueuePreview(key).finally(() => {
+      this.#queuePreviewSyncs.delete(key);
     });
-    this.#queuePreviewMessageIds.set(key, message.messageId);
+    this.#queuePreviewSyncs.set(key, sync);
+    await sync;
+  }
+
+  private async #drainQueuePreview(key: string): Promise<void> {
+    while (true) {
+      const desired = this.#queuePreviewDesiredState.get(key);
+      if (!desired) {
+        return;
+      }
+
+      this.#queuePreviewDesiredState.delete(key);
+
+      const existingMessageId = this.#queuePreviewMessageIds.get(key) ?? null;
+      if (!desired.previewText) {
+        if (existingMessageId !== null) {
+          this.#messenger.cancelPendingDelivery("visible_edit", `queue-preview:${desired.chatId}:${existingMessageId}`);
+          this.#queuePreviewMessageIds.delete(key);
+          this.#scheduleQueuePreviewDelete(desired.chatId, existingMessageId);
+        }
+
+        if (!this.#queuePreviewDesiredState.has(key)) {
+          return;
+        }
+        continue;
+      }
+
+      if (existingMessageId !== null) {
+        try {
+          await this.editBridgeMessage({
+            chatId: desired.chatId,
+            messageId: existingMessageId,
+            text: desired.previewText,
+            ...(desired.replyMarkup ? { replyMarkup: desired.replyMarkup } : {}),
+            coalesceKey: `queue-preview:${desired.chatId}:${existingMessageId}`,
+            replacePending: true
+          });
+        } catch {
+          this.#queuePreviewMessageIds.delete(key);
+          continue;
+        }
+      } else {
+        const message = await this.#messenger.sendMessage({
+          chatId: desired.chatId,
+          topicId: desired.topicId,
+          text: desired.previewText,
+          ...(desired.replyMarkup ? { replyMarkup: desired.replyMarkup } : {})
+        });
+        this.#queuePreviewMessageIds.set(key, message.messageId);
+      }
+
+      if (!this.#queuePreviewDesiredState.has(key)) {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  #scheduleQueuePreviewDelete(chatId: number, messageId: number): void {
+    setTimeout(() => {
+      void this.#messenger.deleteMessage(chatId, messageId).catch(() => {
+        // Ignore preview cleanup failures.
+      });
+    }, 25).unref?.();
   }
 
   private async maybeSendNextQueuedFollowUp(chatId: number, topicId: number | null): Promise<void> {
