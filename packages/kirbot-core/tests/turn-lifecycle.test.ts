@@ -1564,8 +1564,11 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("records download failures in the activity log", async () => {
-    const harness = createHarness();
+  it("records download failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
     const timeoutError = Object.assign(new Error("The operation was aborted due to timeout"), {
       name: "TimeoutError"
     });
@@ -1589,6 +1592,9 @@ describe("TurnLifecycleCoordinator", () => {
         stage: "download",
         url: "https://example.com/download-failure.png"
       });
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1633,8 +1639,11 @@ describe("TurnLifecycleCoordinator", () => {
     }
   });
 
-  it("records Telegram send failures in the activity log", async () => {
-    const harness = createHarness();
+  it("records Telegram send failures in the activity log and still finalizes the turn", async () => {
+    const harness = createHarness({
+      text: "Final answer",
+      assistantText: "Final answer"
+    });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Uint8Array([9, 8, 7]), {
         headers: {
@@ -1662,12 +1671,15 @@ describe("TurnLifecycleCoordinator", () => {
         stage: "telegram_send",
         url: "https://example.com/send-failure.png"
       });
+
+      await harness.coordinator.completeTurn("thread-1", "turn-1");
+      expect(harness.telegram.sentMessages.map((entry) => entry.text)).toContain("Final answer");
     } finally {
       fetchSpy.mockRestore();
     }
   });
 
-  it("suppresses duplicate imageGeneration ids within a turn but still publishes the same id on a later turn", async () => {
+  it("publishes distinct imageGeneration ids even when the same URL is reused", async () => {
     const harness = createHarness();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -1691,35 +1703,17 @@ describe("TurnLifecycleCoordinator", () => {
 
       await harness.coordinator.handleItemCompleted("turn-1", {
         type: "imageGeneration",
-        id: "image-gen-dup",
+        id: "image-gen-1",
         status: "completed",
         revisedPrompt: null,
         result: "https://example.com/duplicate.png"
       });
       await harness.coordinator.handleItemCompleted("turn-1", {
         type: "imageGeneration",
-        id: "image-gen-dup",
+        id: "image-gen-2",
         status: "completed",
         revisedPrompt: null,
         result: "https://example.com/duplicate.png"
-      });
-
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(harness.telegram.sentPhotos).toHaveLength(1);
-      expect(harness.telegram.sentPhotos[0]?.options).toMatchObject({
-        file_name: "duplicate.png",
-        mime_type: "image/png"
-      });
-
-      await harness.coordinator.completeTurn("thread-1", "turn-1");
-      harness.coordinator.activateTurn(message("Next turn", 2), "thread-1", "turn-2", "gpt-5-codex");
-
-      await harness.coordinator.handleItemCompleted("turn-2", {
-        type: "imageGeneration",
-        id: "image-gen-dup",
-        status: "completed",
-        revisedPrompt: null,
-        result: "https://example.com/duplicate-again.png"
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
@@ -1730,10 +1724,44 @@ describe("TurnLifecycleCoordinator", () => {
           mime_type: "image/png"
         }),
         expect.objectContaining({
-          file_name: "duplicate-again.png",
+          file_name: "duplicate.png",
           mime_type: "image/png"
         })
       ]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("rejects oversized image payloads as validation failures", async () => {
+    const harness = createHarness();
+    const oversizedBytes = new Uint8Array(12_000_001);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(oversizedBytes, {
+        headers: {
+          "Content-Type": "image/png"
+        }
+      })
+    );
+
+    try {
+      harness.coordinator.activateTurn(message("Start"), "thread-1", "turn-1", "gpt-5-codex");
+
+      await harness.coordinator.handleItemCompleted("turn-1", {
+        type: "imageGeneration",
+        id: "image-gen-oversized",
+        status: "completed",
+        revisedPrompt: null,
+        result: "https://example.com/oversized.png"
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expectImagePublicationFailureEntry(harness.runtime.renderActivityLogEntries("turn-1"), {
+        turnId: "turn-1",
+        itemId: "image-gen-oversized",
+        stage: "validation",
+        url: "https://example.com/oversized.png"
+      });
     } finally {
       fetchSpy.mockRestore();
     }
