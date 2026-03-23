@@ -17,10 +17,14 @@ async function main(): Promise<void> {
     createForumTopic: (chatId, name, options) => bot.api.createForumTopic(chatId, name, options),
     sendMessage: (chatId, text, options) => bot.api.sendMessage(chatId, text, options),
     sendPhoto: (input) =>
-      bot.api.sendPhoto(input.chatId, new InputFile(input.bytes, input.fileName ?? undefined), {
+      bot.api.sendPhoto(
+        input.chatId,
+        new InputFile(input.bytes, input.fileName ?? buildPhotoFileName(input.mimeType)),
+        {
         ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
         ...((input.disableNotification ?? true) ? { disable_notification: true } : {})
-      }),
+        }
+      ),
     sendMessageDraft: (chatId, draftId, text, options) => bot.api.sendMessageDraft(chatId, draftId, text, options),
     sendChatAction: (chatId, action, options) => bot.api.sendChatAction(chatId, action, options),
     editMessageText: (chatId, messageId, text, options) => bot.api.editMessageText(chatId, messageId, text, options),
@@ -223,6 +227,22 @@ function getTelegramUsername(user: {
 }): string | undefined {
   const username = user.username?.trim();
   return username?.length ? username : undefined;
+}
+
+function buildPhotoFileName(mimeType?: string | null): string | undefined {
+  switch (mimeType?.toLowerCase()) {
+    case "image/png":
+      return "telegram-photo.png";
+    case "image/jpeg":
+    case "image/jpg":
+      return "telegram-photo.jpg";
+    case "image/gif":
+      return "telegram-photo.gif";
+    case "image/webp":
+      return "telegram-photo.webp";
+    default:
+      return undefined;
+  }
 }
 
 async function ensureWorkspaceMessage(

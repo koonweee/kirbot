@@ -7,6 +7,7 @@ import type {
   TelegramChatAction,
   TelegramCreateForumTopicOptions,
   TelegramDraftOptions,
+  TelegramPhotoSendInput,
   TelegramSendOptions
 } from "@kirbot/core";
 
@@ -26,6 +27,19 @@ export type HarnessTelegramEvent =
       messageId: number;
       text: string;
       options?: TelegramSendOptions;
+    }
+  | {
+      timestamp: string;
+      type: "telegram.sendPhoto";
+      chatId: number;
+      messageId: number;
+      photo: Uint8Array;
+      options?: {
+        message_thread_id?: number;
+        disable_notification?: boolean;
+        file_name?: string;
+        mime_type?: string;
+      };
     }
   | {
       timestamp: string;
@@ -299,6 +313,24 @@ export class RecordingTelegram implements TelegramApi {
       messageId: this.#messageCounter,
       text,
       ...(options ? { options } : {})
+    });
+    return { message_id: this.#messageCounter };
+  }
+
+  async sendPhoto(input: TelegramPhotoSendInput): Promise<{ message_id: number }> {
+    this.#messageCounter += 1;
+    this.#recordEvent({
+      timestamp: now(),
+      type: "telegram.sendPhoto",
+      chatId: input.chatId,
+      messageId: this.#messageCounter,
+      photo: new Uint8Array(input.bytes),
+      options: {
+        ...(input.topicId !== null && input.topicId !== undefined ? { message_thread_id: input.topicId } : {}),
+        ...((input.disableNotification ?? true) ? { disable_notification: true } : {}),
+        ...(input.fileName !== null && input.fileName !== undefined ? { file_name: input.fileName } : {}),
+        ...(input.mimeType !== null && input.mimeType !== undefined ? { mime_type: input.mimeType } : {})
+      }
     });
     return { message_id: this.#messageCounter };
   }

@@ -668,6 +668,31 @@ describe("Telegram harness", () => {
     ]);
   });
 
+  it("records bot photo sends through the raw Telegram event log", async () => {
+    const telegram = new RecordingTelegram(-1001);
+    await telegram.sendPhoto({
+      chatId: -1001,
+      topicId: 777,
+      bytes: new Uint8Array([1, 2, 3]),
+      mimeType: "image/png"
+    });
+
+    expect(telegram.getEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "telegram.sendPhoto",
+          chatId: -1001,
+          messageId: 501,
+          options: expect.objectContaining({
+            message_thread_id: 777,
+            mime_type: "image/png",
+            disable_notification: true
+          })
+        })
+      ])
+    );
+  });
+
   it("allows button presses to resolve Codex approval requests", async () => {
     const codex = new ScriptedCodex("commandApproval");
     codex.finalText = "Approved result";

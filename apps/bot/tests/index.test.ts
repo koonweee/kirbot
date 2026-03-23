@@ -368,6 +368,54 @@ describe("bot entrypoint routing", () => {
     expect(FakeBot.instances.at(-1)?.api.sendMessage).toHaveBeenCalledTimes(0);
   });
 
+  it("synthesizes a stable photo filename from mimeType when fileName is absent", async () => {
+    await loadHandlers();
+
+    const runtimeArgs = vi.mocked(createKirbotRuntime).mock.calls.at(-1)?.[0] as
+      | {
+          telegramApi?: {
+            sendPhoto?: (input: {
+              chatId: number;
+              bytes: Uint8Array;
+              fileName?: string | null;
+              mimeType?: string | null;
+              topicId?: number | null;
+              disableNotification?: boolean;
+            }) => Promise<unknown>;
+          };
+        }
+      | undefined;
+
+    const photo = {
+      bytes: new Uint8Array([7, 8, 9]),
+      mime_type: "image/png"
+    };
+    await runtimeArgs!.telegramApi!.sendPhoto!({
+      chatId: 123,
+      bytes: photo.bytes,
+      mimeType: photo.mime_type,
+      topicId: null,
+      disableNotification: true
+    });
+
+    const sendPhotoCall = FakeBot.instances.at(-1)?.api.sendPhoto.mock.calls.at(-1);
+    const uploadedPhoto = sendPhotoCall?.[1] as
+      | {
+          filename?: string;
+          toRaw?: () => Promise<Uint8Array>;
+        }
+      | undefined;
+
+    expect(FakeBot.instances.at(-1)?.api.sendPhoto).toHaveBeenCalledWith(123, expect.anything(), {
+      disable_notification: true
+    });
+    expect(uploadedPhoto).toMatchObject({
+      filename: "telegram-photo.png"
+    });
+    expect(uploadedPhoto?.toRaw).toBeTypeOf("function");
+    await expect(uploadedPhoto!.toRaw!()).resolves.toEqual(new Uint8Array([7, 8, 9]));
+  });
+
   it("accepts callback queries from the workspace chat regardless of sender id", async () => {
     const handlers = await loadHandlers();
 
