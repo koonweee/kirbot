@@ -128,10 +128,14 @@ describe("codex home helpers", () => {
     expect(fs.realpathSync(join(targetHome, ".gitconfig"))).toBe(fs.realpathSync(join(sourceHome, ".gitconfig")));
     expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
     expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
+    expect(fs.lstatSync(join(targetHome, "auth.json")).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
     expect(mirrorManifest.mirroredTopLevelNames).toHaveLength(2);
     expect(mirrorManifest.mirroredTopLevelNames).toEqual(expect.arrayContaining([".ssh", ".gitconfig"]));
     expect(mirrorManifest.mirroredTopLevelNames).not.toContain(".codex");
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain("auth.json");
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain("config.toml");
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain("skills");
   });
 
   it("removes stale mirrored entries on reconcile but keeps runtime-owned Codex directories", () => {
@@ -153,6 +157,8 @@ describe("codex home helpers", () => {
     fs.writeFileSync(join(targetHome, "sessions", "keep.txt"), "keep");
     fs.mkdirSync(join(targetHome, "shell_snapshots"), { recursive: true });
     fs.writeFileSync(join(targetHome, "shell_snapshots", "keep.txt"), "keep");
+    fs.mkdirSync(join(targetHome, "tmp"), { recursive: true });
+    fs.writeFileSync(join(targetHome, "tmp", "keep.txt"), "keep");
 
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
@@ -178,6 +184,7 @@ describe("codex home helpers", () => {
     expect(fs.existsSync(join(targetHome, ".stray"))).toBe(true);
     expect(fs.readFileSync(join(targetHome, "sessions", "keep.txt"), "utf8")).toBe("keep");
     expect(fs.readFileSync(join(targetHome, "shell_snapshots", "keep.txt"), "utf8")).toBe("keep");
+    expect(fs.readFileSync(join(targetHome, "tmp", "keep.txt"), "utf8")).toBe("keep");
     expect(mirrorManifest.mirroredTopLevelNames).toEqual([".config"]);
   });
 
