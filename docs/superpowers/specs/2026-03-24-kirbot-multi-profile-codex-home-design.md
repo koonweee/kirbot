@@ -137,7 +137,7 @@ Notes:
 
 The initial route contract remains:
 
-- `general` -> dedicated `general` profile
+- `general` -> a dedicated general-chat profile
 - `thread` -> `coding` profile
 - `plan` -> `coding` profile
 
@@ -147,7 +147,8 @@ Kirbot must still enforce:
 
 - required routes `general`, `thread`, and `plan` exist
 - every route target references a declared profile
-- `general` uses a dedicated profile and cannot share with another route
+- the profile selected by `routes.general` is dedicated to that route and cannot
+  be shared with another route
 
 ## Derived Profile Homes
 
@@ -281,7 +282,10 @@ Hard startup errors:
 
 Warnings only:
 
-- extra folders under `skills/` that are not referenced by any profile
+- skill ids declared in the top-level `skills` registry that are unused by every
+  profile
+- extra folders under repo-local `skills/` that do not correspond to any
+  declared shared skill id
 - MCP registry entries that are declared but unused by every profile
 
 Error messages should be actionable and name the broken key or path.
