@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const MIRROR_EXCLUDED_TOP_LEVEL_NAMES = new Set([".codex"]);
 const MANAGED_LOCAL_TOP_LEVEL_NAMES = new Set([
@@ -100,7 +100,7 @@ function copyIntoIsolatedHomeIfPresent(sourcePath: string, targetPath: string): 
 }
 
 function reconcileTopLevelHomeMirror(sourceHomePath: string, targetHomePath: string): void {
-  const currentMirroredTopLevelNames = resolveMirrorEligibleTopLevelNames(sourceHomePath);
+  const currentMirroredTopLevelNames = resolveMirrorEligibleTopLevelNames(sourceHomePath, targetHomePath);
   const currentMirroredTopLevelNameSet = new Set(currentMirroredTopLevelNames);
   const previousManifest = readManagedHomeMirrorManifest(targetHomePath);
 
@@ -119,11 +119,16 @@ function reconcileTopLevelHomeMirror(sourceHomePath: string, targetHomePath: str
   writeManagedHomeMirrorManifest(targetHomePath, currentMirroredTopLevelNames);
 }
 
-function resolveMirrorEligibleTopLevelNames(sourceHomePath: string): string[] {
+function resolveMirrorEligibleTopLevelNames(sourceHomePath: string, targetHomePath: string): string[] {
+  const topLevelNameContainingTargetHomePath = resolveTopLevelSourceEntryContainingTargetHomePath(
+    sourceHomePath,
+    targetHomePath
+  );
+
   return fs
     .readdirSync(sourceHomePath, { withFileTypes: true })
     .map((entry) => entry.name)
-    .filter((name) => isMirrorEligibleTopLevelName(name))
+    .filter((name) => isMirrorEligibleTopLevelName(name) && name !== topLevelNameContainingTargetHomePath)
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -149,7 +154,9 @@ function readManagedHomeMirrorManifest(targetHomePath: string): { mirroredTopLev
       : [];
 
     return {
-      mirroredTopLevelNames: mirroredTopLevelNames.filter((name) => !isProtectedTopLevelEntryName(name))
+      mirroredTopLevelNames: mirroredTopLevelNames.filter(
+        (name) => isSafeSinglePathSegment(name) && !isProtectedTopLevelEntryName(name)
+      )
     };
   } catch {
     return { mirroredTopLevelNames: [] };
@@ -179,6 +186,21 @@ function mirrorTopLevelHomeEntry(sourceHomePath: string, targetHomePath: string,
 
   fs.rmSync(targetPath, { force: true, recursive: true });
   fs.symlinkSync(sourcePath, targetPath, resolveSymlinkType(sourcePath));
+}
+
+function resolveTopLevelSourceEntryContainingTargetHomePath(
+  sourceHomePath: string,
+  targetHomePath: string
+): string | undefined {
+  const relativeTargetHomePath = relative(sourceHomePath, targetHomePath);
+
+  if (relativeTargetHomePath.length === 0 || relativeTargetHomePath.startsWith("..") || isAbsolute(relativeTargetHomePath)) {
+    return undefined;
+  }
+
+  const [topLevelSourceEntryName] = relativeTargetHomePath.split(/[\\/]/, 1);
+
+  return isSafeSinglePathSegment(topLevelSourceEntryName) ? topLevelSourceEntryName : undefined;
 }
 
 function resolveSymlinkType(sourcePath: string): fs.symlink.Type {
@@ -269,7 +291,11 @@ function resolveManagedConfigTomlTempPath(targetHomePath: string): string {
 }
 
 function isSafeManagedSkillId(skillId: string): boolean {
-  return skillId.length > 0 && skillId !== "." && skillId !== ".." && !skillId.includes("/") && !skillId.includes("\\");
+  return isSafeSinglePathSegment(skillId);
+}
+
+function isSafeSinglePathSegment(pathSegment: string): boolean {
+  return pathSegment.length > 0 && pathSegment !== "." && pathSegment !== ".." && !pathSegment.includes("/") && !pathSegment.includes("\\");
 }
 
 function promoteManagedBoundary(targetHomePath: string): void {
