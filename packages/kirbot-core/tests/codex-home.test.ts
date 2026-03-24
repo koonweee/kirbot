@@ -11,6 +11,11 @@ describe("codex home helpers", () => {
   const tempDirs: string[] = [];
   const originalEnv = { ...process.env };
 
+  function seedSourceHomeAuth(sourceHome: string, token: string): void {
+    fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
+    fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), token);
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
     process.env = { ...originalEnv };
@@ -32,7 +37,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"abc"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"abc"}');
 
     expect(() =>
       prepareKirbotCodexHome({
@@ -42,14 +47,14 @@ describe("codex home helpers", () => {
     ).toThrow(/managed reconciliation requires config\.toml, skill ids, and the resolved profiles config path together/);
   });
 
-  it("creates a missing managed home, seeds auth.json from the base home, rewrites config.toml, and rebuilds managed skills exactly", () => {
+  it("creates a missing managed home, seeds auth.json from sourceHome/.codex/auth.json, rewrites config.toml, and rebuilds managed skills exactly", () => {
     const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
     const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
     const targetHomeParent = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-parent-"));
     const targetHome = join(targetHomeParent, "profile-home");
     tempDirs.push(sourceHome, repoRoot, targetHomeParent);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"abc"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"abc"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -194,7 +199,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"mirror-token"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"mirror-token"}');
     fs.writeFileSync(join(sourceHome, "config.toml"), 'model = "mirror-model"\n');
     fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
     fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"codex-token"}');
@@ -216,12 +221,21 @@ describe("codex home helpers", () => {
       }
     });
 
+    const mirrorManifest = JSON.parse(fs.readFileSync(join(targetHome, ".kirbot-managed-home-mirror.json"), "utf8")) as {
+      mirroredTopLevelNames?: string[];
+    };
+
     expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
     expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
+    expect(fs.lstatSync(join(targetHome, "auth.json")).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(join(targetHome, "config.toml"), "utf8")).toBe('model = "gpt-5-codex"\n');
     expect(fs.lstatSync(join(targetHome, "config.toml")).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(join(targetHome, "skills", "brainstorming", "SKILL.md"), "utf8")).toBe("# brainstorming\n");
     expect(fs.existsSync(join(targetHome, "skills", "wrong-skill"))).toBe(false);
+    expect(mirrorManifest.mirroredTopLevelNames).toEqual([]);
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain("auth.json");
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain("config.toml");
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain("skills");
   });
 
   it("rejects partial managed updates that do not own config.toml and skills together", () => {
@@ -229,7 +243,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
 
     expect(() =>
       prepareKirbotCodexHome({
@@ -257,7 +271,7 @@ describe("codex home helpers", () => {
       DATABASE_PATH: join(repoRoot, "data", "bridge.sqlite")
     };
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"abc"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"abc"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(
@@ -298,7 +312,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"abc"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"abc"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -343,7 +357,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"abc"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"abc"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -399,7 +413,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -454,7 +468,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -487,7 +501,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -512,7 +526,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -568,7 +582,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -624,7 +638,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -680,7 +694,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
@@ -741,7 +755,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"base"}');
+    seedSourceHomeAuth(sourceHome, '{"token":"base"}');
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
     fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
