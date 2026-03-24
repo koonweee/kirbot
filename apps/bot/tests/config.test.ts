@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalEnv = { ...process.env };
+const TEST_CODEX_PROFILES_JSON = JSON.stringify({
+  profiles: {
+    general: { homePath: "/srv/kirbot/codex-home-general" },
+    coding: { homePath: "/srv/kirbot/codex-home-coding" }
+  },
+  routing: {
+    general: "general",
+    thread: "coding",
+    plan: "coding"
+  }
+});
 
 afterEach(() => {
   vi.resetModules();
@@ -15,7 +26,8 @@ describe("loadConfig", () => {
       ...originalEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
-      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: TEST_CODEX_PROFILES_JSON
     };
 
     const { loadConfig } = await import("../src/config");
@@ -32,6 +44,7 @@ describe("loadConfig", () => {
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: TEST_CODEX_PROFILES_JSON,
       CODEX_BASE_INSTRUCTIONS_FILE: "/tmp/legacy-ignored.md"
     };
 
