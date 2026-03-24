@@ -131,6 +131,10 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
+    fs.writeFileSync(
+      join(targetHome, ".kirbot-managed-home-mirror.json"),
+      JSON.stringify({ mirroredTopLevelNames: [".obsolete"] })
+    );
     fs.mkdirSync(join(sourceHome, ".config"), { recursive: true });
     fs.writeFileSync(join(sourceHome, ".config", "user.json"), "{}");
 
@@ -168,6 +172,7 @@ describe("codex home helpers", () => {
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
     fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"mirror-token"}');
+    fs.writeFileSync(join(sourceHome, "config.toml"), 'model = "mirror-model"\n');
     fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
     fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"codex-token"}');
     fs.mkdirSync(join(sourceHome, "skills", "wrong-skill"), { recursive: true });
@@ -190,6 +195,8 @@ describe("codex home helpers", () => {
 
     expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
     expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
+    expect(fs.readFileSync(join(targetHome, "config.toml"), "utf8")).toBe('model = "gpt-5-codex"\n');
+    expect(fs.lstatSync(join(targetHome, "config.toml")).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(join(targetHome, "skills", "brainstorming", "SKILL.md"), "utf8")).toBe("# brainstorming\n");
     expect(fs.existsSync(join(targetHome, "skills", "wrong-skill"))).toBe(false);
   });
