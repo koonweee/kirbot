@@ -10,16 +10,16 @@
   "mcps": {},
   "profiles": {
     "general": {
-      "model": "gpt-5",
-      "reasoningEffort": "medium",
-      "serviceTier": "flex",
+      "model": "gpt-5.4-mini",
+      "reasoningEffort": "xhigh",
+      "serviceTier": "fast",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",
       "skills": [],
       "mcps": []
     },
     "coding": {
-      "model": "gpt-5-codex",
+      "model": "gpt-5.4",
       "reasoningEffort": "high",
       "serviceTier": "fast",
       "sandboxMode": "danger-full-access",
