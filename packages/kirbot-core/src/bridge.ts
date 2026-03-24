@@ -3154,8 +3154,7 @@ export class TelegramCodexBridge {
     return (
       kind.includes("thread_not_found") ||
       kind.includes("thread-not-found") ||
-      kind.includes("missing_thread") ||
-      kind.includes("not_found")
+      kind.includes("missing_thread")
     );
   }
 

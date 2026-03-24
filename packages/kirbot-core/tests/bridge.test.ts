@@ -1326,6 +1326,20 @@ describe("TelegramCodexBridge", () => {
     expect(codex.turns).toEqual([]);
   });
 
+  it("does not classify non-thread *_not_found RPC errors as removed legacy homes", () => {
+    expect(
+      (bridge as any).isRemovedLegacyCodexHomeThreadError(
+        new JsonRpcMethodError("turn/read", 1, {
+          code: -32004,
+          message: "Turn not found",
+          data: {
+            kind: "turn_not_found"
+          }
+        })
+      )
+    ).toBe(false);
+  });
+
   it("archives a removed legacy topic session so the next resume provisions a fresh topic session", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
