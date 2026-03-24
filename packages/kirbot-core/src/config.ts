@@ -7,8 +7,8 @@ import { z } from "zod";
 import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
 import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
 import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
-import type { CodexConfig } from "@kirbot/codex-client/config";
-import { resolveKirbotCodexHomePath } from "./codex-home";
+import type { CodexProfilesConfig } from "./codex-profiles";
+import { parseCodexProfilesConfig } from "./codex-profiles";
 
 loadKirbotDotenv();
 
@@ -73,7 +73,6 @@ const envSchema = z.object({
     }),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
-  CODEX_HOME_PATH: optionalEnvString(z.string()),
   CODEX_MODEL: optionalEnvString(z.string()),
   CODEX_MODEL_PROVIDER: optionalEnvString(z.string()),
   CODEX_SANDBOX_MODE: optionalEnvString(
@@ -83,6 +82,7 @@ const envSchema = z.object({
     z.enum(["untrusted", "on-request", "on-failure", "never"])
   ),
   CODEX_SERVICE_NAME: z.string().default("telegram-codex-bridge"),
+  CODEX_PROFILES_JSON: z.string().min(1),
   CODEX_CONFIG_JSON: optionalEnvString(z.string())
 });
 
@@ -98,11 +98,24 @@ export type AppConfig = {
   database: {
     path: string;
   };
-  codex: CodexConfig;
+  codex: {
+    defaultCwd: string;
+    profiles: CodexProfilesConfig["profiles"];
+    routing: CodexProfilesConfig["routing"];
+    model: string | undefined;
+    modelProvider: string | undefined;
+    sandbox: SandboxMode | undefined;
+    approvalPolicy: AskForApproval | undefined;
+    serviceName: string;
+    baseInstructions: string | undefined;
+    developerInstructions: string;
+    config: Record<string, JsonValue | undefined> | undefined;
+  };
 };
 
 export function loadConfig(): AppConfig {
   const parsed = envSchema.parse(process.env);
+  const codexProfiles = parseCodexProfilesConfig(parsed.CODEX_PROFILES_JSON);
 
   return {
     telegram: {
@@ -120,7 +133,8 @@ export function loadConfig(): AppConfig {
     },
     codex: {
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
-      homePath: resolveKirbotCodexHomePath(parsed.DATABASE_PATH, parsed.CODEX_HOME_PATH),
+      profiles: codexProfiles.profiles,
+      routing: codexProfiles.routing,
       model: parsed.CODEX_MODEL,
       modelProvider: parsed.CODEX_MODEL_PROVIDER,
       sandbox: parsed.CODEX_SANDBOX_MODE as SandboxMode | undefined,

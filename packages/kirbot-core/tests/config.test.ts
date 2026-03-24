@@ -6,6 +6,22 @@ vi.mock("dotenv", () => ({
 
 const originalEnv = { ...process.env };
 
+const CODEX_PROFILES_JSON = JSON.stringify({
+  profiles: {
+    general: { homePath: "/srv/kirbot/codex-home-general" },
+    coding: { homePath: "/srv/kirbot/codex-home-coding" }
+  },
+  routing: {
+    general: "general",
+    thread: "coding",
+    plan: "coding"
+  }
+});
+
+const baseEnv = {
+  CODEX_PROFILES_JSON
+};
+
 afterEach(() => {
   vi.resetModules();
   process.env = { ...originalEnv };
@@ -22,6 +38,7 @@ describe("core config module", () => {
 
   it("requires a Mini App public URL when loading config", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: ""
@@ -34,6 +51,7 @@ describe("core config module", () => {
 
   it("requires TELEGRAM_WORKSPACE_CHAT_ID when loading config", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
     };
@@ -45,6 +63,7 @@ describe("core config module", () => {
 
   it("does not accept TELEGRAM_USER_ID as a workspace chat id", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_USER_ID: "42",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
@@ -57,6 +76,7 @@ describe("core config module", () => {
 
   it("rejects positive TELEGRAM_WORKSPACE_CHAT_ID values", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "42",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
@@ -69,6 +89,7 @@ describe("core config module", () => {
 
   it("requires the Mini App public URL to use https", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "http://example.com/mini-app"
@@ -79,30 +100,93 @@ describe("core config module", () => {
     expect(() => loadConfig()).toThrow("TELEGRAM_MINI_APP_PUBLIC_URL must use https");
   });
 
-  it("derives an isolated Codex home from the database path by default", async () => {
+  it("loads a Codex profile config from JSON", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
-      DATABASE_PATH: "/srv/kirbot/data/bridge.sqlite"
     };
 
     const { loadConfig } = await import("../src/config");
 
-    expect(loadConfig().codex.homePath).toBe("/srv/kirbot/data/codex-home");
+    expect(loadConfig().codex.profiles).toEqual({
+      general: { homePath: "/srv/kirbot/codex-home-general" },
+      coding: { homePath: "/srv/kirbot/codex-home-coding" }
+    });
+    expect(loadConfig().codex.routing).toEqual({
+      general: "general",
+      thread: "coding",
+      plan: "coding"
+    });
   });
 
-  it("respects an explicit Codex home override", async () => {
+  it("rejects routing targets that reference an undeclared profile", async () => {
     process.env = {
+      ...baseEnv,
       TELEGRAM_BOT_TOKEN: "token",
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
-      DATABASE_PATH: "/srv/kirbot/data/bridge.sqlite",
-      CODEX_HOME_PATH: "/srv/kirbot/custom-codex-home"
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "/srv/kirbot/codex-home-general" }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "general"
+        }
+      })
     };
 
     const { loadConfig } = await import("../src/config");
 
-    expect(loadConfig().codex.homePath).toBe("/srv/kirbot/custom-codex-home");
+    expect(() => loadConfig()).toThrow("undeclared profile");
+  });
+
+  it("rejects a profile without a homePath", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "/srv/kirbot/codex-home-general" },
+          coding: {}
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("homePath");
+  });
+
+  it("rejects missing required routing entries", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "/srv/kirbot/codex-home-general" },
+          coding: { homePath: "/srv/kirbot/codex-home-coding" }
+        },
+        routing: {
+          general: "general"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow();
   });
 });
