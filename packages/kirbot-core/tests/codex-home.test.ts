@@ -89,6 +89,111 @@ describe("codex home helpers", () => {
     );
   });
 
+  it("mirrors top-level home entries while excluding .codex and seeds auth.json from sourceHome/.codex/auth.json", () => {
+    const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
+    const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
+    tempDirs.push(sourceHome, repoRoot, targetHome);
+
+    fs.mkdirSync(join(sourceHome, ".ssh"), { recursive: true });
+    fs.writeFileSync(join(sourceHome, ".gitconfig"), "[user]\n\tname = Jeremy\n");
+    fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
+    fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"codex-token"}');
+
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
+    fs.mkdirSync(join(repoRoot, "skills", "brainstorming"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "skills", "brainstorming", "SKILL.md"), "# brainstorming\n");
+
+    prepareKirbotCodexHome({
+      sourceHomePath: sourceHome,
+      targetHomePath: targetHome,
+      managed: {
+        managedConfigToml: 'model = "gpt-5-codex"\n',
+        managedSkillIds: ["brainstorming"],
+        managedProfilesConfigPath: join(repoRoot, "config", "codex-profiles.json")
+      }
+    });
+
+    expect(fs.existsSync(join(targetHome, ".ssh"))).toBe(true);
+    expect(fs.lstatSync(join(targetHome, ".ssh")).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(join(targetHome, ".gitconfig"))).toBe(true);
+    expect(fs.lstatSync(join(targetHome, ".gitconfig")).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
+    expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
+    expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
+  });
+
+  it("removes stale mirrored entries on reconcile but keeps runtime-owned Codex directories", () => {
+    const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
+    const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
+    tempDirs.push(sourceHome, repoRoot, targetHome);
+
+    fs.mkdirSync(join(sourceHome, ".config"), { recursive: true });
+    fs.writeFileSync(join(sourceHome, ".config", "user.json"), "{}");
+
+    fs.symlinkSync(join(sourceHome, ".config"), join(targetHome, ".obsolete"), "dir");
+    fs.mkdirSync(join(targetHome, "sessions"), { recursive: true });
+    fs.writeFileSync(join(targetHome, "sessions", "keep.txt"), "keep");
+    fs.mkdirSync(join(targetHome, "shell_snapshots"), { recursive: true });
+    fs.writeFileSync(join(targetHome, "shell_snapshots", "keep.txt"), "keep");
+
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
+    fs.mkdirSync(join(repoRoot, "skills", "brainstorming"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "skills", "brainstorming", "SKILL.md"), "# brainstorming\n");
+
+    prepareKirbotCodexHome({
+      sourceHomePath: sourceHome,
+      targetHomePath: targetHome,
+      managed: {
+        managedConfigToml: 'model = "gpt-5-codex"\n',
+        managedSkillIds: ["brainstorming"],
+        managedProfilesConfigPath: join(repoRoot, "config", "codex-profiles.json")
+      }
+    });
+
+    expect(fs.existsSync(join(targetHome, ".obsolete"))).toBe(false);
+    expect(fs.readFileSync(join(targetHome, "sessions", "keep.txt"), "utf8")).toBe("keep");
+    expect(fs.readFileSync(join(targetHome, "shell_snapshots", "keep.txt"), "utf8")).toBe("keep");
+  });
+
+  it("prefers managed Codex files over mirrored home entries", () => {
+    const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
+    const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
+    tempDirs.push(sourceHome, repoRoot, targetHome);
+
+    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"mirror-token"}');
+    fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
+    fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"codex-token"}');
+    fs.mkdirSync(join(sourceHome, "skills", "wrong-skill"), { recursive: true });
+
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
+    fs.mkdirSync(join(repoRoot, "skills", "brainstorming"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "skills", "brainstorming", "SKILL.md"), "# brainstorming\n");
+
+    prepareKirbotCodexHome({
+      sourceHomePath: sourceHome,
+      targetHomePath: targetHome,
+      managed: {
+        managedConfigToml: 'model = "gpt-5-codex"\n',
+        managedSkillIds: ["brainstorming"],
+        managedProfilesConfigPath: join(repoRoot, "config", "codex-profiles.json")
+      }
+    });
+
+    expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
+    expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
+    expect(fs.readFileSync(join(targetHome, "skills", "brainstorming", "SKILL.md"), "utf8")).toBe("# brainstorming\n");
+    expect(fs.existsSync(join(targetHome, "skills", "wrong-skill"))).toBe(false);
+  });
+
   it("rejects partial managed updates that do not own config.toml and skills together", () => {
     const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
