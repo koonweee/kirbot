@@ -1008,7 +1008,6 @@ describe("TelegramCodexBridge", () => {
         sandbox: undefined,
         approvalPolicy: undefined,
         serviceName: "telegram-codex-bridge",
-        baseInstructions: undefined,
         developerInstructions: undefined as unknown as string,
         config: undefined
       }

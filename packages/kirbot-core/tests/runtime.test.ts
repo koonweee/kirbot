@@ -499,7 +499,6 @@ function buildConfig(
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: "prompt",
       config: undefined
     }

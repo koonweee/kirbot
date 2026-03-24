@@ -66,7 +66,6 @@ describe("CodexGateway", () => {
         sandbox: "danger-full-access",
         approvalPolicy: "never",
         serviceName: "telegram-codex-bridge",
-        baseInstructions: undefined,
         developerInstructions: undefined,
         config: {
           model_reasoning_effort: "high",
@@ -162,7 +161,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -209,7 +207,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -347,7 +344,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -471,7 +467,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -509,7 +504,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -574,7 +568,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -697,7 +690,6 @@ describe("CodexGateway", () => {
       sandbox: "danger-full-access",
       approvalPolicy: "never",
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: {
         model_provider: "openai",
@@ -808,7 +800,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -890,7 +881,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -961,7 +951,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1074,7 +1063,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1199,7 +1187,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1283,7 +1270,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1352,7 +1338,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1412,7 +1397,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1481,7 +1465,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1532,7 +1515,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1599,7 +1581,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1616,7 +1597,15 @@ describe("CodexGateway", () => {
     await initializePromise;
 
     expect("updateProfileSettings" in gateway).toBe(false);
-    expect(transport.sent.some((message) => message.method === "config/batchWrite")).toBe(false);
+    expect(
+      transport.sent.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "method" in message &&
+          (message as { method?: string }).method === "config/batchWrite"
+      )
+    ).toBe(false);
   });
 
   it("responds to permissions approval requests with a JSON-RPC result", async () => {
@@ -1629,7 +1618,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1671,7 +1659,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });

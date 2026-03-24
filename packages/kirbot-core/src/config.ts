@@ -88,7 +88,6 @@ export type AppConfig = {
     sandbox: undefined;
     approvalPolicy: undefined;
     serviceName: string;
-    baseInstructions: string | undefined;
     developerInstructions: string;
     config: undefined;
   };
@@ -128,7 +127,6 @@ export function loadConfig(): AppConfig {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: parsed.CODEX_SERVICE_NAME,
-      baseInstructions: undefined,
       developerInstructions: readRequiredTextFile(resolveKirbotPromptPath()),
       config: undefined
     }

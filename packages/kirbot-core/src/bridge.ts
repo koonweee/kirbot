@@ -3115,18 +3115,6 @@ function isRootBridgeSession(session: TopicSession | BridgeSession): session is 
   return "surface" in session && session.surface.kind === "general";
 }
 
-function getSessionTopicId(session: TopicSession | BridgeSession): number {
-  if ("surface" in session) {
-    if (session.surface.kind !== "topic") {
-      throw new Error("Root session does not have a topic id");
-    }
-
-    return session.surface.topicId;
-  }
-
-  return session.telegramTopicId;
-}
-
 function mergePersistedThreadSettingsIntoThreadStartSettings(
   fallback: Pick<ThreadStartSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy">,
   settings: PersistedThreadSettings

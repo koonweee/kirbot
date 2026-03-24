@@ -196,7 +196,7 @@ export class CodexGateway {
       sandbox: threadStartOverrides.sandbox ?? null,
       config: threadStartOverrides.config ?? null,
       serviceName: this.config.serviceName,
-      baseInstructions: this.config.baseInstructions ?? null,
+      baseInstructions: null,
       developerInstructions: this.config.developerInstructions ?? null,
       experimentalRawEvents: false,
       persistExtendedHistory: false,
