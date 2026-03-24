@@ -47,7 +47,7 @@ export class RoutedCodexApi implements BridgeCodexApi {
   registerThreadProfile(threadId: string, profileId: string): void {
     const route = this.#rememberThreadRoute(
       profileId,
-      getUpstreamThreadId(threadId, profileId),
+      requireUpstreamThreadId(threadId, profileId),
       threadId
     );
     this.#getGateway(profileId).registerThreadProfile(route.upstreamThreadId, profileId);
@@ -393,13 +393,17 @@ function encodeRequestId(profileId: string, upstreamRequestId: RequestId): strin
   return `${REQUEST_ROUTE_PREFIX}${encodeURIComponent(profileId)}:${serializeRequestIdComponent(upstreamRequestId)}`;
 }
 
-function getUpstreamThreadId(threadId: string, profileId: string): string {
+function requireUpstreamThreadId(threadId: string, profileId: string): string {
   const parsed = parseThreadId(threadId);
-  if (parsed && parsed.profileId !== profileId) {
+  if (!parsed) {
+    throw new Error(`Unsupported raw Codex thread id: ${threadId}`);
+  }
+
+  if (parsed.profileId !== profileId) {
     throw new Error(`Codex thread route ${threadId} is registered to ${parsed.profileId}, not ${profileId}`);
   }
 
-  return parsed?.upstreamThreadId ?? threadId;
+  return parsed.upstreamThreadId;
 }
 
 function parseThreadId(threadId: string): { profileId: string; upstreamThreadId: string } | null {

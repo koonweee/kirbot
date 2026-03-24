@@ -186,18 +186,18 @@ const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
 const COMMANDS_KEYBOARD_TEXT = "Commands";
 const DEFAULT_ROOT_SESSION_TITLE = "Root Chat";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
-const LEGACY_CODEX_HOME_REMOVED_TEXT = "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic.";
-const LEGACY_CODEX_HOME_REMOVED_CALLBACK_TEXT = "Session belongs to a removed legacy Codex home";
+const UNAVAILABLE_CODEX_SESSION_TEXT = "This Codex session is no longer available. Start a new session in this chat or topic.";
+const UNAVAILABLE_CODEX_SESSION_CALLBACK_TEXT = "Codex session is no longer available";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
 const ROOT_SESSION_PROVISIONING_TEXT = "The General Codex session is still provisioning. Try again in a moment";
 const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum chat.";
 
-class LegacyRemovedCodexHomeSessionError extends Error {
+class UnavailableCodexSessionError extends Error {
   constructor() {
-    super("Session belonged to a removed legacy Codex home");
-    this.name = "LegacyRemovedCodexHomeSessionError";
+    super("Codex session is no longer available");
+    this.name = "UnavailableCodexSessionError";
   }
 }
 
@@ -297,7 +297,12 @@ export class TelegramCodexBridge {
 
       await this.handleTopicMessage(message);
     } catch (error) {
-      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+      if (this.isUnavailableCodexSessionError(error)) {
+        await this.sendScopedBridgeMessage({
+          chatId: message.chatId,
+          ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+          text: UNAVAILABLE_CODEX_SESSION_TEXT
+        });
         return;
       }
 
@@ -318,7 +323,7 @@ export class TelegramCodexBridge {
     try {
       await this.withRegisteredPersistedThread(session, (threadId) => this.codex.archiveThread(threadId));
     } catch (error) {
-      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+      if (this.isUnavailableCodexSessionError(error)) {
         return;
       }
 
@@ -375,13 +380,17 @@ export class TelegramCodexBridge {
         text: "Unsupported callback"
       });
     } catch (error) {
-      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
-        if (event.data === TOPIC_IMPLEMENT_CALLBACK_DATA) {
-          return;
-        }
-        await this.answerCallbackQuery(event.callbackQueryId, {
-          text: LEGACY_CODEX_HOME_REMOVED_CALLBACK_TEXT
+      if (this.isUnavailableCodexSessionError(error)) {
+        await this.sendScopedBridgeMessage({
+          chatId: event.chatId,
+          ...(event.topicId !== null ? { topicId: event.topicId } : {}),
+          text: UNAVAILABLE_CODEX_SESSION_TEXT
         });
+        if (event.data !== TOPIC_IMPLEMENT_CALLBACK_DATA) {
+          await this.answerCallbackQuery(event.callbackQueryId, {
+            text: UNAVAILABLE_CODEX_SESSION_CALLBACK_TEXT
+          });
+        }
         return;
       }
 
@@ -1100,8 +1109,8 @@ export class TelegramCodexBridge {
 
       await this.withRegisteredPersistedThread(session, (threadId) => this.codex.compactThread(threadId));
     } catch (error) {
-      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
-        return;
+      if (this.isUnavailableCodexSessionError(error)) {
+        throw error;
       }
 
       this.logger.error("Failed to compact thread", error);
@@ -1186,30 +1195,26 @@ export class TelegramCodexBridge {
     }
 
     try {
-      const hydratedSession = await this.ensurePersistedSessionSettings(session);
-      const effectiveSettings = await this.resolveEffectiveThreadStartSettings(hydratedSession);
+      const effectiveSettings = await this.resolveEffectiveThreadStartSettings(session);
       const thread = await this.withRegisteredPersistedThread(
-        hydratedSession,
+        session,
         (threadId) => this.codex.readThread(threadId)
       );
-      const title = thread.name ?? (isRootBridgeSession(hydratedSession) ? DEFAULT_ROOT_SESSION_TITLE : "Fresh Codex Thread");
-      const freshThread = await this.codex.createThread(hydratedSession.profileId, title, {
+      const title = thread.name ?? (isRootBridgeSession(session) ? DEFAULT_ROOT_SESSION_TITLE : "Fresh Codex Thread");
+      const freshThread = await this.codex.createThread(session.profileId, title, {
         cwd: effectiveSettings.cwd,
         settings: toCodexThreadSettingsOverrideFromThreadStartSettings(effectiveSettings)
       });
-      this.codex.registerThreadProfile(freshThread.threadId, hydratedSession.profileId);
-      await this.database.activateSession(hydratedSession.id, freshThread.threadId);
+      this.codex.registerThreadProfile(freshThread.threadId, session.profileId);
+      await this.database.activateSession(session.id, freshThread.threadId);
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         ...(message.topicId !== null ? { topicId: message.topicId } : {}),
         text: "Started a fresh Codex thread"
       });
     } catch (error) {
-      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
-        if (message.topicId === null && isRootBridgeSession(session)) {
-          await this.recoverRootSessionAfterLegacyHomeRemoval(message.chatId, session.settings);
-        }
-        return;
+      if (this.isUnavailableCodexSessionError(error)) {
+        throw error;
       }
 
       this.logger.error("Failed to clear thread", error);
@@ -1219,48 +1224,6 @@ export class TelegramCodexBridge {
         text: `Failed to start a fresh thread: ${formatError(error)}`
       });
     }
-  }
-
-  private async recoverRootSessionAfterLegacyHomeRemoval(
-    chatId: number,
-    previousSettings: PersistedThreadSettings
-  ): Promise<void> {
-    await this.runSessionProvisioning(chatId, null, async () => {
-      await this.sendScopedBridgeMessage({
-        chatId,
-        text: ROOT_SESSION_PROVISIONING_TEXT
-      });
-    }, async () => {
-      const profileId = this.resolveConfiguredProfileId("general");
-      const pending = await this.database.createProvisioningSession({
-        telegramChatId: String(chatId),
-        surface: { kind: "general" },
-        profileId
-      });
-
-      try {
-        const effectiveSettings = mergePersistedThreadSettingsIntoThreadStartSettings(
-          await this.readConfiguredProfileThreadStartSettings(profileId),
-          previousSettings
-        );
-        const thread = await this.codex.createThread(profileId, DEFAULT_ROOT_SESSION_TITLE, {
-          settings: toCodexThreadSettingsOverrideFromThreadStartSettings(effectiveSettings)
-        });
-        this.codex.registerThreadProfile(thread.threadId, profileId);
-        await this.database.activateSession(pending.id, thread.threadId);
-        await this.database.updateRootSessionSettings(chatId, previousSettings);
-        await this.sendScopedBridgeMessage({
-          chatId,
-          text: "Started a fresh Codex thread"
-        });
-      } catch (error) {
-        await this.database.markSessionErrored(pending.id);
-        await this.sendScopedBridgeMessage({
-          chatId,
-          text: `Failed to create Codex session for "${DEFAULT_ROOT_SESSION_TITLE}": ${formatError(error)}`
-        });
-      }
-    });
   }
 
   private async stopActiveTurn(message: UserTurnMessage): Promise<void> {
@@ -2034,23 +1997,11 @@ export class TelegramCodexBridge {
   }
 
   private async readConfiguredProfileThreadStartSettings(profileId: string): Promise<ThreadStartSettings> {
-    return this.requireProfileSettingsApi().readProfileSettings(profileId);
+    return this.codex.readProfileSettings(profileId);
   }
 
   private resolveConfiguredProfileId(route: keyof AppConfig["codex"]["routing"]): string {
     return this.config.codex.routing[route]!;
-  }
-
-  private requireProfileSettingsApi(): {
-    readProfileSettings(profileId: string): Promise<ThreadStartSettings>;
-  } {
-    if (!this.codex.readProfileSettings) {
-      throw new Error("Codex client does not support profile settings routing");
-    }
-
-    return this.codex as {
-      readProfileSettings(profileId: string): Promise<ThreadStartSettings>;
-    };
   }
 
   private async resolveThreadSettingsTarget(
@@ -2069,12 +2020,10 @@ export class TelegramCodexBridge {
       if (!resolved || resolved.scope !== "thread") {
         return null;
       }
-      const session = await this.ensurePersistedSessionSettings(resolved.session);
-
       return {
         scope: "thread",
-        session,
-        settings: await this.resolveEffectiveThreadStartSettings(session)
+        session: resolved.session,
+        settings: await this.resolveEffectiveThreadStartSettings(resolved.session)
       };
     }
 
@@ -2096,12 +2045,10 @@ export class TelegramCodexBridge {
         return null;
       }
 
-      const hydratedSession = await this.ensurePersistedSessionSettings(session);
-
       return {
         scope: "root",
-        session: hydratedSession,
-        settings: await this.resolveEffectiveThreadStartSettings(hydratedSession)
+        session,
+        settings: await this.resolveEffectiveThreadStartSettings(session)
       };
     }
 
@@ -2143,7 +2090,6 @@ export class TelegramCodexBridge {
         return null;
       }
 
-      const hydratedSession = await this.ensurePersistedSessionSettings(session);
       if (options?.rejectIfActiveTurn && this.findActiveTurnByTopic(location.chatId, null)) {
         await this.sendScopedBridgeMessage({
           chatId: location.chatId,
@@ -2154,8 +2100,8 @@ export class TelegramCodexBridge {
 
       return {
         scope: "root",
-        session: hydratedSession,
-        settings: await this.resolveEffectiveThreadStartSettings(hydratedSession)
+        session,
+        settings: await this.resolveEffectiveThreadStartSettings(session)
       };
     }
 
@@ -2178,11 +2124,10 @@ export class TelegramCodexBridge {
       return null;
     }
 
-    const hydratedSession = await this.ensurePersistedSessionSettings(session);
     return {
       scope: "thread",
-      session: hydratedSession,
-      settings: await this.resolveEffectiveThreadStartSettings(hydratedSession)
+      session,
+      settings: await this.resolveEffectiveThreadStartSettings(session)
     };
   }
 
@@ -2197,13 +2142,12 @@ export class TelegramCodexBridge {
       throw new Error(`Session ${session.id} has no Codex thread id`);
     }
 
-    const hydratedSession = await this.ensurePersistedSessionSettings(session);
-    const effectiveSettings = await this.resolveEffectiveThreadStartSettings(hydratedSession);
-    const threadId = hydratedSession.codexThreadId!;
+    const effectiveSettings = await this.resolveEffectiveThreadStartSettings(session);
+    const threadId = session.codexThreadId!;
     const turn = await this.submitPreparedInput(message, {
       submit: (input) =>
         this.withRegisteredPersistedThread(
-          hydratedSession,
+          session,
           (registeredThreadId) => this.codex.sendTurn(
             registeredThreadId,
             input,
@@ -2843,7 +2787,7 @@ export class TelegramCodexBridge {
     try {
       if (session?.codexThreadId) {
         if (!Object.hasOwn(this.config.codex.profiles, session.profileId)) {
-          throw new LegacyRemovedCodexHomeSessionError();
+          throw new UnavailableCodexSessionError();
         }
 
         this.codex.registerThreadProfile(session.codexThreadId, session.profileId);
@@ -2851,26 +2795,12 @@ export class TelegramCodexBridge {
 
       return await operation(threadId);
     } catch (error) {
-      if (
-        session &&
-        (this.isRemovedLegacyCodexHomeThreadError(error) || this.isLegacyRemovedCodexHomeSessionError(error))
-      ) {
-        await this.database.archiveSessionBySurface(
-          session.telegramChatId,
-          isRootBridgeSession(session)
-            ? { kind: "general" }
-            : { kind: "topic", topicId: getSessionTopicId(session) }
-        );
-        await this.sendLegacyRemovedCodexHomeMessage(session);
-        throw new LegacyRemovedCodexHomeSessionError();
+      if (session && (this.isUnavailableCodexThreadError(error) || this.isUnavailableCodexSessionError(error))) {
+        throw new UnavailableCodexSessionError();
       }
 
       throw error;
     }
-  }
-
-  private async ensurePersistedSessionSettings<T extends TopicSession | BridgeSession>(session: T): Promise<T> {
-    return session;
   }
 
   private async resolveEffectiveThreadStartSettings(session: TopicSession | BridgeSession): Promise<ThreadStartSettings> {
@@ -2917,17 +2847,16 @@ export class TelegramCodexBridge {
       throw new Error("Session not found");
     }
 
-    const hydratedSession = await this.ensurePersistedSessionSettings(session);
-    const merged = mergePersistedThreadSettings(hydratedSession.settings, update);
+    const merged = mergePersistedThreadSettings(session.settings, update);
     const updated =
       surface.kind === "general"
         ? await this.database.updateRootSessionSettings(chatId, merged)
         : await this.database.updateTopicSessionSettings(chatId, surface.topicId, merged);
-    const nextSession = updated ?? { ...hydratedSession, settings: merged };
+    const nextSession = updated ?? { ...session, settings: merged };
     return this.resolveSessionThreadStartSettingsFromOverrides(nextSession, merged);
   }
 
-  private isRemovedLegacyCodexHomeThreadError(error: unknown): boolean {
+  private isUnavailableCodexThreadError(error: unknown): boolean {
     const normalizedMessage = (error instanceof Error ? error.message : String(error)).toLowerCase();
     if (
       normalizedMessage.includes("thread not found") ||
@@ -2950,16 +2879,8 @@ export class TelegramCodexBridge {
     );
   }
 
-  private isLegacyRemovedCodexHomeSessionError(error: unknown): error is LegacyRemovedCodexHomeSessionError {
-    return error instanceof LegacyRemovedCodexHomeSessionError;
-  }
-
-  private async sendLegacyRemovedCodexHomeMessage(session: TopicSession | BridgeSession): Promise<void> {
-    await this.sendScopedBridgeMessage({
-      chatId: Number(session.telegramChatId),
-      ...(isRootBridgeSession(session) ? {} : { topicId: getSessionTopicId(session) }),
-      text: LEGACY_CODEX_HOME_REMOVED_TEXT
-    });
+  private isUnavailableCodexSessionError(error: unknown): error is UnavailableCodexSessionError {
+    return error instanceof UnavailableCodexSessionError;
   }
 
 }

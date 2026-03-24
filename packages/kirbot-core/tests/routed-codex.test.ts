@@ -34,7 +34,6 @@ class FakeCodexApi implements BridgeCodexApi {
     };
   }> = [];
   readonly readProfileSettingsCalls: string[] = [];
-  readonly updateProfileSettingsCalls: Array<{ profileId: string; update: Record<string, unknown> }> = [];
   readonly registerThreadProfileCalls: Array<{ threadId: string; profileId: string }> = [];
   readonly ensureThreadLoadedCalls: string[] = [];
   readonly readThreadCalls: string[] = [];
@@ -83,17 +82,6 @@ class FakeCodexApi implements BridgeCodexApi {
 
   async readProfileSettings(profileId: string): Promise<typeof DEFAULT_SETTINGS> {
     this.readProfileSettingsCalls.push(profileId);
-    return DEFAULT_SETTINGS;
-  }
-
-  async updateProfileSettings(
-    profileId: string,
-    update: Record<string, unknown>
-  ): Promise<typeof DEFAULT_SETTINGS> {
-    this.updateProfileSettingsCalls.push({
-      profileId,
-      update
-    });
     return DEFAULT_SETTINGS;
   }
 
@@ -350,87 +338,14 @@ describe("RoutedCodexApi", () => {
     expect(coding.sendTurnCalls).toEqual(["shared-thread"]);
   });
 
-  it("keeps legacy raw thread ids routable while isolating them from new namespaced sessions", async () => {
+  it("rejects raw non-namespaced thread ids during route registration", async () => {
     const general = new FakeCodexApi("general");
     const coding = new FakeCodexApi("coding");
-    coding.nextCreatedThreadId = "legacy-thread";
-    general.threadIds.add("legacy-thread");
     const routed = new RoutedCodexApi({ general, coding });
 
-    routed.registerThreadProfile("legacy-thread", "general");
-    await routed.ensureThreadLoaded("legacy-thread");
-
-    const codingThread = await routed.createThread("coding", "Coding session");
-    coding.events.push({
-      kind: "notification",
-      notification: {
-        jsonrpc: "2.0",
-        method: "turn/completed",
-        params: {
-          threadId: "legacy-thread",
-          turn: {
-            id: "turn-1",
-            status: "completed",
-            items: []
-          }
-        }
-      } as never
-    });
-    general.events.push({
-      kind: "notification",
-      notification: {
-        jsonrpc: "2.0",
-        method: "turn/completed",
-        params: {
-          threadId: "legacy-thread",
-          turn: {
-            id: "turn-2",
-            status: "completed",
-            items: []
-          }
-        }
-      } as never
-    });
-
-    const events = [await routed.nextEvent(), await routed.nextEvent()];
-
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          kind: "notification",
-          notification: {
-            jsonrpc: "2.0",
-            method: "turn/completed",
-            params: {
-              threadId: codingThread.threadId,
-              turn: {
-                id: "turn-1",
-                status: "completed",
-                items: []
-              }
-            }
-          } as never
-        },
-        {
-          kind: "notification",
-          notification: {
-            jsonrpc: "2.0",
-            method: "turn/completed",
-            params: {
-              threadId: "legacy-thread",
-              turn: {
-                id: "turn-2",
-                status: "completed",
-                items: []
-              }
-            }
-          } as never
-        }
-      ])
+    expect(() => routed.registerThreadProfile("legacy-thread", "general")).toThrow(
+      "Unsupported raw Codex thread id: legacy-thread"
     );
-
-    expect(general.ensureThreadLoadedCalls).toEqual(["legacy-thread"]);
-    expect(coding.ensureThreadLoadedCalls).toEqual([]);
   });
 
   it("fails immediately for unknown thread ids without probing another gateway", async () => {
@@ -573,19 +488,18 @@ describe("RoutedCodexApi", () => {
     );
   });
 
-  it("forwards thread profile registration to the selected gateway", () => {
+  it("forwards thread profile registration to the selected gateway", async () => {
     const general = new FakeCodexApi("general");
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
+    const thread = await routed.createThread("coding", "Coding session");
 
-    routed.registerThreadProfile("thread-123", "coding");
+    routed.registerThreadProfile(thread.threadId, "coding");
 
-    expect(coding.registerThreadProfileCalls).toEqual([
-      {
-        threadId: "thread-123",
-        profileId: "coding"
-      }
-    ]);
+    expect(coding.registerThreadProfileCalls.at(-1)).toEqual({
+      threadId: "coding-thread-1",
+      profileId: "coding"
+    });
     expect(general.registerThreadProfileCalls).toEqual([]);
   });
 
