@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-const MIRROR_EXCLUDED_TOP_LEVEL_NAMES = new Set([".codex"]);
+const MIRROR_EXCLUDED_TOP_LEVEL_NAMES = new Set([
+  ".agents",
+  ".codex"
+]);
 const MANAGED_LOCAL_TOP_LEVEL_NAMES = new Set([
   "auth.json",
   "config.toml",
@@ -55,8 +58,9 @@ export function prepareKirbotCodexHome(options: PrepareKirbotCodexHomeOptions): 
     options.managed.managedSkillIds,
     options.managed.managedProfilesConfigPath
   );
-  // Kirbot mirrors the real home into the profile home at the top level, but `.codex` stays out.
-  // Inside the profile home, `config.toml` and `skills/` are Kirbot-managed, while
+  // Kirbot mirrors the real home into the profile home at the top level, but codex-related
+  // homes such as `.codex` and `.agents` stay out. Inside the profile home, `config.toml`
+  // and `skills/` are Kirbot-managed, while
   // `sessions/`, `shell_snapshots/`, `tmp/`, `rules/`, and `superpowers/` remain runtime-owned.
   reconcileTopLevelHomeMirror(sourceHomePath, options.targetHomePath);
   seedAuthJsonIfMissing(sourceHomePath, options.targetHomePath);

@@ -15,7 +15,7 @@ Change discipline:
 - Avoid destructive actions unless they are clearly required by the user's request.
 - Do not delete unrelated data, rewrite git history, or reset uncommitted work unless explicitly asked.
 - Keep secrets out of chat replies unless the user explicitly asks to reveal a specific value.
-- Profile homes mirror most top-level entries from the real home by symlink, but `.codex` stays profile-local.
+- Profile homes mirror most top-level entries from the real home by symlink, but codex-related entries such as `.codex` and `.agents` stay profile-local.
 - Changes inside mirrored paths are live through the symlink; adding or removing a top-level real-home entry requires Kirbot restart.
 - Shared Codex skills are authored under `~/kirbot/skills/<skill-id>/` when working on Kirbot itself. Do not assume `~/kirbot` is mirrored into a managed profile home; profile-home `dirname(DATABASE_PATH)/homes/<profile>/skills/` directories are generated, which is `data/homes/<profile>/skills/` with the default database path.
 - When adding or enabling shared skills for Kirbot itself, follow the `kirbot-skill-install` skill instead of editing generated profile homes directly.

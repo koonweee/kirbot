@@ -144,7 +144,7 @@ describe("codex home helpers", () => {
     expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
   });
 
-  it("mirrors top-level home entries while excluding .codex and seeds auth.json from sourceHome/.codex/auth.json", () => {
+  it("mirrors top-level home entries while excluding codex-related state and seeds auth.json from sourceHome/.codex/auth.json", () => {
     const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
     const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
@@ -154,6 +154,13 @@ describe("codex home helpers", () => {
     fs.writeFileSync(join(sourceHome, ".gitconfig"), "[user]\n\tname = Jeremy\n");
     fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
     fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"codex-token"}');
+    fs.mkdirSync(join(sourceHome, ".codex", "superpowers", "skills"), { recursive: true });
+    fs.mkdirSync(join(sourceHome, ".agents", "skills"), { recursive: true });
+    fs.symlinkSync(
+      join(sourceHome, ".codex", "superpowers", "skills"),
+      join(sourceHome, ".agents", "skills", "superpowers"),
+      "dir"
+    );
 
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
@@ -182,12 +189,14 @@ describe("codex home helpers", () => {
     expect(fs.lstatSync(join(targetHome, ".gitconfig")).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(join(targetHome, ".gitconfig"))).toBe(fs.realpathSync(join(sourceHome, ".gitconfig")));
     expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
+    expect(fs.existsSync(join(targetHome, ".agents"))).toBe(false);
     expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
     expect(fs.lstatSync(join(targetHome, "auth.json")).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
     expect(mirrorManifest.mirroredTopLevelNames).toHaveLength(2);
     expect(mirrorManifest.mirroredTopLevelNames).toEqual(expect.arrayContaining([".ssh", ".gitconfig"]));
     expect(mirrorManifest.mirroredTopLevelNames).not.toContain(".codex");
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain(".agents");
     expect(mirrorManifest.mirroredTopLevelNames).not.toContain("auth.json");
     expect(mirrorManifest.mirroredTopLevelNames).not.toContain("config.toml");
     expect(mirrorManifest.mirroredTopLevelNames).not.toContain("skills");
@@ -285,11 +294,12 @@ describe("codex home helpers", () => {
 
     fs.writeFileSync(
       join(targetHome, ".kirbot-managed-home-mirror.json"),
-      JSON.stringify({ mirroredTopLevelNames: [".obsolete"] })
+      JSON.stringify({ mirroredTopLevelNames: [".agents", ".obsolete"] })
     );
     fs.mkdirSync(join(sourceHome, ".config"), { recursive: true });
     fs.writeFileSync(join(sourceHome, ".config", "user.json"), "{}");
 
+    fs.symlinkSync(join(sourceHome, ".config"), join(targetHome, ".agents"), "dir");
     fs.symlinkSync(join(sourceHome, ".config"), join(targetHome, ".obsolete"), "dir");
     fs.writeFileSync(join(targetHome, ".stray"), "keep");
     fs.mkdirSync(join(targetHome, "sessions"), { recursive: true });
@@ -319,6 +329,7 @@ describe("codex home helpers", () => {
       mirroredTopLevelNames?: string[];
     };
 
+    expect(fs.existsSync(join(targetHome, ".agents"))).toBe(false);
     expect(fs.existsSync(join(targetHome, ".obsolete"))).toBe(false);
     expect(fs.existsSync(join(targetHome, ".stray"))).toBe(true);
     expect(fs.existsSync(join(targetHome, ".config"))).toBe(true);
