@@ -51,6 +51,8 @@ class FakeCodexApi implements BridgeCodexApi {
     readonly profileId: string
   ) {}
 
+  registerThreadProfile(): void {}
+
   async createThread(
     profileId: string,
     title: string,

@@ -112,8 +112,9 @@ export interface BridgeCodexApi {
       settings?: CodexThreadSettingsOverride | null;
     }
   ): Promise<{ threadId: string; branch: string | null } & ThreadStartSettings>;
-  readProfileSettings?(profileId: string): Promise<ThreadStartSettings>;
-  updateProfileSettings?(
+  registerThreadProfile?(threadId: string, profileId: string): void;
+  readProfileSettings(profileId: string): Promise<ThreadStartSettings>;
+  updateProfileSettings(
     profileId: string,
     update: CodexThreadSettingsOverride
   ): Promise<ThreadStartSettings>;
@@ -1155,6 +1156,7 @@ export class TelegramCodexBridge {
         cwd: loaded.cwd,
         settings: toCodexThreadSettingsOverride(hydratedSession.settings)
       });
+      this.codex.registerThreadProfile?.(freshThread.threadId, hydratedSession.profileId);
       await this.database.activateSession(hydratedSession.id, freshThread.threadId);
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
@@ -1334,7 +1336,7 @@ export class TelegramCodexBridge {
 
     const nextEffective =
       target.scope === "global"
-        ? await this.updateCodexProfileSettings("general", {
+        ? await this.requireProfileSettingsApi().updateProfileSettings("general", {
             serviceTier: nextTier
           })
         : await this.updateSessionSettingsForSurface(location.chatId, { kind: "topic", topicId: location.topicId! }, {
@@ -1540,7 +1542,8 @@ export class TelegramCodexBridge {
       ...(message.topicId !== null ? { topicId: message.topicId } : {}),
       text: `Choose the reasoning effort for ${model.displayName}`,
       replyMarkup: {
-        inline_keyboard: model.supportedReasoningEfforts.map((option) => [
+        inline_keyboard: model.supportedReasoningEfforts.map(
+          (option: (typeof model.supportedReasoningEfforts)[number]) => [
           {
             text: `${option.reasoningEffort === currentEffort ? "• " : ""}${option.reasoningEffort}`,
             callback_data:
@@ -1548,7 +1551,8 @@ export class TelegramCodexBridge {
                 ? `slash:model:apply:${modelIndex}:${option.reasoningEffort}`
                 : `slash:model:apply:${target.scope}:${modelIndex}:${option.reasoningEffort}`
           }
-        ])
+        ]
+        )
       }
     });
     return true;
@@ -1819,6 +1823,7 @@ export class TelegramCodexBridge {
         const thread = await this.codex.createThread("general", DEFAULT_ROOT_SESSION_TITLE, {
           settings: toCodexThreadSettingsOverride(rootSettings)
         });
+        this.codex.registerThreadProfile?.(thread.threadId, "general");
         await this.database.activateSession(pending.id, thread.threadId);
         let session = await this.database.getRootSessionByChat(message.chatId);
         if (!session) {
@@ -1940,6 +1945,7 @@ export class TelegramCodexBridge {
           ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
           settings: toCodexThreadSettingsOverride(spawnSettings)
         });
+        this.codex.registerThreadProfile?.(thread.threadId, "coding");
         await this.database.activateSession(pending.id, thread.threadId);
         let session = await this.database.getSessionByTopic(message.chatId, topicId);
         if (!session) {
@@ -2087,7 +2093,9 @@ export class TelegramCodexBridge {
     root: PersistedThreadSettings;
     spawn: PersistedThreadSettings;
   }> {
-    const globalSettings = toPersistedThreadSettings(await this.readCodexProfileSettings("general"));
+    const globalSettings = toPersistedThreadSettings(
+      await this.requireProfileSettingsApi().readProfileSettings("general")
+    );
     const general = await this.ensureChatProfileSettingsDefaults(chatId, "general", globalSettings);
     const coding = await this.ensureChatProfileSettingsDefaults(chatId, "coding", globalSettings);
     return {
@@ -2124,31 +2132,24 @@ export class TelegramCodexBridge {
     return this.database.upsertChatProfileDefaults(String(chatId), profileId, fallback);
   }
 
-  private async readCodexProfileSettings(profileId: string): Promise<ThreadStartSettings> {
-    if (this.codex.readProfileSettings) {
-      return this.codex.readProfileSettings(profileId);
+  private requireProfileSettingsApi(): {
+    readProfileSettings(profileId: string): Promise<ThreadStartSettings>;
+    updateProfileSettings(
+      profileId: string,
+      update: CodexThreadSettingsOverride
+    ): Promise<ThreadStartSettings>;
+  } {
+    if (!this.codex.readProfileSettings || !this.codex.updateProfileSettings) {
+      throw new Error("Codex client does not support profile settings routing");
     }
 
-    if (!this.codex.readGlobalSettings) {
-      throw new Error(`Codex client does not support reading profile settings for ${profileId}`);
-    }
-
-    return this.codex.readGlobalSettings();
-  }
-
-  private async updateCodexProfileSettings(
-    profileId: string,
-    update: CodexThreadSettingsOverride
-  ): Promise<ThreadStartSettings> {
-    if (this.codex.updateProfileSettings) {
-      return this.codex.updateProfileSettings(profileId, update);
-    }
-
-    if (!this.codex.updateGlobalSettings) {
-      throw new Error(`Codex client does not support updating profile settings for ${profileId}`);
-    }
-
-    return this.codex.updateGlobalSettings(update);
+    return this.codex as {
+      readProfileSettings(profileId: string): Promise<ThreadStartSettings>;
+      updateProfileSettings(
+        profileId: string,
+        update: CodexThreadSettingsOverride
+      ): Promise<ThreadStartSettings>;
+    };
   }
 
   private async resolveThreadSettingsTarget(
@@ -2223,7 +2224,7 @@ export class TelegramCodexBridge {
     if (location.topicId === null) {
       return {
         scope: "global",
-        settings: await this.readCodexProfileSettings("general")
+        settings: await this.requireProfileSettingsApi().readProfileSettings("general")
       };
     }
 
