@@ -781,6 +781,153 @@ describe("BridgeDatabase", () => {
     await migratedDatabase.close();
   });
 
+  it("migrates overlapping general/thread routing without duplicating chat defaults", async () => {
+    const legacyPath = join(tempDir, "legacy-v8-overlapping-routing.sqlite");
+    const sqlite = new SqliteDatabase(legacyPath);
+
+    sqlite.exec(`
+      CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT,
+        CHECK (surface_kind IN ('general', 'topic')),
+        CHECK (
+          (surface_kind = 'general' AND telegram_topic_id IS NULL)
+          OR (surface_kind = 'topic' AND telegram_topic_id IS NOT NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX sessions_general_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'general';
+
+      CREATE UNIQUE INDEX sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+
+      CREATE TABLE chat_thread_defaults (
+        telegram_chat_id TEXT PRIMARY KEY,
+        root_model TEXT,
+        root_reasoning_effort TEXT,
+        root_service_tier TEXT,
+        root_approval_policy TEXT,
+        root_sandbox_policy_json TEXT,
+        spawn_model TEXT,
+        spawn_reasoning_effort TEXT,
+        spawn_service_tier TEXT,
+        spawn_approval_policy TEXT,
+        spawn_sandbox_policy_json TEXT
+      );
+    `);
+
+    sqlite.pragma("user_version = 8");
+    sqlite.prepare(`
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(1, "-1001", "general", null, "general-thread", "active", "default", null, null, null, null, null);
+    sqlite.prepare(`
+      INSERT INTO sessions (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(2, "-1001", "topic", 41, "topic-plan-thread", "active", "plan", null, null, null, null, null);
+    sqlite.prepare(`
+      INSERT INTO chat_thread_defaults (
+        telegram_chat_id,
+        root_model,
+        root_reasoning_effort,
+        root_service_tier,
+        root_approval_policy,
+        root_sandbox_policy_json,
+        spawn_model,
+        spawn_reasoning_effort,
+        spawn_service_tier,
+        spawn_approval_policy,
+        spawn_sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "-1001",
+      "gpt-5.4",
+      "medium",
+      null,
+      JSON.stringify("on-request"),
+      JSON.stringify({
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: { type: "fullAccess" },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }),
+      "gpt-5.4-mini",
+      "high",
+      "fast",
+      JSON.stringify("never"),
+      JSON.stringify({ type: "dangerFullAccess" })
+    );
+    sqlite.close();
+
+    const migratedDatabase = new BridgeDatabase(legacyPath, {
+      general: "shared",
+      thread: "shared",
+      plan: "planner"
+    });
+    await migratedDatabase.migrate();
+
+    expect(await migratedDatabase.getRootSessionByChat("-1001")).toMatchObject({
+      profileId: "shared",
+      codexThreadId: "general-thread"
+    });
+    expect(await migratedDatabase.getSessionByTopic(-1001, 41)).toMatchObject({
+      profileId: "planner",
+      codexThreadId: "topic-plan-thread",
+      preferredMode: "plan"
+    });
+
+    expect(await migratedDatabase.getChatProfileDefaults("-1001", "shared")).toMatchObject({
+      profileId: "shared",
+      model: "gpt-5.4"
+    });
+    expect(await migratedDatabase.getChatProfileDefaults("-1001", "planner")).toBeUndefined();
+
+    await migratedDatabase.close();
+  });
+
   it("stores and resolves pending server requests", async () => {
     const pending = await database.createPendingRequest({
       requestIdJson: JSON.stringify(77),

@@ -1423,7 +1423,7 @@ export class TelegramCodexBridge {
 
     const nextEffective =
       target.scope === "global"
-        ? await this.requireProfileSettingsApi().updateProfileSettings("general", {
+        ? await this.requireProfileSettingsApi().updateProfileSettings(this.resolveConfiguredProfileId("general"), {
             serviceTier: nextTier
           })
         : await this.updateSessionSettingsForSurface(location.chatId, { kind: "topic", topicId: location.topicId! }, {

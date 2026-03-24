@@ -1113,6 +1113,31 @@ describe("TelegramCodexBridge", () => {
     expect((await database.getRootSessionByChat(-1001))?.profileId).toBe("coding");
   });
 
+  it("routes the global /fast update through config.codex.routing.general", async () => {
+    config.codex.routing.general = "coding";
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      serviceTier: null
+    };
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      serviceTier: null
+    };
+
+    await (bridge as any).handleFastSlashCommand(
+      {
+        chatId: -1001,
+        topicId: null
+      },
+      "on"
+    );
+
+    expect(codex.profileSettings.coding.serviceTier).toBe("fast");
+    expect(codex.profileSettings.general.serviceTier).toBeNull();
+    expect(codex.globalSettingsUpdates).toEqual([{ serviceTier: "fast" }]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Global default fast mode enabled");
+  });
+
   it("re-registers a persisted root session route before using its thread after restart", async () => {
     codex.enforceThreadRouteRegistration = true;
     const pending = await database.createProvisioningSession({

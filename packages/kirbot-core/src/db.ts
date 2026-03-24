@@ -1535,7 +1535,8 @@ export class BridgeDatabase {
         spawn_service_tier,
         spawn_approval_policy,
         spawn_sandbox_policy_json
-      FROM chat_thread_defaults;
+      FROM chat_thread_defaults
+      WHERE ${generalProfileId} <> ${threadProfileId};
 
       DROP TABLE sessions;
       ALTER TABLE sessions_v9 RENAME TO sessions;
