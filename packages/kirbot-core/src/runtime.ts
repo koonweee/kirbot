@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { CodexGateway, spawnCodexAppServer } from "@kirbot/codex-client";
+import { resolve as resolvePath } from "node:path";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
 import type { AppConfig } from "./config";
 import { prepareKirbotCodexHome, resolveKirbotCodexConfigPath } from "./codex-home";
@@ -131,6 +132,9 @@ async function initializeCodex(
 
   const sharedProfileHomePath = resolveCodexProfileHomePath(config, config.codex.routing.general);
   const isolatedProfileHomePath = resolveCodexProfileHomePath(config, config.codex.routing.thread);
+  if (normalizeHomePath(sharedProfileHomePath) === normalizeHomePath(isolatedProfileHomePath)) {
+    throw new Error("Temporary two-gateway mode must not resolve to the same home path for general and thread routing.");
+  }
 
   prepareKirbotCodexHome({
     targetHomePath: sharedProfileHomePath
@@ -139,18 +143,28 @@ async function initializeCodex(
     targetHomePath: isolatedProfileHomePath
   });
 
-  // The isolated config.toml is Kirbot's global Codex policy source.
-  // Code should only override it intentionally for thread-local settings or per-session cwd.
-  const shouldBootstrapIsolatedConfig =
-    !existsSync(resolveKirbotCodexConfigPath(isolatedProfileHomePath));
   const shared = await initializeGateway(config, logger, sharedProfileHomePath);
-  const isolated = await initializeGateway(
-    config,
-    logger,
-    isolatedProfileHomePath
-  );
-  if (shouldBootstrapIsolatedConfig) {
-    await isolated.codex.bootstrapManagedGlobalConfig();
+  let isolated: {
+    codex: CodexGateway;
+    rpcClient: CodexRpcClient;
+    spawnedAppServer: SpawnedAppServer;
+  } | undefined;
+
+  try {
+    // The isolated config.toml is Kirbot's global Codex policy source.
+    // Code should only override it intentionally for thread-local settings or per-session cwd.
+    const shouldBootstrapIsolatedConfig =
+      !existsSync(resolveKirbotCodexConfigPath(isolatedProfileHomePath));
+    isolated = await initializeGateway(config, logger, isolatedProfileHomePath);
+    if (shouldBootstrapIsolatedConfig) {
+      await isolated.codex.bootstrapManagedGlobalConfig();
+    }
+  } catch (error) {
+    await cleanupGatewayResources(shared.rpcClient, shared.spawnedAppServer);
+    if (isolated) {
+      await cleanupGatewayResources(isolated.rpcClient, isolated.spawnedAppServer);
+    }
+    throw error;
   }
 
   return {
@@ -179,18 +193,25 @@ async function initializeGateway(
     logger,
     ...(homePath ? { homePath } : {})
   });
-  const transport = new StdioRpcTransport(spawnedAppServer.process);
-  await transport.connect();
+  let transport: StdioRpcTransport | undefined;
+  let rpcClient: CodexRpcClient | undefined;
+  try {
+    transport = new StdioRpcTransport(spawnedAppServer.process);
+    await transport.connect();
 
-  const rpcClient = new CodexRpcClient(transport);
-  const codex = new CodexGateway(rpcClient, config.codex);
-  await withTimeout(codex.initialize(), CODEX_INITIALIZE_TIMEOUT_MS, "Timed out waiting for Codex app server initialization");
+    rpcClient = new CodexRpcClient(transport);
+    const codex = new CodexGateway(rpcClient, config.codex);
+    await withTimeout(codex.initialize(), CODEX_INITIALIZE_TIMEOUT_MS, "Timed out waiting for Codex app server initialization");
 
-  return {
-    codex,
-    rpcClient,
-    spawnedAppServer
-  };
+    return {
+      codex,
+      rpcClient,
+      spawnedAppServer
+    };
+  } catch (error) {
+    await cleanupGatewayResources(rpcClient, spawnedAppServer);
+    throw error;
+  }
 }
 
 function resolveCodexProfileHomePath(config: AppConfig, profileId: string): string {
@@ -200,6 +221,17 @@ function resolveCodexProfileHomePath(config: AppConfig, profileId: string): stri
   }
 
   return profile.homePath;
+}
+
+function normalizeHomePath(homePath: string): string {
+  return resolvePath(homePath);
+}
+
+async function cleanupGatewayResources(
+  rpcClient: CodexRpcClient | undefined,
+  spawnedAppServer: SpawnedAppServer | undefined
+): Promise<void> {
+  await Promise.allSettled([rpcClient?.close(), spawnedAppServer?.stop()]);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

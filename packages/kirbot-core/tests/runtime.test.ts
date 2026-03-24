@@ -7,22 +7,33 @@ const mocks = vi.hoisted(() => {
   const spawnCodexAppServer = vi.fn();
   const prepareKirbotCodexHome = vi.fn();
   const initializeTelegramCommandSyncFailOpen = vi.fn();
+  const spawnedAppServers: Array<{ process: unknown; stop: ReturnType<typeof vi.fn> }> = [];
+  const rpcClients: Array<{ close: ReturnType<typeof vi.fn> }> = [];
   const codexGatewayInstances: Array<{
     initialize: ReturnType<typeof vi.fn>;
     bootstrapManagedGlobalConfig: ReturnType<typeof vi.fn>;
   }> = [];
+  const codexGatewayInitializeErrors: Array<Error | undefined> = [];
 
   return {
     spawnCodexAppServer,
     prepareKirbotCodexHome,
     initializeTelegramCommandSyncFailOpen,
-    codexGatewayInstances
+    spawnedAppServers,
+    rpcClients,
+    codexGatewayInstances,
+    codexGatewayInitializeErrors
   };
 });
 
 vi.mock("@kirbot/codex-client", () => {
   class CodexGateway {
-    readonly initialize = vi.fn(async () => undefined);
+    readonly initialize = vi.fn(async () => {
+      const error = mocks.codexGatewayInitializeErrors.shift();
+      if (error) {
+        throw error;
+      }
+    });
     readonly bootstrapManagedGlobalConfig = vi.fn(async () => undefined);
 
     constructor(
@@ -36,7 +47,9 @@ vi.mock("@kirbot/codex-client", () => {
   class CodexRpcClient {
     readonly close = vi.fn(async () => undefined);
 
-    constructor(readonly transport: unknown) {}
+    constructor(readonly transport: unknown) {
+      mocks.rpcClients.push(this);
+    }
   }
 
   class StdioRpcTransport {
@@ -116,15 +129,23 @@ import { createKirbotRuntime } from "../src/runtime";
 
 describe("createKirbotRuntime temporary profile routing", () => {
   beforeEach(() => {
-    mocks.spawnCodexAppServer.mockImplementation(async () => ({
-      process: {},
-      stop: vi.fn()
-    }));
+    mocks.spawnCodexAppServer.mockImplementation(async () => {
+      const stop = vi.fn(async () => undefined);
+      const server = {
+        process: {},
+        stop
+      };
+      mocks.spawnedAppServers.push(server);
+      return server;
+    });
   });
 
   afterEach(() => {
     vi.clearAllMocks();
     mocks.codexGatewayInstances.length = 0;
+    mocks.spawnedAppServers.length = 0;
+    mocks.rpcClients.length = 0;
+    mocks.codexGatewayInitializeErrors.length = 0;
   });
 
   it("routes general traffic to the shared profile and thread traffic to the isolated profile", async () => {
@@ -160,6 +181,38 @@ describe("createKirbotRuntime temporary profile routing", () => {
     expect(mocks.codexGatewayInstances).toHaveLength(2);
     expect(mocks.codexGatewayInstances[0]!.bootstrapManagedGlobalConfig).not.toHaveBeenCalled();
     expect(mocks.codexGatewayInstances[1]!.bootstrapManagedGlobalConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects temporary mode when general and thread routing resolve to the same home path", async () => {
+    const homePath = join(tmpdir(), `kirbot-runtime-shared-${randomUUID()}`);
+    const config = buildConfig(homePath, homePath);
+
+    await expect(
+      createKirbotRuntime({
+        config,
+        telegramApi: {} as TelegramApi
+      })
+    ).rejects.toThrow("must not resolve to the same home path");
+  });
+
+  it("cleans up the first gateway if the second gateway initialization fails", async () => {
+    const sharedHomePath = join(tmpdir(), `kirbot-runtime-shared-${randomUUID()}`);
+    const isolatedHomePath = join(tmpdir(), `kirbot-runtime-isolated-${randomUUID()}`);
+    const config = buildConfig(sharedHomePath, isolatedHomePath);
+    mocks.codexGatewayInitializeErrors.push(undefined, new Error("second gateway failed"));
+
+    await expect(
+      createKirbotRuntime({
+        config,
+        telegramApi: {} as TelegramApi
+      })
+    ).rejects.toThrow("second gateway failed");
+
+    expect(mocks.spawnedAppServers).toHaveLength(2);
+    expect(mocks.spawnedAppServers[0]!.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.spawnedAppServers[1]!.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.rpcClients[0]!.close).toHaveBeenCalledTimes(1);
+    expect(mocks.rpcClients[1]!.close).toHaveBeenCalledTimes(1);
   });
 });
 
