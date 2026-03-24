@@ -43,7 +43,7 @@ Prerequisites:
 - a Telegram bot token
 - the Telegram workspace chat ID for the dedicated private forum supergroup
 - a deployed Telegram Mini App URL over `https`
-- an authenticated base Codex setup before first run, because profile homes bootstrap from your existing Codex home/auth state
+- an authenticated base Codex setup before first run if you want Kirbot to seed missing `auth.json` from your existing Codex home
 
 Install and configure:
 
@@ -58,47 +58,61 @@ Required settings:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WORKSPACE_CHAT_ID`
 - `TELEGRAM_MINI_APP_PUBLIC_URL`
-- `CODEX_PROFILES_JSON`
 
 Commonly adjusted settings:
 
 - `DATABASE_PATH`
 - `CODEX_DEFAULT_CWD`
-- `CODEX_MODEL`
-- `CODEX_MODEL_PROVIDER`
-- `CODEX_SANDBOX_MODE`
-- `CODEX_APPROVAL_POLICY`
-- `CODEX_CONFIG_JSON`
 
 Codex profile setup:
 
 ```json
 {
-  "profiles": {
-    "general": {
-      "homePath": "~/kirbot/codex-home-general"
-    },
-    "coding": {
-      "homePath": "~/kirbot/codex-home-coding"
-    }
-  },
-  "routing": {
+  "routes": {
     "general": "general",
     "thread": "coding",
     "plan": "coding"
+  },
+  "skills": {
+    "brainstorming": {},
+    "kirbot-skill-install": {}
+  },
+  "mcps": {
+    "github": {
+      "type": "stdio",
+      "command": ["github-mcp", "serve"]
+    }
+  },
+  "profiles": {
+    "general": {
+      "model": "gpt-5",
+      "sandboxMode": "workspace-write",
+      "approvalPolicy": "on-request",
+      "skills": [],
+      "mcps": []
+    },
+    "coding": {
+      "model": "gpt-5-codex",
+      "sandboxMode": "danger-full-access",
+      "approvalPolicy": "never",
+      "skills": ["brainstorming", "kirbot-skill-install"],
+      "mcps": ["github"]
+    }
   }
 }
 ```
 
-- `CODEX_PROFILES_JSON` declares the profile homes and how surfaces route to them.
+- `config/codex-profiles.json` is the checked-in source of truth for route selection, shared skill ids, shared MCP definitions, and per-profile defaults.
 - `general` owns the forum `General` surface.
 - `coding` owns `/thread` and `/plan`.
-- each profile gets its own isolated Codex home directory.
+- each profile gets its own managed isolated Codex home under `dirname(DATABASE_PATH)/homes/<profile>`; with the default database path that is `data/homes/<profile>`.
 
-Bootstrap note:
+Managed profile homes:
 
-- `CODEX_MODEL`, `CODEX_MODEL_PROVIDER`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_CONFIG_JSON` only seed a brand new profile `config.toml`.
-- After a profile home exists, treat that `config.toml` as Kirbot's Codex source of truth for that profile.
+- Shared skill source lives in checked-in `skills/<skill-id>/`.
+- On startup, Kirbot creates missing profile homes, rewrites each managed `config.toml`, and rebuilds each managed `skills/` subtree from `config/codex-profiles.json`.
+- Kirbot preserves runtime-owned files such as `auth.json`, Codex thread/session state, `rules/`, and `superpowers/`.
+- Do not edit `dirname(DATABASE_PATH)/homes/<profile>/skills/` directly; with the default database path that is `data/homes/<profile>/skills/`. It is generated.
 - The cutover is hard: old sessions from the previous single-home setup are not migrated and will fail when first resumed. Start a new thread or topic instead.
 
 Telegram BotFather requirements:
@@ -164,7 +178,8 @@ npm run verify:codex-upgrade
 Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
-- `CODEX_PROFILES_JSON` controls the profile homes and routing; each profile gets its own isolated Codex home.
+- `config/codex-profiles.json` controls profile routing, MCP selection, and the generated per-profile Codex homes.
+- Shared skills are authored under `skills/` and synced into each managed home on startup.
 
 Intentional override points per profile `config.toml` are:
 - global `/model`, `/fast`, and `/permissions` changes, which rewrite that profile's Codex config
