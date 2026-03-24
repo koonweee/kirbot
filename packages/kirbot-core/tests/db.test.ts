@@ -132,7 +132,14 @@ describe("BridgeDatabase", () => {
       reasoningEffort: null,
       serviceTier: null,
       approvalPolicy: null,
-      sandboxPolicy: null
+      sandboxPolicy: null,
+      overrides: {
+        model: true,
+        reasoningEffort: false,
+        serviceTier: false,
+        approvalPolicy: false,
+        sandboxPolicy: false
+      }
     });
   });
 
@@ -173,7 +180,14 @@ describe("BridgeDatabase", () => {
       reasoningEffort: null,
       serviceTier: null,
       approvalPolicy: null,
-      sandboxPolicy: null
+      sandboxPolicy: null,
+      overrides: {
+        model: true,
+        reasoningEffort: false,
+        serviceTier: false,
+        approvalPolicy: false,
+        sandboxPolicy: false
+      }
     });
 
     const topicLookup = await database.getSessionByTopic(-1001, 22);
@@ -182,7 +196,14 @@ describe("BridgeDatabase", () => {
       reasoningEffort: "high",
       serviceTier: "fast",
       approvalPolicy: null,
-      sandboxPolicy: null
+      sandboxPolicy: null,
+      overrides: {
+        model: false,
+        reasoningEffort: true,
+        serviceTier: true,
+        approvalPolicy: false,
+        sandboxPolicy: false
+      }
     });
   });
 
@@ -327,7 +348,12 @@ describe("BridgeDatabase", () => {
           reasoning_effort: null,
           service_tier: null,
           approval_policy: null,
-          sandbox_policy_json: null
+          sandbox_policy_json: null,
+          model_is_overridden: 0,
+          reasoning_effort_is_overridden: 0,
+          service_tier_is_overridden: 0,
+          approval_policy_is_overridden: 0,
+          sandbox_policy_is_overridden: 0
         })
         .execute()
     ).rejects.toThrow();
@@ -349,7 +375,12 @@ describe("BridgeDatabase", () => {
           reasoning_effort: null,
           service_tier: null,
           approval_policy: null,
-          sandbox_policy_json: null
+          sandbox_policy_json: null,
+          model_is_overridden: 0,
+          reasoning_effort_is_overridden: 0,
+          service_tier_is_overridden: 0,
+          approval_policy_is_overridden: 0,
+          sandbox_policy_is_overridden: 0
         })
         .execute()
     ).rejects.toThrow();

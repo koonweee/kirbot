@@ -3227,6 +3227,65 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toContain("gpt-5-codex fast");
   });
 
+  it("lets a topic explicitly turn fast mode off even when the profile default is fast", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 10,
+      updateId: 32,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 11,
+      updateId: 33,
+      userId: 42,
+      text: "/fast off"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode disabled");
+    codex.readTurnSnapshotResult = {
+      text: "Normal answer",
+      assistantText: "Normal answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 12,
+      updateId: 34,
+      userId: 42,
+      text: "Use normal mode"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5-codex",
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: codex.sandboxPolicy
+    });
+  });
+
   it("compacts the current thread and surfaces the compaction notice", async () => {
     codex.readTurnSnapshotResult = {
       text: "Initial answer",

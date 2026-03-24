@@ -1203,7 +1203,7 @@ export class TelegramCodexBridge {
       const title = thread.name ?? (isRootBridgeSession(session) ? DEFAULT_ROOT_SESSION_TITLE : "Fresh Codex Thread");
       const freshThread = await this.codex.createThread(session.profileId, title, {
         cwd: effectiveSettings.cwd,
-        settings: toCodexThreadSettingsOverrideFromThreadStartSettings(effectiveSettings)
+        settings: buildCodexThreadSettingsOverrideForSession(effectiveSettings, session.settings)
       });
       this.codex.registerThreadProfile(freshThread.threadId, session.profileId);
       await this.database.activateSession(session.id, freshThread.threadId);
@@ -2152,7 +2152,7 @@ export class TelegramCodexBridge {
             registeredThreadId,
             input,
             {
-              overrides: toCodexThreadSettingsOverrideFromThreadStartSettings(effectiveSettings),
+              overrides: buildCodexThreadSettingsOverrideForSession(effectiveSettings, session.settings),
               collaborationMode: buildTurnCollaborationMode(
                 options?.forceMode ?? session.preferredMode,
                 effectiveSettings,
@@ -3067,12 +3067,20 @@ function mergePersistedThreadSettings(
   current: PersistedThreadSettings,
   update: CodexThreadSettingsOverride
 ): PersistedThreadSettings {
+  const overrides = getPersistedThreadSettingsOverrides(current);
   return {
-    model: update.model ?? current.model,
+    model: "model" in update ? update.model ?? null : current.model,
     reasoningEffort: "reasoningEffort" in update ? update.reasoningEffort ?? null : current.reasoningEffort,
     serviceTier: "serviceTier" in update ? update.serviceTier ?? null : current.serviceTier,
-    approvalPolicy: update.approvalPolicy ?? current.approvalPolicy,
-    sandboxPolicy: update.sandboxPolicy ?? current.sandboxPolicy
+    approvalPolicy: "approvalPolicy" in update ? update.approvalPolicy ?? null : current.approvalPolicy,
+    sandboxPolicy: "sandboxPolicy" in update ? update.sandboxPolicy ?? null : current.sandboxPolicy,
+    overrides: {
+      model: "model" in update ? true : overrides.model,
+      reasoningEffort: "reasoningEffort" in update ? true : overrides.reasoningEffort,
+      serviceTier: "serviceTier" in update ? true : overrides.serviceTier,
+      approvalPolicy: "approvalPolicy" in update ? true : overrides.approvalPolicy,
+      sandboxPolicy: "sandboxPolicy" in update ? true : overrides.sandboxPolicy
+    }
   };
 }
 
@@ -3087,6 +3095,30 @@ function toCodexThreadSettingsOverrideFromThreadStartSettings(
     ...(settings.serviceTier !== null ? { serviceTier: settings.serviceTier } : {}),
     ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
     ...(settings.sandboxPolicy ? { sandboxPolicy: settings.sandboxPolicy } : {})
+  };
+}
+
+function buildCodexThreadSettingsOverrideForSession(
+  effectiveSettings: Pick<ThreadStartSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy">,
+  persistedSettings: PersistedThreadSettings
+): CodexThreadSettingsOverride {
+  const overrides = getPersistedThreadSettingsOverrides(persistedSettings);
+  const model = normalizePersistedModel(effectiveSettings.model);
+
+  return {
+    ...(model ? { model } : {}),
+    ...(overrides.reasoningEffort
+      ? { reasoningEffort: persistedSettings.reasoningEffort ?? null }
+      : effectiveSettings.reasoningEffort !== null
+        ? { reasoningEffort: effectiveSettings.reasoningEffort }
+        : {}),
+    ...(overrides.serviceTier
+      ? { serviceTier: persistedSettings.serviceTier ?? null }
+      : effectiveSettings.serviceTier !== null
+        ? { serviceTier: effectiveSettings.serviceTier }
+        : {}),
+    ...(effectiveSettings.approvalPolicy ? { approvalPolicy: effectiveSettings.approvalPolicy } : {}),
+    ...(effectiveSettings.sandboxPolicy ? { sandboxPolicy: effectiveSettings.sandboxPolicy } : {})
   };
 }
 
@@ -3119,12 +3151,23 @@ function mergePersistedThreadSettingsIntoThreadStartSettings(
   fallback: Pick<ThreadStartSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy">,
   settings: PersistedThreadSettings
 ): Pick<ThreadStartSettings, "model" | "reasoningEffort" | "serviceTier" | "approvalPolicy" | "sandboxPolicy"> {
+  const overrides = getPersistedThreadSettingsOverrides(settings);
   return {
-    model: settings.model ?? fallback.model,
-    reasoningEffort: settings.reasoningEffort ?? fallback.reasoningEffort,
-    serviceTier: settings.serviceTier ?? fallback.serviceTier,
-    approvalPolicy: settings.approvalPolicy ?? fallback.approvalPolicy,
-    sandboxPolicy: settings.sandboxPolicy ?? fallback.sandboxPolicy
+    model: overrides.model ? settings.model ?? fallback.model : fallback.model,
+    reasoningEffort: overrides.reasoningEffort ? settings.reasoningEffort ?? null : fallback.reasoningEffort,
+    serviceTier: overrides.serviceTier ? settings.serviceTier ?? null : fallback.serviceTier,
+    approvalPolicy: overrides.approvalPolicy ? settings.approvalPolicy ?? fallback.approvalPolicy : fallback.approvalPolicy,
+    sandboxPolicy: overrides.sandboxPolicy ? settings.sandboxPolicy ?? fallback.sandboxPolicy : fallback.sandboxPolicy
+  };
+}
+
+function getPersistedThreadSettingsOverrides(settings: PersistedThreadSettings): NonNullable<PersistedThreadSettings["overrides"]> {
+  return settings.overrides ?? {
+    model: settings.model !== null,
+    reasoningEffort: settings.reasoningEffort !== null,
+    serviceTier: settings.serviceTier !== null,
+    approvalPolicy: settings.approvalPolicy !== null,
+    sandboxPolicy: settings.sandboxPolicy !== null
   };
 }
 

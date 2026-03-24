@@ -12,12 +12,21 @@ export type SessionSurface =
   | { kind: "general" }
   | { kind: "topic"; topicId: number };
 
+export type PersistedThreadSettingsOverrides = {
+  model: boolean;
+  reasoningEffort: boolean;
+  serviceTier: boolean;
+  approvalPolicy: boolean;
+  sandboxPolicy: boolean;
+};
+
 export type PersistedThreadSettings = {
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
   serviceTier: ServiceTier | null;
   approvalPolicy: AskForApproval | null;
   sandboxPolicy: SandboxPolicy | null;
+  overrides?: PersistedThreadSettingsOverrides;
 };
 
 export type UserTurnInput =

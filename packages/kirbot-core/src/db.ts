@@ -19,7 +19,7 @@ import type {
 } from "./domain";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 type SessionsTable = {
   id: Generated<number>;
@@ -31,10 +31,15 @@ type SessionsTable = {
   status: SessionStatus;
   preferred_mode: SessionMode;
   model: string | null;
+  model_is_overridden: number;
   reasoning_effort: string | null;
+  reasoning_effort_is_overridden: number;
   service_tier: string | null;
+  service_tier_is_overridden: number;
   approval_policy: string | null;
+  approval_policy_is_overridden: number;
   sandbox_policy_json: string | null;
+  sandbox_policy_is_overridden: number;
 };
 
 type ServerRequestsTable = {
@@ -113,10 +118,15 @@ function mapSession(row: Selectable<SessionsTable>): BridgeSession {
     preferredMode: row.preferred_mode,
     settings: mapPersistedThreadSettings({
       model: row.model,
+      modelIsOverridden: row.model_is_overridden,
       reasoningEffort: row.reasoning_effort,
+      reasoningEffortIsOverridden: row.reasoning_effort_is_overridden,
       serviceTier: row.service_tier,
+      serviceTierIsOverridden: row.service_tier_is_overridden,
       approvalPolicyJson: row.approval_policy,
-      sandboxPolicyJson: row.sandbox_policy_json
+      approvalPolicyIsOverridden: row.approval_policy_is_overridden,
+      sandboxPolicyJson: row.sandbox_policy_json,
+      sandboxPolicyIsOverridden: row.sandbox_policy_is_overridden
     })
   };
 }
@@ -161,11 +171,23 @@ function mapPendingCustomCommandAdd(row: Selectable<PendingCustomCommandAddsTabl
 
 function mapPersistedThreadSettings(input: {
   model: string | null;
+  modelIsOverridden: number;
   reasoningEffort: string | null;
+  reasoningEffortIsOverridden: number;
   serviceTier: string | null;
+  serviceTierIsOverridden: number;
   approvalPolicyJson: string | null;
+  approvalPolicyIsOverridden: number;
   sandboxPolicyJson: string | null;
+  sandboxPolicyIsOverridden: number;
 }): PersistedThreadSettings {
+  const overrides = {
+    model: input.modelIsOverridden === 1,
+    reasoningEffort: input.reasoningEffortIsOverridden === 1,
+    serviceTier: input.serviceTierIsOverridden === 1,
+    approvalPolicy: input.approvalPolicyIsOverridden === 1,
+    sandboxPolicy: input.sandboxPolicyIsOverridden === 1
+  };
   return {
     model: normalizePersistedModel(input.model),
     reasoningEffort: input.reasoningEffort as PersistedThreadSettings["reasoningEffort"],
@@ -173,7 +195,8 @@ function mapPersistedThreadSettings(input: {
     approvalPolicy: input.approvalPolicyJson
       ? (JSON.parse(input.approvalPolicyJson) as PersistedThreadSettings["approvalPolicy"])
       : null,
-    sandboxPolicy: input.sandboxPolicyJson ? (JSON.parse(input.sandboxPolicyJson) as PersistedThreadSettings["sandboxPolicy"]) : null
+    sandboxPolicy: input.sandboxPolicyJson ? (JSON.parse(input.sandboxPolicyJson) as PersistedThreadSettings["sandboxPolicy"]) : null,
+    ...(Object.values(overrides).some(Boolean) ? { overrides } : {})
   };
 }
 
@@ -183,6 +206,58 @@ function normalizePersistedModel(model: string | null): string | null {
   }
 
   return model;
+}
+
+function unsetPersistedThreadSettings(): PersistedThreadSettings {
+  return {
+    model: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    approvalPolicy: null,
+    sandboxPolicy: null
+  };
+}
+
+function getPersistedThreadSettingsOverrides(
+  settings: PersistedThreadSettings
+): NonNullable<PersistedThreadSettings["overrides"]> {
+  return settings.overrides ?? {
+    model: settings.model !== null,
+    reasoningEffort: settings.reasoningEffort !== null,
+    serviceTier: settings.serviceTier !== null,
+    approvalPolicy: settings.approvalPolicy !== null,
+    sandboxPolicy: settings.sandboxPolicy !== null
+  };
+}
+
+function persistedThreadSettingsToSessionUpdate(
+  settings: PersistedThreadSettings
+): Pick<
+  SessionsTable,
+  | "model"
+  | "model_is_overridden"
+  | "reasoning_effort"
+  | "reasoning_effort_is_overridden"
+  | "service_tier"
+  | "service_tier_is_overridden"
+  | "approval_policy"
+  | "approval_policy_is_overridden"
+  | "sandbox_policy_json"
+  | "sandbox_policy_is_overridden"
+> {
+  const overrides = getPersistedThreadSettingsOverrides(settings);
+  return {
+    model: settings.model,
+    model_is_overridden: overrides.model ? 1 : 0,
+    reasoning_effort: settings.reasoningEffort,
+    reasoning_effort_is_overridden: overrides.reasoningEffort ? 1 : 0,
+    service_tier: settings.serviceTier,
+    service_tier_is_overridden: overrides.serviceTier ? 1 : 0,
+    approval_policy: settings.approvalPolicy ? JSON.stringify(settings.approvalPolicy) : null,
+    approval_policy_is_overridden: overrides.approvalPolicy ? 1 : 0,
+    sandbox_policy_json: settings.sandboxPolicy ? JSON.stringify(settings.sandboxPolicy) : null,
+    sandbox_policy_is_overridden: overrides.sandboxPolicy ? 1 : 0
+  };
 }
 
 function validateSessionSurface(surface: SessionSurface): void {
@@ -230,6 +305,12 @@ export class BridgeDatabase {
       return;
     }
 
+    if (currentVersion === 10) {
+      this.#migrateFromV10ToV11();
+      this.#writeSchemaVersion(SCHEMA_VERSION);
+      return;
+    }
+
     throw new Error(`Unsupported database schema version: ${currentVersion}`);
   }
 
@@ -267,6 +348,7 @@ export class BridgeDatabase {
   }): Promise<TopicSession | BridgeSession> {
     const surface: SessionSurface = input.surface ?? { kind: "topic", topicId: input.telegramTopicId! };
     const sessionRow = sessionSurfaceToRow(surface);
+    const unsetSettings = unsetPersistedThreadSettings();
     try {
       await this.kysely
         .insertInto("sessions")
@@ -277,11 +359,7 @@ export class BridgeDatabase {
           codex_thread_id: null,
           status: "provisioning",
           preferred_mode: "default",
-          model: null,
-          reasoning_effort: null,
-          service_tier: null,
-          approval_policy: null,
-          sandbox_policy_json: null
+          ...persistedThreadSettingsToSessionUpdate(unsetSettings)
         })
         .execute();
     } catch (error) {
@@ -302,11 +380,7 @@ export class BridgeDatabase {
             codex_thread_id: null,
             status: "provisioning",
             preferred_mode: "default",
-            model: null,
-            reasoning_effort: null,
-            service_tier: null,
-            approval_policy: null,
-            sandbox_policy_json: null
+            ...persistedThreadSettingsToSessionUpdate(unsetSettings)
           })
           .where("id", "=", existing.id)
           .execute();
@@ -366,13 +440,7 @@ export class BridgeDatabase {
 
     await this.kysely
       .updateTable("sessions")
-      .set({
-        model: settings.model,
-        reasoning_effort: settings.reasoningEffort,
-        service_tier: settings.serviceTier,
-        approval_policy: settings.approvalPolicy ? JSON.stringify(settings.approvalPolicy) : null,
-        sandbox_policy_json: settings.sandboxPolicy ? JSON.stringify(settings.sandboxPolicy) : null
-      })
+      .set(persistedThreadSettingsToSessionUpdate(settings))
       .where("id", "=", existing.id)
       .execute();
 
@@ -881,10 +949,15 @@ export class BridgeDatabase {
         status TEXT NOT NULL,
         preferred_mode TEXT NOT NULL DEFAULT 'default',
         model TEXT,
+        model_is_overridden INTEGER NOT NULL DEFAULT 0,
         reasoning_effort TEXT,
+        reasoning_effort_is_overridden INTEGER NOT NULL DEFAULT 0,
         service_tier TEXT,
+        service_tier_is_overridden INTEGER NOT NULL DEFAULT 0,
         approval_policy TEXT,
+        approval_policy_is_overridden INTEGER NOT NULL DEFAULT 0,
         sandbox_policy_json TEXT,
+        sandbox_policy_is_overridden INTEGER NOT NULL DEFAULT 0,
         CHECK (surface_kind IN ('general', 'topic')),
         CHECK (
           (surface_kind = 'general' AND telegram_topic_id IS NULL)
@@ -948,6 +1021,28 @@ export class BridgeDatabase {
 
       CREATE INDEX IF NOT EXISTS pending_custom_command_adds_status_command_index
         ON pending_custom_command_adds (status, command);
+    `);
+  }
+
+  #migrateFromV10ToV11(): void {
+    this.#sqlite.exec(`
+      BEGIN;
+
+      ALTER TABLE sessions ADD COLUMN model_is_overridden INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN reasoning_effort_is_overridden INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN service_tier_is_overridden INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN approval_policy_is_overridden INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN sandbox_policy_is_overridden INTEGER NOT NULL DEFAULT 0;
+
+      UPDATE sessions
+      SET
+        model_is_overridden = CASE WHEN model IS NULL THEN 0 ELSE 1 END,
+        reasoning_effort_is_overridden = CASE WHEN reasoning_effort IS NULL THEN 0 ELSE 1 END,
+        service_tier_is_overridden = CASE WHEN service_tier IS NULL THEN 0 ELSE 1 END,
+        approval_policy_is_overridden = CASE WHEN approval_policy IS NULL THEN 0 ELSE 1 END,
+        sandbox_policy_is_overridden = CASE WHEN sandbox_policy_json IS NULL THEN 0 ELSE 1 END;
+
+      COMMIT;
     `);
   }
 
