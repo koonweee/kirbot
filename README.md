@@ -85,7 +85,7 @@ Codex profile setup:
   },
   "profiles": {
     "general": {
-      "defaultCwd": "/home/dev",
+      "defaultCwd": "/home/dev/general",
       "model": "gpt-5",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",

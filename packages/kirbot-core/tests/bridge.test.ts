@@ -976,7 +976,7 @@ describe("TelegramCodexBridge", () => {
         profilesConfigPath: "/workspace/config/codex-profiles.json",
         profiles: {
           general: {
-            defaultCwd: "/home/dev",
+            defaultCwd: "/home/dev/general",
             homePath: "/srv/kirbot/codex-home-general",
             model: "gpt-5",
             reasoningEffort: "medium",

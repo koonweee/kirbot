@@ -247,7 +247,7 @@ describe("createKirbotRuntime profile routing", () => {
       docsHomePath
     ]);
     expect(mocks.codexGatewayInstances.map((instance) => (instance.config as { defaultCwd: string }).defaultCwd)).toEqual([
-      "/home/dev",
+      "/home/dev/general",
       "/home/dev/coding",
       "/home/dev/docs"
     ]);
@@ -350,7 +350,7 @@ describe("createKirbotRuntime profile routing", () => {
     const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
     const config = buildConfig(generalHomePath, codingHomePath);
     config.codex.profiles.general = {
-      defaultCwd: "/home/dev",
+      defaultCwd: "/home/dev/general",
       homePath: generalHomePath,
       model: undefined,
       reasoningEffort: "medium",
@@ -455,7 +455,7 @@ function buildConfig(
       profilesConfigPath: "/workspace/config/codex-profiles.json",
       profiles: {
         general: {
-          defaultCwd: "/home/dev",
+          defaultCwd: "/home/dev/general",
           homePath: generalHomePath,
           model: "gpt-5",
           reasoningEffort: "medium",

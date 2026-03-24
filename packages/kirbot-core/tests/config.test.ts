@@ -65,7 +65,7 @@ describe("core config module", () => {
           thread: "coding",
           plan: "coding"
         });
-        expect(config.codex.profiles.general!.defaultCwd).toBe("/home/dev");
+        expect(config.codex.profiles.general!.defaultCwd).toBe("/home/dev/general");
         expect(config.codex.profiles.coding!.defaultCwd).toBe("/home/dev/coding");
         expect(config.codex.profiles.general!.homePath).toBe("/var/lib/kirbot/homes/general");
         expect(config.codex.profiles.coding!.homePath).toBe("/var/lib/kirbot/homes/coding");
@@ -575,7 +575,7 @@ describe("core config module", () => {
 
 function createProfile(overrides: Partial<CodexProfilesFile["profiles"][string]> = {}) {
   return {
-    defaultCwd: "/home/dev",
+    defaultCwd: "/home/dev/general",
     model: "gpt-5",
     reasoningEffort: "medium",
     serviceTier: "flex",
