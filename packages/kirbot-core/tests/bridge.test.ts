@@ -232,7 +232,9 @@ const ZERO_SPACING_DELIVERY_POLICY = {
 
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
+  createThreadProfileIds: string[] = [];
   readThreadCalls: string[] = [];
+  readProfileSettingsCalls: string[] = [];
   createThreadCalls: Array<{
     title: string;
     cwd?: string | null;
@@ -254,6 +256,7 @@ class FakeCodex implements BridgeCodexApi {
     sandboxPolicy?: SandboxPolicy;
   }> = [];
   compactThreadCalls: Array<{ threadId: string }> = [];
+  archiveThreadCalls: Array<{ threadId: string }> = [];
   turns: Array<{ threadId: string; text: string; input: UserInput[]; turnId: string }> = [];
   turnCollaborationModes: Array<{ turnId: string; collaborationMode: unknown | null }> = [];
   turnOverrides: Array<{ turnId: string; overrides: unknown | null }> = [];
@@ -289,7 +292,19 @@ class FakeCodex implements BridgeCodexApi {
   threadSandboxPolicy: SandboxPolicy | undefined = undefined;
   threadCwd: string | undefined = undefined;
   threadName: string | undefined = undefined;
+  missingThreadIds = new Set<string>();
   #nextThreadId = 1;
+  profileSettings: Record<string, Partial<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }>> = {
+    general: {},
+    coding: {}
+  };
   models: Model[] = [
     {
       id: "model-1",
@@ -351,7 +366,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    void profileId;
+    this.createThreadProfileIds.push(profileId);
     this.createdThreads.push(optionsTitle);
     this.createThreadCalls.push({
       title: optionsTitle,
@@ -359,12 +374,13 @@ class FakeCodex implements BridgeCodexApi {
       ...(options?.settings !== undefined ? { settings: options.settings } : {})
     });
     const threadId = `thread-${this.#nextThreadId++}`;
+    const profileSettings = this.#getProfileSettings(profileId);
     const initialSettings = options?.settings ?? {
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
-      serviceTier: this.serviceTier,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy
+      model: profileSettings.model,
+      reasoningEffort: profileSettings.reasoningEffort,
+      serviceTier: profileSettings.serviceTier,
+      approvalPolicy: profileSettings.approvalPolicy,
+      sandboxPolicy: profileSettings.sandboxPolicy
     };
     this.threadModel = initialSettings.model;
     this.threadReasoningEffort = initialSettings.reasoningEffort ?? null;
@@ -390,6 +406,7 @@ class FakeCodex implements BridgeCodexApi {
     cwd: string;
   }> {
     this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/read");
     this.readThreadCalls.push(threadId);
     return {
       name: this.threadName ?? null,
@@ -405,15 +422,8 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    void profileId;
-    return {
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
-      serviceTier: this.serviceTier,
-      cwd: this.cwd,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy
-    };
+    this.readProfileSettingsCalls.push(profileId);
+    return { ...this.#getProfileSettings(profileId) };
   }
 
   async updateProfileSettings(profileId: string, update: {
@@ -430,22 +440,32 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    void profileId;
     this.globalSettingsUpdates.push(update);
-    if (update.model) {
-      this.model = update.model;
-    }
-    if ("reasoningEffort" in update) {
-      this.reasoningEffort = update.reasoningEffort ?? null;
-    }
-    if ("serviceTier" in update) {
-      this.serviceTier = update.serviceTier ?? null;
-    }
-    if (update.approvalPolicy) {
-      this.approvalPolicy = update.approvalPolicy;
-    }
-    if (update.sandboxPolicy) {
-      this.sandboxPolicy = update.sandboxPolicy;
+    const current = this.profileSettings[profileId] ?? {};
+    this.profileSettings[profileId] = {
+      ...current,
+      ...(update.model !== undefined ? { model: update.model } : {}),
+      ...("reasoningEffort" in update ? { reasoningEffort: update.reasoningEffort ?? null } : {}),
+      ...("serviceTier" in update ? { serviceTier: update.serviceTier ?? null } : {}),
+      ...(update.approvalPolicy !== undefined ? { approvalPolicy: update.approvalPolicy } : {}),
+      ...(update.sandboxPolicy !== undefined ? { sandboxPolicy: update.sandboxPolicy } : {})
+    };
+    if (profileId === "general") {
+      if (update.model) {
+        this.model = update.model;
+      }
+      if ("reasoningEffort" in update) {
+        this.reasoningEffort = update.reasoningEffort ?? null;
+      }
+      if ("serviceTier" in update) {
+        this.serviceTier = update.serviceTier ?? null;
+      }
+      if (update.approvalPolicy) {
+        this.approvalPolicy = update.approvalPolicy;
+      }
+      if (update.sandboxPolicy) {
+        this.sandboxPolicy = update.sandboxPolicy;
+      }
     }
 
     return this.readProfileSettings(profileId);
@@ -460,6 +480,7 @@ class FakeCodex implements BridgeCodexApi {
     sandboxPolicy: SandboxPolicy;
   }> {
     this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/load");
     this.ensuredThreads.push(threadId);
     return {
       model: this.threadModel ?? this.model,
@@ -473,6 +494,7 @@ class FakeCodex implements BridgeCodexApi {
 
   async compactThread(threadId: string): Promise<void> {
     this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/compact");
     this.compactThreadCalls.push({ threadId });
   }
 
@@ -578,10 +600,13 @@ class FakeCodex implements BridgeCodexApi {
 
   async archiveThread(threadId: string): Promise<void> {
     this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/archive");
+    this.archiveThreadCalls.push({ threadId });
   }
 
   async readTurnSnapshot(threadId: string): Promise<ResolvedTurnSnapshot> {
     this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/readTurnSnapshot");
     return {
       text: this.readTurnMessagesResult,
       assistantText: this.readTurnMessagesResult,
@@ -673,6 +698,39 @@ class FakeCodex implements BridgeCodexApi {
     if (!this.registeredThreadProfiles.has(threadId)) {
       throw new Error(`Thread route not registered before use: ${threadId}`);
     }
+  }
+
+  #getProfileSettings(profileId: string): {
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  } {
+    return {
+      model: this.model,
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      cwd: this.cwd,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy,
+      ...(this.profileSettings[profileId] ?? {})
+    };
+  }
+
+  #maybeThrowMissingThread(threadId: string, method: string): void {
+    if (!this.missingThreadIds.has(threadId)) {
+      return;
+    }
+
+    throw new JsonRpcMethodError(method, 1, {
+      code: -32004,
+      message: "Thread not found",
+      data: {
+        kind: "thread_not_found"
+      }
+    });
   }
 }
 
@@ -1027,6 +1085,34 @@ describe("TelegramCodexBridge", () => {
     expect(session?.profileId).toBe("general");
   });
 
+  it("routes root session creation through config.codex.routing.general", async () => {
+    config.codex.routing.general = "coding";
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 16,
+      updateId: 26,
+      userId: 42,
+      text: "Use the routed root profile"
+    });
+
+    expect(codex.createThreadProfileIds).toEqual(["coding"]);
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "Root Chat",
+      settings: expect.objectContaining({
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high"
+      })
+    });
+    expect((await database.getRootSessionByChat(-1001))?.profileId).toBe("coding");
+  });
+
   it("re-registers a persisted root session route before using its thread after restart", async () => {
     codex.enforceThreadRouteRegistration = true;
     const pending = await database.createProvisioningSession({
@@ -1124,6 +1210,144 @@ describe("TelegramCodexBridge", () => {
     expect(codex.listModelsCalls).toEqual(["coding"]);
   });
 
+  it("re-registers a persisted topic session route before a mode command resumes the thread after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 778 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateTopicSessionSettings(-1001, 778, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 778,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/plan resume with a plan"
+    });
+
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-resumed",
+          profileId: "coding"
+        }
+      ])
+    );
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-resumed",
+        text: "resume with a plan",
+        turnId: "turn-1"
+      }
+    ]);
+  });
+
+  it("surfaces a clear failure when a persisted session belongs to a removed legacy Codex home", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 779 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy");
+    await database.updateTopicSessionSettings(-1001, 779, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 779,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "Resume the removed legacy session"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic."
+    );
+    expect(codex.turns).toEqual([]);
+  });
+
+  it("re-registers a persisted topic session route before compacting and archiving after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 780 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateTopicSessionSettings(-1001, 780, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 780,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "/compact"
+    });
+    await bridge.handleTopicClosed({
+      chatId: -1001,
+      topicId: 780
+    });
+
+    expect(codex.compactThreadCalls).toEqual([{ threadId: "thread-resumed" }]);
+    expect(codex.archiveThreadCalls).toEqual([{ threadId: "thread-resumed" }]);
+    expect(
+      codex.registerThreadProfileCalls.filter((call) => (
+        call.threadId === "thread-resumed" && call.profileId === "coding"
+      ))
+    ).toHaveLength(2);
+  });
+
   it("treats General as the shared root slash-command scope", () => {
     expect(isAllowedSlashCommandInScope("plan", "general")).toBe(true);
     expect(isAllowedSlashCommandInScope("thread", "general")).toBe(true);
@@ -1155,6 +1379,51 @@ describe("TelegramCodexBridge", () => {
     const codingDefaults = await database.getChatProfileDefaults("-1001", "coding");
     expect(generalDefaults?.model).toBeNull();
     expect(codingDefaults?.model).toBeNull();
+  });
+
+  it("seeds profile-aware chat defaults from readProfileSettings(profileId) for the routed profile", async () => {
+    config.codex.routing.general = "coding";
+    config.codex.routing.thread = "general";
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    };
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4-codex",
+      serviceTier: "fast"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 19,
+      updateId: 29,
+      userId: 42,
+      text: "Seed the root defaults"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 20,
+      updateId: 30,
+      userId: 42,
+      text: "/thread Seed the topic defaults"
+    });
+
+    expect(codex.readProfileSettingsCalls).toEqual(
+      expect.arrayContaining(["coding", "general"])
+    );
+    expect(await database.getChatProfileDefaults("-1001", "coding")).toMatchObject({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    });
+    expect(await database.getChatProfileDefaults("-1001", "general")).toMatchObject({
+      model: "gpt-5.4-codex",
+      serviceTier: "fast"
+    });
   });
 
   it("does not attach the command keyboard to a completion footer unless requested", async () => {
@@ -1751,6 +2020,34 @@ describe("TelegramCodexBridge", () => {
     expect(session?.profileId).toBe("coding");
   });
 
+  it("routes /thread session creation through config.codex.routing.thread", async () => {
+    config.codex.routing.thread = "general";
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4-codex",
+      serviceTier: "fast"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "/thread Route this thread"
+    });
+
+    expect(codex.createThreadProfileIds).toEqual(["general"]);
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "Route this thread",
+      settings: expect.objectContaining({
+        model: "gpt-5.4-codex",
+        serviceTier: "fast"
+      })
+    });
+    expect((await database.getSessionByTopic(-1001, 101))?.profileId).toBe("general");
+  });
+
   it("rejects bare root /thread before creating a topic", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1845,6 +2142,37 @@ describe("TelegramCodexBridge", () => {
     expect(getInlineButtonTexts(rootConfirmation)).toEqual(["View"]);
     expect(getButtonUrlByButtonText(rootConfirmation, "View")).toBe("https://t.me/c/1/101");
 
+  });
+
+  it("routes /plan session creation through config.codex.routing.plan and keeps preferred mode plan", async () => {
+    config.codex.routing.plan = "general";
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4-codex",
+      reasoningEffort: "high"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/plan route the plan"
+    });
+
+    expect(codex.createThreadProfileIds).toEqual(["general"]);
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "route the plan",
+      settings: expect.objectContaining({
+        model: "gpt-5.4-codex",
+        reasoningEffort: "high"
+      })
+    });
+    expect(await database.getSessionByTopic(-1001, 101)).toMatchObject({
+      profileId: "general",
+      preferredMode: "plan"
+    });
   });
 
   it("preserves image attachments for root /plan turns started from an image caption", async () => {

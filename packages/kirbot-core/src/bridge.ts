@@ -194,11 +194,19 @@ const PLAN_MODE_EXITED_TEXT = "Exited plan mode";
 const COMMANDS_KEYBOARD_TEXT = "Commands";
 const DEFAULT_ROOT_SESSION_TITLE = "Root Chat";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
+const LEGACY_CODEX_HOME_REMOVED_TEXT = "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic.";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
 const ROOT_SESSION_PROVISIONING_TEXT = "The General Codex session is still provisioning. Try again in a moment";
 const WORKSPACE_CHAT_ONLY_TEXT = "Use Kirbot from the configured workspace forum chat.";
+
+class LegacyRemovedCodexHomeSessionError extends Error {
+  constructor() {
+    super("Session belonged to a removed legacy Codex home");
+    this.name = "LegacyRemovedCodexHomeSessionError";
+  }
+}
 
 export class TelegramCodexBridge {
   readonly #queuePreviewMessageIds = new Map<string, number>();
@@ -288,12 +296,20 @@ export class TelegramCodexBridge {
       return;
     }
 
-    if (message.topicId === null) {
-      await this.handleRootMessage(message);
-      return;
-    }
+    try {
+      if (message.topicId === null) {
+        await this.handleRootMessage(message);
+        return;
+      }
 
-    await this.handleTopicMessage(message);
+      await this.handleTopicMessage(message);
+    } catch (error) {
+      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   async handleTopicClosed(event: TopicLifecycleEvent): Promise<void> {
@@ -307,8 +323,12 @@ export class TelegramCodexBridge {
     }
 
     try {
-      await this.codex.archiveThread(session.codexThreadId);
+      await this.withRegisteredPersistedThread(session, (threadId) => this.codex.archiveThread(threadId));
     } catch (error) {
+      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        return;
+      }
+
       this.logger.error("Failed to archive Codex thread", error);
     }
   }
@@ -326,40 +346,48 @@ export class TelegramCodexBridge {
   }
 
   async handleCallbackQuery(event: CallbackQueryEvent): Promise<void> {
-    if (event.chatId !== this.config.telegram.workspaceChatId) {
+    try {
+      if (event.chatId !== this.config.telegram.workspaceChatId) {
+        await this.answerCallbackQuery(event.callbackQueryId, {
+          text: WORKSPACE_CHAT_ONLY_TEXT
+        });
+        return;
+      }
+
+      if (await this.#requestCoordinator.handleCallbackQuery(event)) {
+        return;
+      }
+
+      if (event.data.startsWith("customcmd:")) {
+        await this.handleCustomCommandCallbackQuery(event);
+        return;
+      }
+
+      if (event.data.startsWith("slash:")) {
+        await this.handleSlashCallbackQuery(event);
+        return;
+      }
+
+      if (event.data.startsWith("turn:")) {
+        await this.handleTurnCallbackQuery(event);
+        return;
+      }
+
+      if (event.data === TOPIC_IMPLEMENT_CALLBACK_DATA) {
+        await this.handleTopicImplementCallbackQuery(event);
+        return;
+      }
+
       await this.answerCallbackQuery(event.callbackQueryId, {
-        text: WORKSPACE_CHAT_ONLY_TEXT
+        text: "Unsupported callback"
       });
-      return;
-    }
+    } catch (error) {
+      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        return;
+      }
 
-    if (await this.#requestCoordinator.handleCallbackQuery(event)) {
-      return;
+      throw error;
     }
-
-    if (event.data.startsWith("customcmd:")) {
-      await this.handleCustomCommandCallbackQuery(event);
-      return;
-    }
-
-    if (event.data.startsWith("slash:")) {
-      await this.handleSlashCallbackQuery(event);
-      return;
-    }
-
-    if (event.data.startsWith("turn:")) {
-      await this.handleTurnCallbackQuery(event);
-      return;
-    }
-
-    if (event.data === TOPIC_IMPLEMENT_CALLBACK_DATA) {
-      await this.handleTopicImplementCallbackQuery(event);
-      return;
-    }
-
-    await this.answerCallbackQuery(event.callbackQueryId, {
-      text: "Unsupported callback"
-    });
   }
 
   private async rejectUnsupportedChatMessage(message: UserTurnMessage): Promise<void> {
@@ -1062,8 +1090,12 @@ export class TelegramCodexBridge {
       });
       this.#compactionNoticeMessageIds.set(session.codexThreadId!, notice.messageId);
 
-      await this.codex.compactThread(session.codexThreadId!);
+      await this.withRegisteredPersistedThread(session, (threadId) => this.codex.compactThread(threadId));
     } catch (error) {
+      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        return;
+      }
+
       this.logger.error("Failed to compact thread", error);
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
@@ -1147,8 +1179,11 @@ export class TelegramCodexBridge {
 
     try {
       const hydratedSession = await this.ensurePersistedSessionSettings(session);
-      const loaded = await this.codex.ensureThreadLoaded(hydratedSession.codexThreadId!);
-      const thread = await this.codex.readThread(hydratedSession.codexThreadId!);
+      const loaded = await this.resolveHydratedThreadStartSettings(hydratedSession);
+      const thread = await this.withRegisteredPersistedThread(
+        hydratedSession,
+        (threadId) => this.codex.readThread(threadId)
+      );
       const title = thread.name ?? (isRootBridgeSession(hydratedSession) ? DEFAULT_ROOT_SESSION_TITLE : "Fresh Codex Thread");
       const freshThread = await this.codex.createThread(hydratedSession.profileId, title, {
         cwd: loaded.cwd,
@@ -1162,6 +1197,10 @@ export class TelegramCodexBridge {
         text: "Started a fresh Codex thread"
       });
     } catch (error) {
+      if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        return;
+      }
+
       this.logger.error("Failed to clear thread", error);
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
@@ -1812,18 +1851,19 @@ export class TelegramCodexBridge {
         text: ROOT_SESSION_PROVISIONING_TEXT
       });
     }, async () => {
+      const profileId = this.resolveConfiguredProfileId("general");
       const pending = await this.database.createProvisioningSession({
         telegramChatId: String(message.chatId),
         surface: { kind: "general" },
-        profileId: "general"
+        profileId
       });
 
       try {
-        const rootSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.root);
-        const thread = await this.codex.createThread("general", DEFAULT_ROOT_SESSION_TITLE, {
+        const rootSettings = (await this.getChatThreadSettingsDefaults(message.chatId)).root;
+        const thread = await this.codex.createThread(profileId, DEFAULT_ROOT_SESSION_TITLE, {
           settings: toCodexThreadSettingsOverride(rootSettings)
         });
-        this.codex.registerThreadProfile(thread.threadId, "general");
+        this.codex.registerThreadProfile(thread.threadId, profileId);
         await this.database.activateSession(pending.id, thread.threadId);
         let session = await this.database.getRootSessionByChat(message.chatId);
         if (!session) {
@@ -1860,6 +1900,7 @@ export class TelegramCodexBridge {
       topicMessage,
       title,
       {
+        profileId: this.resolveConfiguredProfileId("plan"),
         initialPromptText: trimmedPrompt,
         initialPreferredMode: "plan",
         postActivationTopicMessage: PLAN_MODE_ENABLED_TEXT,
@@ -1895,6 +1936,7 @@ export class TelegramCodexBridge {
     };
 
     await this.startSessionInTopic(topicMessage, title, {
+      profileId: this.resolveConfiguredProfileId("thread"),
       initialPromptText: trimmedPrompt,
       firstTurnMessage: replaceMessageText(topicMessage, trimmedPrompt)
     });
@@ -1906,13 +1948,16 @@ export class TelegramCodexBridge {
     }
 
     const title = deriveTopicTitle(message.text);
-    await this.startSessionInTopic(message, title);
+    await this.startSessionInTopic(message, title, {
+      profileId: this.resolveConfiguredProfileId("thread")
+    });
   }
 
   private async startSessionInTopic(
     message: UserTurnMessage,
     title: string,
     options?: {
+      profileId?: string;
       initialPromptText?: string;
       initialPreferredMode?: SessionMode;
       startInitialTurn?: boolean;
@@ -1925,6 +1970,7 @@ export class TelegramCodexBridge {
       throw new Error("Cannot start a session without a Telegram topic id");
     }
     const topicId = message.topicId;
+    const profileId = options?.profileId ?? this.resolveConfiguredProfileId("thread");
 
     await this.runSessionProvisioning(message.chatId, topicId, async () => {
       await this.sendScopedBridgeMessage({
@@ -1936,16 +1982,16 @@ export class TelegramCodexBridge {
       const pending = await this.database.createProvisioningSession({
         telegramChatId: String(message.chatId),
         telegramTopicId: topicId,
-        profileId: "coding"
+        profileId
       });
 
       try {
-        const spawnSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.spawn);
-        const thread = await this.codex.createThread("coding", title, {
+        const spawnSettings = await this.getChatProfileDefaults(message.chatId, profileId);
+        const thread = await this.codex.createThread(profileId, title, {
           ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
           settings: toCodexThreadSettingsOverride(spawnSettings)
         });
-        this.codex.registerThreadProfile(thread.threadId, "coding");
+        this.codex.registerThreadProfile(thread.threadId, profileId);
         await this.database.activateSession(pending.id, thread.threadId);
         let session = await this.database.getSessionByTopic(message.chatId, topicId);
         if (!session) {
@@ -2093,11 +2139,14 @@ export class TelegramCodexBridge {
     root: PersistedThreadSettings;
     spawn: PersistedThreadSettings;
   }> {
-    const globalSettings = toPersistedThreadSettings(
-      await this.requireProfileSettingsApi().readProfileSettings("general")
+    const general = await this.getChatProfileDefaults(
+      chatId,
+      this.resolveConfiguredProfileId("general")
     );
-    const general = await this.ensureChatProfileSettingsDefaults(chatId, "general", globalSettings);
-    const coding = await this.ensureChatProfileSettingsDefaults(chatId, "coding", globalSettings);
+    const coding = await this.getChatProfileDefaults(
+      chatId,
+      this.resolveConfiguredProfileId("thread")
+    );
     return {
       root: general,
       spawn: coding
@@ -2109,27 +2158,43 @@ export class TelegramCodexBridge {
     scope: Exclude<SettingsSelectionScope, "thread">,
     update: CodexThreadSettingsOverride
   ): Promise<PersistedThreadSettings> {
-    const defaults = await this.getChatThreadSettingsDefaults(chatId);
-    const nextScopeSettings = mergePersistedThreadSettings(defaults[scope], update);
-    await this.database.upsertChatProfileDefaults(
-      String(chatId),
-      scope === "root" ? "general" : "coding",
-      nextScopeSettings
+    return this.updateChatProfileDefaults(
+      chatId,
+      scope === "root"
+        ? this.resolveConfiguredProfileId("general")
+        : this.resolveConfiguredProfileId("thread"),
+      update
     );
-    return nextScopeSettings;
   }
 
-  private async ensureChatProfileSettingsDefaults(
+  private async getChatProfileDefaults(
     chatId: number,
-    profileId: "general" | "coding",
-    fallback: PersistedThreadSettings
+    profileId: string
   ): Promise<PersistedThreadSettings> {
     const existing = await this.database.getChatProfileDefaults(String(chatId), profileId);
     if (existing) {
       return existing;
     }
 
+    const fallback = toPersistedThreadSettings(
+      await this.requireProfileSettingsApi().readProfileSettings(profileId)
+    );
     return this.database.upsertChatProfileDefaults(String(chatId), profileId, fallback);
+  }
+
+  private async updateChatProfileDefaults(
+    chatId: number,
+    profileId: string,
+    update: CodexThreadSettingsOverride
+  ): Promise<PersistedThreadSettings> {
+    const defaults = await this.getChatProfileDefaults(chatId, profileId);
+    const nextSettings = mergePersistedThreadSettings(defaults, update);
+    await this.database.upsertChatProfileDefaults(String(chatId), profileId, nextSettings);
+    return nextSettings;
+  }
+
+  private resolveConfiguredProfileId(route: keyof AppConfig["codex"]["routing"]): string {
+    return this.config.codex.routing[route]!;
   }
 
   private requireProfileSettingsApi(): {
@@ -2207,10 +2272,10 @@ export class TelegramCodexBridge {
     }
 
     if (target.scope === "root") {
-      return target.session?.profileId ?? "general";
+      return target.session?.profileId ?? this.resolveConfiguredProfileId("general");
     }
 
-    return this.config.codex.routing.thread;
+    return this.resolveConfiguredProfileId("thread");
   }
 
   private async resolveCodexSettingsCommandTarget(
@@ -2236,7 +2301,9 @@ export class TelegramCodexBridge {
     if (location.topicId === null) {
       return {
         scope: "global",
-        settings: await this.requireProfileSettingsApi().readProfileSettings("general")
+        settings: await this.requireProfileSettingsApi().readProfileSettings(
+          this.resolveConfiguredProfileId("general")
+        )
       };
     }
 
@@ -2259,10 +2326,11 @@ export class TelegramCodexBridge {
       return null;
     }
 
+    const hydratedSession = await this.ensurePersistedSessionSettings(session);
     return {
       scope: "thread",
-      session: await this.ensurePersistedSessionSettings(session),
-      settings: await this.resolveThreadStartSettings(session)
+      session: hydratedSession,
+      settings: await this.resolveHydratedThreadStartSettings(hydratedSession)
     };
   }
 
@@ -2278,21 +2346,25 @@ export class TelegramCodexBridge {
     }
 
     const hydratedSession = await this.ensurePersistedSessionSettings(session);
-    const effectiveSettings = await this.resolveThreadStartSettings(hydratedSession);
+    const effectiveSettings = await this.resolveHydratedThreadStartSettings(hydratedSession);
+    const threadId = hydratedSession.codexThreadId!;
     const turn = await this.submitPreparedInput(message, {
       submit: (input) =>
-        this.codex.sendTurn(
-          session.codexThreadId!,
-          input,
-          {
-            overrides: toCodexThreadSettingsOverride(hydratedSession.settings),
-            collaborationMode: buildTurnCollaborationMode(
-              options?.forceMode ?? session.preferredMode,
-              effectiveSettings,
-              this.config.codex.developerInstructions ?? null,
-              options?.forceMode === "default"
-            )
-          }
+        this.withRegisteredPersistedThread(
+          hydratedSession,
+          (registeredThreadId) => this.codex.sendTurn(
+            registeredThreadId,
+            input,
+            {
+              overrides: toCodexThreadSettingsOverride(hydratedSession.settings),
+              collaborationMode: buildTurnCollaborationMode(
+                options?.forceMode ?? session.preferredMode,
+                effectiveSettings,
+                this.config.codex.developerInstructions ?? null,
+                options?.forceMode === "default"
+              )
+            }
+          )
         )
     });
     this.#turnsAwaitingActivation.add(turn.id);
@@ -2300,7 +2372,7 @@ export class TelegramCodexBridge {
     try {
       const activeTurn = this.#lifecycle.activateTurn(
         message,
-        session.codexThreadId!,
+        threadId,
         turn.id,
         effectiveSettings.model,
         effectiveSettings.reasoningEffort,
@@ -2346,7 +2418,7 @@ export class TelegramCodexBridge {
           await this.handleCodexEvent(event);
           return;
         }
-        this.logger.warn(`Dropped Codex event for unknown turn ${turnId}`);
+        this.stageTurnEvent(turnId, event);
         return;
       }
 
@@ -2666,7 +2738,10 @@ export class TelegramCodexBridge {
   private async resolveTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot> {
     const streamedAssistantText = this.#lifecycle.renderAssistantItems(turnId);
     const streamedPlanText = this.#lifecycle.renderPlanItems(turnId);
-    const snapshot = await this.codex.readTurnSnapshot(threadId, turnId);
+    const snapshot = await this.withRegisteredPersistedThread(
+      threadId,
+      (registeredThreadId) => this.codex.readTurnSnapshot(registeredThreadId, turnId)
+    );
     return {
       ...snapshot,
       assistantText: snapshot.assistantText.trim().length > 0 ? snapshot.assistantText : streamedAssistantText,
@@ -2896,18 +2971,52 @@ export class TelegramCodexBridge {
       : this.database.getSessionBySurface(chatId, { kind: "topic", topicId });
   }
 
+  private async withRegisteredPersistedThread<T>(
+    sessionOrThreadId: TopicSession | BridgeSession | string,
+    operation: (threadId: string) => Promise<T>
+  ): Promise<T> {
+    const session =
+      typeof sessionOrThreadId === "string"
+        ? await this.database.getSessionByCodexThreadId(sessionOrThreadId)
+        : sessionOrThreadId;
+    const threadId =
+      typeof sessionOrThreadId === "string"
+        ? sessionOrThreadId
+        : sessionOrThreadId.codexThreadId;
+
+    if (!threadId) {
+      throw new Error("Cannot operate on a persisted session without a Codex thread id");
+    }
+
+    if (session?.codexThreadId) {
+      this.codex.registerThreadProfile(session.codexThreadId, session.profileId);
+    }
+
+    try {
+      return await operation(threadId);
+    } catch (error) {
+      if (session && this.isRemovedLegacyCodexHomeThreadError(error)) {
+        await this.sendLegacyRemovedCodexHomeMessage(session);
+        throw new LegacyRemovedCodexHomeSessionError();
+      }
+
+      throw error;
+    }
+  }
+
   private async ensurePersistedSessionSettings<T extends TopicSession | BridgeSession>(session: T): Promise<T> {
     if (!session.codexThreadId) {
       return session;
     }
 
-    this.codex.registerThreadProfile(session.codexThreadId, session.profileId);
-
     if (persistedThreadSettingsAreComplete(session.settings)) {
       return session;
     }
 
-    const loaded = await this.codex.ensureThreadLoaded(session.codexThreadId);
+    const loaded = await this.withRegisteredPersistedThread(
+      session,
+      (threadId) => this.codex.ensureThreadLoaded(threadId)
+    );
     const persisted = toPersistedThreadSettings(loaded);
     const updated =
       isRootBridgeSession(session)
@@ -2921,10 +3030,12 @@ export class TelegramCodexBridge {
     return (updated as T | undefined) ?? { ...session, settings: persisted };
   }
 
-  private async resolveThreadStartSettings(session: TopicSession | BridgeSession): Promise<ThreadStartSettings> {
-    const hydratedSession = await this.ensurePersistedSessionSettings(session);
-    const loaded = await this.codex.ensureThreadLoaded(hydratedSession.codexThreadId!);
-    return persistedThreadSettingsToThreadStartSettings(hydratedSession.settings, loaded.cwd);
+  private async resolveHydratedThreadStartSettings(session: TopicSession | BridgeSession): Promise<ThreadStartSettings> {
+    const loaded = await this.withRegisteredPersistedThread(
+      session,
+      (threadId) => this.codex.ensureThreadLoaded(threadId)
+    );
+    return persistedThreadSettingsToThreadStartSettings(session.settings, loaded.cwd);
   }
 
   private async updateSessionSettingsForSurface(
@@ -2947,8 +3058,7 @@ export class TelegramCodexBridge {
         ? await this.database.updateRootSessionSettings(chatId, merged)
         : await this.database.updateTopicSessionSettings(chatId, surface.topicId, merged);
     const nextSession = updated ?? { ...hydratedSession, settings: merged };
-    const loaded = await this.codex.ensureThreadLoaded(nextSession.codexThreadId!);
-    return persistedThreadSettingsToThreadStartSettings(nextSession.settings, loaded.cwd);
+    return this.resolveHydratedThreadStartSettings(nextSession);
   }
 
   private async maybeUpdateRootSessionSettings(chatId: number, update: CodexThreadSettingsOverride): Promise<void> {
@@ -2958,6 +3068,42 @@ export class TelegramCodexBridge {
     }
 
     await this.updateSessionSettingsForSurface(chatId, { kind: "general" }, update);
+  }
+
+  private isRemovedLegacyCodexHomeThreadError(error: unknown): boolean {
+    const normalizedMessage = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    if (
+      normalizedMessage.includes("thread not found") ||
+      normalizedMessage.includes("unknown thread") ||
+      normalizedMessage.includes("no such thread")
+    ) {
+      return true;
+    }
+
+    if (!isRecord(error) || error.constructor?.name !== "JsonRpcMethodError") {
+      return false;
+    }
+
+    const data = isRecord(error.data) ? error.data : null;
+    const kind = typeof data?.kind === "string" ? data.kind.toLowerCase() : "";
+    return (
+      kind.includes("thread_not_found") ||
+      kind.includes("thread-not-found") ||
+      kind.includes("missing_thread") ||
+      kind.includes("not_found")
+    );
+  }
+
+  private isLegacyRemovedCodexHomeSessionError(error: unknown): error is LegacyRemovedCodexHomeSessionError {
+    return error instanceof LegacyRemovedCodexHomeSessionError;
+  }
+
+  private async sendLegacyRemovedCodexHomeMessage(session: TopicSession | BridgeSession): Promise<void> {
+    await this.sendScopedBridgeMessage({
+      chatId: Number(session.telegramChatId),
+      ...(isRootBridgeSession(session) ? {} : { topicId: getSessionTopicId(session) }),
+      text: LEGACY_CODEX_HOME_REMOVED_TEXT
+    });
   }
 
 }
@@ -3064,6 +3210,10 @@ function buildSyntheticCallbackMessage(event: CallbackQueryEvent, text: string):
 
 function topicKey(chatId: number, topicId: number | null): string {
   return topicId === null ? `${chatId}:root` : `${chatId}:${topicId}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function buildFastStatusMessage(scope: "global" | "thread", serviceTier: ServiceTier | null): string {
