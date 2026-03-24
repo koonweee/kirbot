@@ -1031,6 +1031,8 @@ describe("TelegramCodexBridge", () => {
           general: {
             homePath: "/srv/kirbot/codex-home-general",
             model: "gpt-5",
+            reasoningEffort: "medium",
+            serviceTier: "flex",
             sandboxMode: "workspace-write",
             approvalPolicy: "on-request",
             skills: [],
@@ -1039,6 +1041,8 @@ describe("TelegramCodexBridge", () => {
           coding: {
             homePath: "/srv/kirbot/codex-home-coding",
             model: "gpt-5-codex",
+            reasoningEffort: "high",
+            serviceTier: "fast",
             sandboxMode: "danger-full-access",
             approvalPolicy: "never",
             skills: [],
@@ -3137,6 +3141,77 @@ describe("TelegramCodexBridge", () => {
     expect(codex.globalSettingsUpdates).toHaveLength(0);
   });
 
+  it("rejects General /fast changes while a turn is active", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 26,
+      userId: 42,
+      text: "Start General"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 27,
+      userId: 42,
+      text: "/fast on"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing settings"
+    );
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      settings: {
+        model: null,
+        reasoningEffort: null,
+        serviceTier: null,
+        approvalPolicy: null,
+        sandboxPolicy: null
+      }
+    });
+  });
+
+  it.each([
+    {
+      title: "General",
+      topicId: null,
+      startText: "Start General",
+      commandText: "/model"
+    },
+    {
+      title: "topic",
+      topicId: 781,
+      startText: "Start the session",
+      commandText: "/model"
+    }
+  ])("rejects $title /model changes while a turn is active", async ({ topicId, startText, commandText }) => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 12,
+      updateId: 28,
+      userId: 42,
+      text: startText
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 13,
+      updateId: 29,
+      userId: 42,
+      text: commandText
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing settings"
+    );
+    expect(codex.listModelsCalls).toEqual([]);
+  });
+
   it("applies General /fast only to the active General session", async () => {
     codex.readTurnSnapshotResult = {
       text: "Initial answer",
@@ -3467,6 +3542,7 @@ describe("TelegramCodexBridge", () => {
     await database.activateSession(pending.id, "thread-root-settings");
     await database.updateRootSessionSettings("-1001", {
       model: "gpt-5.4-mini",
+      reasoningEffort: null,
       serviceTier: null,
       approvalPolicy: null,
       sandboxPolicy: null

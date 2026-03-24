@@ -147,8 +147,8 @@ describe("codex home helpers", () => {
         skills: { brainstorming: {} },
         mcps: {},
         profiles: {
-          general: { skills: [], mcps: [] },
-          coding: { skills: ["brainstorming"], mcps: [] }
+          general: { reasoningEffort: "medium", serviceTier: "flex", skills: [], mcps: [] },
+          coding: { reasoningEffort: "high", serviceTier: "fast", skills: ["brainstorming"], mcps: [] }
         }
       })
     );

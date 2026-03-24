@@ -1360,10 +1360,10 @@ export class TelegramCodexBridge {
       return;
     }
 
-    if (target.scope === "thread" && this.findActiveTurnByTopic(location.chatId, location.topicId!)) {
+    if (this.findActiveTurnByTopic(location.chatId, location.topicId)) {
       await this.sendScopedBridgeMessage({
         chatId: location.chatId,
-        topicId: location.topicId!,
+        ...(location.topicId !== null ? { topicId: location.topicId } : {}),
         text: SETTINGS_CHANGE_REJECTED_TEXT
       });
       return;
@@ -1430,7 +1430,9 @@ export class TelegramCodexBridge {
     page = 0,
     scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
-    const target = await this.resolveThreadSettingsTarget(message, scope);
+    const target = await this.resolveThreadSettingsTarget(message, scope, {
+      rejectIfActiveTurn: true
+    });
     if (!target) {
       return false;
     }
@@ -1505,7 +1507,9 @@ export class TelegramCodexBridge {
     modelIndex: number,
     scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
-    const target = await this.resolveThreadSettingsTarget(message, scope);
+    const target = await this.resolveThreadSettingsTarget(message, scope, {
+      rejectIfActiveTurn: true
+    });
     if (!target) {
       return false;
     }
@@ -2100,6 +2104,8 @@ export class TelegramCodexBridge {
         settings: await this.resolveEffectiveThreadStartSettings(hydratedSession)
       };
     }
+
+    return null;
   }
 
   private resolveModelListProfileId(target: ThreadSettingsTarget): string {

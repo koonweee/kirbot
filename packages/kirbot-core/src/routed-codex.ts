@@ -74,10 +74,6 @@ export class RoutedCodexApi implements BridgeCodexApi {
     return this.#getGateway(profileId).readProfileSettings(profileId);
   }
 
-  async updateProfileSettings(profileId: string, update: CodexThreadSettingsOverride) {
-    return this.#getGateway(profileId).updateProfileSettings(profileId, update);
-  }
-
   async ensureThreadLoaded(threadId: string) {
     return this.#runThreadOperation(threadId, (gateway, upstreamThreadId) => gateway.ensureThreadLoaded(upstreamThreadId));
   }

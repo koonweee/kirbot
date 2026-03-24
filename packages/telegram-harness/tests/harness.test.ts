@@ -1154,6 +1154,8 @@ function createConfig(tempDir: string): AppConfig {
         general: {
           homePath: join(tempDir, "codex-general"),
           model: "gpt-5",
+          reasoningEffort: "medium",
+          serviceTier: "flex",
           sandboxMode: "workspace-write",
           approvalPolicy: "on-request",
           skills: [],
@@ -1162,6 +1164,8 @@ function createConfig(tempDir: string): AppConfig {
         coding: {
           homePath: join(tempDir, "codex-coding"),
           model: "gpt-5-codex",
+          reasoningEffort: "high",
+          serviceTier: "fast",
           sandboxMode: "danger-full-access",
           approvalPolicy: "never",
           skills: [],

@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { BridgeDatabase } from "../src/db";
@@ -213,12 +212,12 @@ describe("BridgeDatabase", () => {
 
   it("does not create a chat-level defaults table", async () => {
     const tables = await database.kysely
-      .selectFrom(sql<{ name: string }>`sqlite_master`)
-      .select("name")
-      .where("type", "=", "table")
+      .selectFrom("sqlite_master" as any)
+      .select("name" as any)
+      .where("type" as any, "=", "table")
       .execute();
 
-    expect(tables.map((table) => table.name)).not.toContain("chat_profile_defaults");
+    expect(tables.map((table) => (table as { name: string }).name)).not.toContain("chat_profile_defaults");
   });
 
   it("creates new sessions with all overrides unset", async () => {
