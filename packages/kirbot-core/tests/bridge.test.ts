@@ -975,13 +975,22 @@ describe("TelegramCodexBridge", () => {
       },
       codex: {
         defaultCwd: "/workspace",
+        profiles: {
+          general: { homePath: "/srv/kirbot/codex-home-general" },
+          coding: { homePath: "/srv/kirbot/codex-home-coding" }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        },
         model: undefined,
         modelProvider: undefined,
         sandbox: undefined,
         approvalPolicy: undefined,
         serviceName: "telegram-codex-bridge",
         baseInstructions: undefined,
-        developerInstructions: undefined,
+        developerInstructions: undefined as unknown as string,
         config: undefined
       }
     };
@@ -1025,6 +1034,7 @@ describe("TelegramCodexBridge", () => {
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
     expect(session?.surface).toEqual({ kind: "general" });
+    expect(session?.profileId).toBe("general");
   });
 
   it("treats General as the shared root slash-command scope", () => {
@@ -1054,9 +1064,10 @@ describe("TelegramCodexBridge", () => {
       })
     });
 
-    const defaults = await database.getChatThreadDefaults("-1001");
-    expect(defaults?.root.model).toBeNull();
-    expect(defaults?.spawn.model).toBeNull();
+    const generalDefaults = await database.getChatProfileDefaults("-1001", "general");
+    const codingDefaults = await database.getChatProfileDefaults("-1001", "coding");
+    expect(generalDefaults?.model).toBeNull();
+    expect(codingDefaults?.model).toBeNull();
   });
 
   it("does not attach the command keyboard to a completion footer unless requested", async () => {
@@ -1498,7 +1509,8 @@ describe("TelegramCodexBridge", () => {
   it("recovers the root session after a prior provisioning failure left it errored", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     await database.markSessionErrored(pending.id);
 
@@ -1523,6 +1535,7 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getRootSessionByChat(-1001);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+    expect(session?.profileId).toBe("general");
   });
 
   it("rebuilds and restarts kirbot from root /restart", async () => {
@@ -1646,6 +1659,9 @@ describe("TelegramCodexBridge", () => {
     });
     expect(getInlineButtonTexts(rootConfirmation)).toEqual(["View"]);
     expect(getButtonUrlByButtonText(rootConfirmation, "View")).toBe("https://t.me/c/1/101");
+
+    const session = await database.getSessionByTopic(-1001, 101);
+    expect(session?.profileId).toBe("coding");
   });
 
   it("rejects bare root /thread before creating a topic", async () => {
@@ -7667,7 +7683,8 @@ describe("TelegramCodexBridge", () => {
   it("keeps generic provisioning messages unmentioned", async () => {
     await database.createProvisioningSession({
       telegramChatId: "-1001",
-      telegramTopicId: 2004
+      telegramTopicId: 2004,
+      profileId: "coding"
     });
 
     await bridge.handleUserTextMessage({
@@ -7684,6 +7701,9 @@ describe("TelegramCodexBridge", () => {
       "This topic is still provisioning a Codex session. Try again in a moment"
     );
     expect(telegram.sentMessages.at(-1)?.text.startsWith("@starter-user ")).toBe(false);
+    expect(await database.getSessionByTopic(-1001, 2004)).toMatchObject({
+      profileId: "coding"
+    });
   });
 
   it("cleans up pending approval prompts when the app server resolves them elsewhere", async () => {

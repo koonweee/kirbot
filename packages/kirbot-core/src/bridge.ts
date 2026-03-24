@@ -1804,7 +1804,8 @@ export class TelegramCodexBridge {
     }, async () => {
       const pending = await this.database.createProvisioningSession({
         telegramChatId: String(message.chatId),
-        surface: { kind: "general" }
+        surface: { kind: "general" },
+        profileId: "general"
       });
 
       try {
@@ -1923,7 +1924,8 @@ export class TelegramCodexBridge {
     }, async () => {
       const pending = await this.database.createProvisioningSession({
         telegramChatId: String(message.chatId),
-        telegramTopicId: topicId
+        telegramTopicId: topicId,
+        profileId: "coding"
       });
 
       try {
@@ -2079,23 +2081,12 @@ export class TelegramCodexBridge {
     root: PersistedThreadSettings;
     spawn: PersistedThreadSettings;
   }> {
-    const existing = await this.database.getChatThreadDefaults(String(chatId));
-    if (existing) {
-      return {
-        root: existing.root,
-        spawn: existing.spawn
-      };
-    }
-
-    const globalSettings = await this.codex.readGlobalSettings();
-    const defaults = toPersistedThreadSettings(globalSettings);
-    await this.database.upsertChatThreadDefaults(String(chatId), {
-      root: defaults,
-      spawn: defaults
-    });
+    const globalSettings = toPersistedThreadSettings(await this.codex.readGlobalSettings());
+    const general = await this.ensureChatProfileSettingsDefaults(chatId, "general", globalSettings);
+    const coding = await this.ensureChatProfileSettingsDefaults(chatId, "coding", globalSettings);
     return {
-      root: defaults,
-      spawn: defaults
+      root: general,
+      spawn: coding
     };
   }
 
@@ -2106,11 +2097,25 @@ export class TelegramCodexBridge {
   ): Promise<PersistedThreadSettings> {
     const defaults = await this.getChatThreadSettingsDefaults(chatId);
     const nextScopeSettings = mergePersistedThreadSettings(defaults[scope], update);
-    await this.database.upsertChatThreadDefaults(String(chatId), {
-      ...defaults,
-      [scope]: nextScopeSettings
-    });
+    await this.database.upsertChatProfileDefaults(
+      String(chatId),
+      scope === "root" ? "general" : "coding",
+      nextScopeSettings
+    );
     return nextScopeSettings;
+  }
+
+  private async ensureChatProfileSettingsDefaults(
+    chatId: number,
+    profileId: "general" | "coding",
+    fallback: PersistedThreadSettings
+  ): Promise<PersistedThreadSettings> {
+    const existing = await this.database.getChatProfileDefaults(String(chatId), profileId);
+    if (existing) {
+      return existing;
+    }
+
+    return this.database.upsertChatProfileDefaults(String(chatId), profileId, fallback);
   }
 
   private async resolveThreadSettingsTarget(
