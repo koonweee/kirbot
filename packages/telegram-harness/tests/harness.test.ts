@@ -43,6 +43,14 @@ class ScriptedCodex implements BridgeCodexApi {
   nextTurnId = 1;
   finalText = "Harness reply";
   tokenUsage: ServerNotification | null = null;
+  createThreadCalls: Array<{
+    profileId: string;
+    title: string;
+  }> = [];
+  registerThreadProfileCalls: Array<{
+    threadId: string;
+    profileId: string;
+  }> = [];
   createdThreadIds: string[] = [];
   turns: Array<{ threadId: string; turnId: string; input: UserInput[] }> = [];
   steerCalls: Array<{ threadId: string; expectedTurnId: string; input: UserInput[] }> = [];
@@ -60,7 +68,9 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
-  registerThreadProfile(_threadId: string, _profileId: string): void {}
+  registerThreadProfile(threadId: string, profileId: string): void {
+    this.registerThreadProfileCalls.push({ threadId, profileId });
+  }
 
   async createThread(profileId: string, title: string, options?: {
     cwd?: string | null;
@@ -81,7 +91,10 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    void profileId;
+    this.createThreadCalls.push({
+      profileId,
+      title
+    });
     const threadId = `thread-${this.createdThreadIds.length + 1}`;
     this.createdThreadIds.push(title);
     if (options?.settings?.model) {
@@ -607,6 +620,43 @@ describe("Telegram harness", () => {
       text_elements: []
     });
     expect(codex.turns[0]?.input[1]?.type).toBe("localImage");
+  });
+
+  it("routes root and topic session creation through the expected profile ids", async () => {
+    const codex = new ScriptedCodex("complete");
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Start the root session");
+    await harness.waitForIdle();
+
+    await harness.sendRootText("/thread Start a topic session");
+    await harness.waitForIdle();
+
+    expect(codex.createThreadCalls).toEqual(
+      expect.arrayContaining([
+        {
+          profileId: "general",
+          title: "Root Chat"
+        },
+        {
+          profileId: "coding",
+          title: expect.any(String)
+        }
+      ])
+    );
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-1",
+          profileId: "general"
+        },
+        {
+          threadId: "thread-2",
+          profileId: "coding"
+        }
+      ])
+    );
   });
 
   it("supports topic image sends and records captionless images in the transcript", async () => {
