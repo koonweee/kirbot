@@ -225,7 +225,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread", {
+    const createThreadPromise = gateway.createThread("general", "Test thread", {
       cwd: "/workspace/packages/kirbot-core"
     });
     await Promise.resolve();
@@ -363,7 +363,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread", {
+    const createThreadPromise = gateway.createThread("general", "Test thread", {
       settings: {
         model: "gpt-5.3-codex",
         reasoningEffort: "high",
@@ -590,7 +590,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread", {
+    const createThreadPromise = gateway.createThread("general", "Test thread", {
       settings: {
         model: "gpt-5.3-codex",
         reasoningEffort: null,
@@ -721,7 +721,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread");
+    const createThreadPromise = gateway.createThread("general", "Test thread");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({
@@ -1336,7 +1336,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const settingsPromise = gateway.readGlobalSettings();
+    const settingsPromise = gateway.readProfileSettings("general");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({
@@ -1403,7 +1403,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const settingsPromise = gateway.updateGlobalSettings({
+    const settingsPromise = gateway.updateProfileSettings("general", {
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
       serviceTier: "fast"

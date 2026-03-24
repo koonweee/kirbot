@@ -182,37 +182,16 @@ export class CodexGateway {
       cwd?: string | null;
       settings?: ThreadSettingsOverride | null;
     }
-  ): Promise<CreatedThread>;
-  async createThread(
-    title: string,
-    options?: {
-      cwd?: string | null;
-      settings?: ThreadSettingsOverride | null;
-    }
-  ): Promise<CreatedThread>;
-  async createThread(
-    profileIdOrTitle: string,
-    titleOrOptions?:
-      | string
-      | {
-          cwd?: string | null;
-          settings?: ThreadSettingsOverride | null;
-        },
-    options?: {
-      cwd?: string | null;
-      settings?: ThreadSettingsOverride | null;
-    }
   ): Promise<CreatedThread> {
-    const title = typeof titleOrOptions === "string" ? titleOrOptions : profileIdOrTitle;
-    const effectiveOptions = typeof titleOrOptions === "string" ? options : titleOrOptions;
+    void profileId;
     const threadStartOverrides = omitNullReasoningEffortForThreadStart(buildThreadStartOverrides(
-      effectiveOptions?.settings ?? null,
-      effectiveOptions?.settings ? sanitizeThreadStartConfig(this.config.config) : null
-    ), effectiveOptions?.settings);
+      options?.settings ?? null,
+      options?.settings ? sanitizeThreadStartConfig(this.config.config) : null
+    ), options?.settings);
     const response = await this.client.startThread({
-      cwd: effectiveOptions?.cwd ?? this.config.defaultCwd,
+      cwd: options?.cwd ?? this.config.defaultCwd,
       model: threadStartOverrides.model ?? null,
-      modelProvider: effectiveOptions?.settings ? this.config.modelProvider ?? null : null,
+      modelProvider: options?.settings ? this.config.modelProvider ?? null : null,
       approvalPolicy: threadStartOverrides.approvalPolicy ?? null,
       sandbox: threadStartOverrides.sandbox ?? null,
       config: threadStartOverrides.config ?? null,
@@ -261,13 +240,7 @@ export class CodexGateway {
     return this.readProfileSettings(profileId);
   }
 
-  async readGlobalSettings(): Promise<ThreadStartSettings> {
-    return this.readProfileSettings("general");
-  }
-
-  async updateGlobalSettings(update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
-    return this.updateProfileSettings("general", update);
-  }
+  registerThreadProfile(_threadId: string, _profileId: string): void {}
 
   async bootstrapManagedGlobalConfig(): Promise<void> {
     const edits = buildManagedGlobalConfigEdits(this.config);

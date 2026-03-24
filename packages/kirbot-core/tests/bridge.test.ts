@@ -328,6 +328,8 @@ class FakeCodex implements BridgeCodexApi {
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
 
+  registerThreadProfile(_threadId: string, _profileId: string): void {}
+
   async createThread(profileId: string, optionsTitle: string, options?: {
     cwd?: string | null;
     settings?: {
@@ -444,34 +446,6 @@ class FakeCodex implements BridgeCodexApi {
     }
 
     return this.readProfileSettings(profileId);
-  }
-
-  async readGlobalSettings(): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    return this.readProfileSettings("general");
-  }
-
-  async updateGlobalSettings(update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    return this.updateProfileSettings("general", update);
   }
 
   async ensureThreadLoaded(threadId: string): Promise<{

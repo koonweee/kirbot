@@ -51,7 +51,7 @@ class FakeCodexApi implements BridgeCodexApi {
     readonly profileId: string
   ) {}
 
-  registerThreadProfile(): void {}
+  registerThreadProfile(_threadId: string, _profileId: string): void {}
 
   async createThread(
     profileId: string,
@@ -191,7 +191,7 @@ describe("RoutedCodexApi", () => {
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
 
-    const thread = await (routed as any).createThread("coding", "New session");
+    const thread = await routed.createThread("coding", "New session");
 
     expect(thread.threadId).toBe("coding-thread-1");
     expect(coding.createThreadCalls).toEqual([
@@ -207,7 +207,7 @@ describe("RoutedCodexApi", () => {
     const general = new FakeCodexApi("general");
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
-    const thread = await (routed as any).createThread("coding", "New session");
+    const thread = await routed.createThread("coding", "New session");
     coding.events.push({
       kind: "serverRequest",
       request: {

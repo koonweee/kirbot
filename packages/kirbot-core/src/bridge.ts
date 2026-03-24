@@ -112,7 +112,7 @@ export interface BridgeCodexApi {
       settings?: CodexThreadSettingsOverride | null;
     }
   ): Promise<{ threadId: string; branch: string | null } & ThreadStartSettings>;
-  registerThreadProfile?(threadId: string, profileId: string): void;
+  registerThreadProfile(threadId: string, profileId: string): void;
   readProfileSettings(profileId: string): Promise<ThreadStartSettings>;
   updateProfileSettings(
     profileId: string,
@@ -1154,7 +1154,7 @@ export class TelegramCodexBridge {
         cwd: loaded.cwd,
         settings: toCodexThreadSettingsOverride(hydratedSession.settings)
       });
-      this.codex.registerThreadProfile?.(freshThread.threadId, hydratedSession.profileId);
+      this.codex.registerThreadProfile(freshThread.threadId, hydratedSession.profileId);
       await this.database.activateSession(hydratedSession.id, freshThread.threadId);
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
@@ -1821,7 +1821,7 @@ export class TelegramCodexBridge {
         const thread = await this.codex.createThread("general", DEFAULT_ROOT_SESSION_TITLE, {
           settings: toCodexThreadSettingsOverride(rootSettings)
         });
-        this.codex.registerThreadProfile?.(thread.threadId, "general");
+        this.codex.registerThreadProfile(thread.threadId, "general");
         await this.database.activateSession(pending.id, thread.threadId);
         let session = await this.database.getRootSessionByChat(message.chatId);
         if (!session) {
@@ -1943,7 +1943,7 @@ export class TelegramCodexBridge {
           ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
           settings: toCodexThreadSettingsOverride(spawnSettings)
         });
-        this.codex.registerThreadProfile?.(thread.threadId, "coding");
+        this.codex.registerThreadProfile(thread.threadId, "coding");
         await this.database.activateSession(pending.id, thread.threadId);
         let session = await this.database.getSessionByTopic(message.chatId, topicId);
         if (!session) {

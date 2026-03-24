@@ -59,6 +59,8 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
+  registerThreadProfile(_threadId: string, _profileId: string): void {}
+
   async createThread(profileId: string, title: string, options?: {
     cwd?: string | null;
     settings?: {
@@ -162,34 +164,6 @@ class ScriptedCodex implements BridgeCodexApi {
   }
 
   async updateThreadSettings(_threadId: string, update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    return this.updateProfileSettings("general", update);
-  }
-
-  async readGlobalSettings(): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    return this.readProfileSettings("general");
-  }
-
-  async updateGlobalSettings(update: {
     model?: string;
     reasoningEffort?: ReasoningEffort | null;
     serviceTier?: ServiceTier | null;
