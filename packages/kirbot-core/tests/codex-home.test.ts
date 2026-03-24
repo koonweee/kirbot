@@ -94,6 +94,56 @@ describe("codex home helpers", () => {
     );
   });
 
+  it("defaults sourceHomePath to homedir() and reads auth from ~/.codex/auth.json", async () => {
+    const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
+    const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
+    tempDirs.push(sourceHome, repoRoot, targetHome);
+
+    fs.mkdirSync(join(sourceHome, ".ssh"), { recursive: true });
+    fs.writeFileSync(join(sourceHome, ".gitconfig"), "[user]\n\tname = Jeremy\n");
+    seedSourceHomeAuth(sourceHome, '{"token":"default-home-token"}');
+
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    fs.mkdirSync(join(repoRoot, "config"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "config", "codex-profiles.json"), "{}");
+    fs.mkdirSync(join(repoRoot, "skills", "brainstorming"), { recursive: true });
+    fs.writeFileSync(join(repoRoot, "skills", "brainstorming", "SKILL.md"), "# brainstorming\n");
+
+    try {
+      vi.resetModules();
+      vi.doMock("node:os", async () => {
+        const actual = await vi.importActual<typeof import("node:os")>("node:os");
+        return {
+          ...actual,
+          homedir: () => sourceHome
+        };
+      });
+
+      const { prepareKirbotCodexHome: mockedPrepareKirbotCodexHome } = await import("../src/codex-home");
+
+      mockedPrepareKirbotCodexHome({
+        targetHomePath: targetHome,
+        managed: {
+          managedConfigToml: 'model = "gpt-5-codex"\n',
+          managedSkillIds: ["brainstorming"],
+          managedProfilesConfigPath: join(repoRoot, "config", "codex-profiles.json")
+        }
+      });
+    } finally {
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
+
+    expect(fs.existsSync(join(targetHome, ".ssh"))).toBe(true);
+    expect(fs.lstatSync(join(targetHome, ".ssh")).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(join(targetHome, ".ssh"))).toBe(fs.realpathSync(join(sourceHome, ".ssh")));
+    expect(fs.existsSync(join(targetHome, ".gitconfig"))).toBe(true);
+    expect(fs.lstatSync(join(targetHome, ".gitconfig")).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"default-home-token"}');
+    expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
+  });
+
   it("mirrors top-level home entries while excluding .codex and seeds auth.json from sourceHome/.codex/auth.json", () => {
     const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
     const repoRoot = mkdtempSync(join(tmpdir(), "kirbot-repo-"));
@@ -187,6 +237,9 @@ describe("codex home helpers", () => {
 
     expect(fs.existsSync(join(targetHome, ".obsolete"))).toBe(false);
     expect(fs.existsSync(join(targetHome, ".stray"))).toBe(true);
+    expect(fs.existsSync(join(targetHome, ".config"))).toBe(true);
+    expect(fs.lstatSync(join(targetHome, ".config")).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(join(targetHome, ".config"))).toBe(fs.realpathSync(join(sourceHome, ".config")));
     expect(fs.readFileSync(join(targetHome, "sessions", "keep.txt"), "utf8")).toBe("keep");
     expect(fs.readFileSync(join(targetHome, "shell_snapshots", "keep.txt"), "utf8")).toBe("keep");
     expect(fs.readFileSync(join(targetHome, "tmp", "keep.txt"), "utf8")).toBe("keep");
@@ -199,7 +252,7 @@ describe("codex home helpers", () => {
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, repoRoot, targetHome);
 
-    seedSourceHomeAuth(sourceHome, '{"token":"mirror-token"}');
+    fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"mirror-token"}');
     fs.writeFileSync(join(sourceHome, "config.toml"), 'model = "mirror-model"\n');
     fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
     fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"codex-token"}');
