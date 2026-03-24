@@ -110,7 +110,10 @@ Codex profile setup:
 Managed profile homes:
 
 - Shared skill source lives in checked-in `skills/<skill-id>/`.
-- On startup, Kirbot creates missing profile homes, rewrites each managed `config.toml`, and rebuilds each managed `skills/` subtree from `config/codex-profiles.json`.
+- On startup, Kirbot creates missing profile homes, mirrors most top-level entries from the real user home by symlink, rewrites each managed `config.toml`, and rebuilds each managed `skills/` subtree from `config/codex-profiles.json`.
+- `.codex` is excluded from that mirror and stays profile-local; Kirbot seeds `auth.json` from the real home's `.codex/auth.json`.
+- Changes inside an already-mirrored top-level path reflect immediately because the profile entry is a live symlink.
+- Adding or removing a top-level real-home entry requires a Kirbot restart or reconcile so the mirror set can be updated.
 - Kirbot preserves runtime-owned files such as `auth.json`, Codex thread/session state, `rules/`, and `superpowers/`.
 - Do not edit `dirname(DATABASE_PATH)/homes/<profile>/skills/` directly; with the default database path that is `data/homes/<profile>/skills/`. It is generated.
 - The cutover is hard: old sessions from the previous single-home setup are not migrated and will fail when first resumed. Start a new thread or topic instead.
