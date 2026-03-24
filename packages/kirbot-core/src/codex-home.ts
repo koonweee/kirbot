@@ -2,6 +2,26 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+const MIRROR_EXCLUDED_TOP_LEVEL_NAMES = new Set([".codex"]);
+const MANAGED_LOCAL_TOP_LEVEL_NAMES = new Set([
+  "auth.json",
+  "config.toml",
+  "skills",
+  "sessions",
+  "shell_snapshots",
+  "tmp",
+  "rules",
+  "superpowers"
+]);
+const KIRBOT_INTERNAL_TOP_LEVEL_NAMES = new Set([
+  ".kirbot-managed-home-mirror.json",
+  ".kirbot-managed-config.toml.next",
+  ".kirbot-managed-config.toml.prev",
+  ".kirbot-managed-skills-next",
+  ".kirbot-managed-skills.prev"
+]);
+const MIRROR_MANIFEST_FILE = ".kirbot-managed-home-mirror.json";
+
 export type ManagedKirbotCodexHome = {
   managedConfigToml: string;
   managedSkillIds: readonly string[];
@@ -27,7 +47,7 @@ export function resolveKirbotCodexConfigPath(homePath: string): string {
 }
 
 export function prepareKirbotCodexHome(options: PrepareKirbotCodexHomeOptions): void {
-  const sourceHomePath = options.sourceHomePath ?? join(homedir(), ".codex");
+  const sourceHomePath = options.sourceHomePath ?? homedir();
   fs.mkdirSync(options.targetHomePath, { recursive: true });
 
   validateManagedCodexHome(options.managed);
@@ -35,9 +55,11 @@ export function prepareKirbotCodexHome(options: PrepareKirbotCodexHomeOptions): 
     options.managed.managedSkillIds,
     options.managed.managedProfilesConfigPath
   );
+  // Kirbot mirrors the real home into the profile home at the top level, but `.codex` stays out.
+  // Inside the profile home, `config.toml` and `skills/` are Kirbot-managed, while
+  // `sessions/`, `shell_snapshots/`, `tmp/`, `rules/`, and `superpowers/` remain runtime-owned.
+  reconcileTopLevelHomeMirror(sourceHomePath, options.targetHomePath);
   seedAuthJsonIfMissing(sourceHomePath, options.targetHomePath);
-  // Kirbot-managed boundary: rewrite config.toml and rebuild skills/ on every startup.
-  // Runtime-owned state such as auth.json, rules/, superpowers/, and session data stays untouched.
   try {
     stageManagedConfigToml(options.targetHomePath, options.managed.managedConfigToml);
     stageManagedSkills({
@@ -64,7 +86,7 @@ function validateManagedCodexHome(managed: ManagedKirbotCodexHome | undefined): 
 }
 
 function seedAuthJsonIfMissing(sourceHomePath: string, targetHomePath: string): void {
-  copyIntoIsolatedHomeIfPresent(join(sourceHomePath, "auth.json"), join(targetHomePath, "auth.json"));
+  copyIntoIsolatedHomeIfPresent(join(sourceHomePath, ".codex", "auth.json"), join(targetHomePath, "auth.json"));
 }
 
 function copyIntoIsolatedHomeIfPresent(sourcePath: string, targetPath: string): void {
@@ -75,6 +97,96 @@ function copyIntoIsolatedHomeIfPresent(sourcePath: string, targetPath: string): 
   fs.cpSync(sourcePath, targetPath, {
     recursive: true
   });
+}
+
+function reconcileTopLevelHomeMirror(sourceHomePath: string, targetHomePath: string): void {
+  const currentMirroredTopLevelNames = resolveMirrorEligibleTopLevelNames(sourceHomePath);
+  const currentMirroredTopLevelNameSet = new Set(currentMirroredTopLevelNames);
+  const previousManifest = readManagedHomeMirrorManifest(targetHomePath);
+
+  for (const previousTopLevelName of previousManifest.mirroredTopLevelNames) {
+    if (currentMirroredTopLevelNameSet.has(previousTopLevelName) || isProtectedTopLevelEntryName(previousTopLevelName)) {
+      continue;
+    }
+
+    fs.rmSync(join(targetHomePath, previousTopLevelName), { force: true, recursive: true });
+  }
+
+  for (const topLevelName of currentMirroredTopLevelNames) {
+    mirrorTopLevelHomeEntry(sourceHomePath, targetHomePath, topLevelName);
+  }
+
+  writeManagedHomeMirrorManifest(targetHomePath, currentMirroredTopLevelNames);
+}
+
+function resolveMirrorEligibleTopLevelNames(sourceHomePath: string): string[] {
+  return fs
+    .readdirSync(sourceHomePath, { withFileTypes: true })
+    .map((entry) => entry.name)
+    .filter((name) => isMirrorEligibleTopLevelName(name))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function isMirrorEligibleTopLevelName(topLevelName: string): boolean {
+  return !MIRROR_EXCLUDED_TOP_LEVEL_NAMES.has(topLevelName) && !isProtectedTopLevelEntryName(topLevelName);
+}
+
+function isProtectedTopLevelEntryName(topLevelName: string): boolean {
+  return MANAGED_LOCAL_TOP_LEVEL_NAMES.has(topLevelName) || KIRBOT_INTERNAL_TOP_LEVEL_NAMES.has(topLevelName);
+}
+
+function readManagedHomeMirrorManifest(targetHomePath: string): { mirroredTopLevelNames: string[] } {
+  const manifestPath = resolveManagedHomeMirrorManifestPath(targetHomePath);
+
+  if (!fs.existsSync(manifestPath)) {
+    return { mirroredTopLevelNames: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Partial<{ mirroredTopLevelNames: unknown }>;
+    const mirroredTopLevelNames = Array.isArray(parsed.mirroredTopLevelNames)
+      ? parsed.mirroredTopLevelNames.filter((name): name is string => typeof name === "string")
+      : [];
+
+    return {
+      mirroredTopLevelNames: mirroredTopLevelNames.filter((name) => !isProtectedTopLevelEntryName(name))
+    };
+  } catch {
+    return { mirroredTopLevelNames: [] };
+  }
+}
+
+function writeManagedHomeMirrorManifest(targetHomePath: string, mirroredTopLevelNames: readonly string[]): void {
+  fs.writeFileSync(
+    resolveManagedHomeMirrorManifestPath(targetHomePath),
+    JSON.stringify(
+      {
+        mirroredTopLevelNames: [...new Set(mirroredTopLevelNames)].sort((left, right) => left.localeCompare(right))
+      },
+      null,
+      2
+    )
+  );
+}
+
+function resolveManagedHomeMirrorManifestPath(targetHomePath: string): string {
+  return join(targetHomePath, MIRROR_MANIFEST_FILE);
+}
+
+function mirrorTopLevelHomeEntry(sourceHomePath: string, targetHomePath: string, topLevelName: string): void {
+  const sourcePath = join(sourceHomePath, topLevelName);
+  const targetPath = join(targetHomePath, topLevelName);
+
+  fs.rmSync(targetPath, { force: true, recursive: true });
+  fs.symlinkSync(sourcePath, targetPath, resolveSymlinkType(sourcePath));
+}
+
+function resolveSymlinkType(sourcePath: string): fs.symlink.Type {
+  try {
+    return fs.statSync(sourcePath).isDirectory() ? "dir" : "file";
+  } catch {
+    return "file";
+  }
 }
 
 function stageManagedSkills(options: {
