@@ -118,8 +118,6 @@ export interface BridgeCodexApi {
     profileId: string,
     update: CodexThreadSettingsOverride
   ): Promise<ThreadStartSettings>;
-  readGlobalSettings?(): Promise<ThreadStartSettings>;
-  updateGlobalSettings?(update: CodexThreadSettingsOverride): Promise<ThreadStartSettings>;
   ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings>;
   readThread(threadId: string): Promise<{ name: string | null; cwd: string }>;
   compactThread(threadId: string): Promise<void>;
