@@ -124,16 +124,16 @@ Verified by:
 
 - stop and stale-interrupt tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 
-## 6. Change Root Or Spawn Defaults And Restart Kirbot
+## 6. Change Session Settings And Restart Kirbot
 
 User experience:
 
-- `/model`, `/fast`, and `/permissions` in `General` first ask whether to update the live shared root thread or the defaults for future `/thread` topics.
+- `config/codex-profiles.json` owns the defaults for `General`, `/thread`, and `/plan`.
+- `/model`, `/fast`, and `/permissions` in `General` update only the active General session.
 - `/restart` in `General` reports each deployment step in Telegram, then checks out `master`, fetches `origin`, hard-resets to `origin/master`, rebuilds kirbot, and restarts the detached production tmux session.
-- The same commands inside a topic change only that topic's existing Codex thread settings.
-- Topic-local settings commands require an existing topic session and are rejected while a turn is still active.
-- Existing topic threads do not follow later root-level spawn-default changes automatically.
-- Existing root and topic sessions persist their own thread settings in Kirbot, and every real turn start applies those stored settings explicitly.
+- The same commands inside a topic update only that topic's existing Codex session.
+- Settings commands require an existing General or topic session and are rejected while a turn is still active.
+- Existing root and topic sessions persist only their own explicit overrides in Kirbot, and every real turn start resolves `profile config + session override`.
 - `thread/resume` is no longer treated as the write path for thread settings; it is used only to reattach a persisted thread to a cold app-server process.
 - `/approvals` remains an alias for `/permissions`.
 
@@ -146,7 +146,7 @@ Owned by:
 
 Verified by:
 
-- root-scope and topic-scope settings command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
+- General-session and topic-session settings command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
 
 ## 7. Manage Shared Custom Commands

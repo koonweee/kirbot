@@ -10,7 +10,6 @@ export type CodexConfig = {
   sandbox: SandboxMode | undefined;
   approvalPolicy: AskForApproval | undefined;
   serviceName: string;
-  baseInstructions: string | undefined;
   developerInstructions: string | undefined;
   config: Record<string, JsonValue | undefined> | undefined;
 };

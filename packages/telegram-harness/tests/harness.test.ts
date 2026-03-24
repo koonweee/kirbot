@@ -43,11 +43,20 @@ class ScriptedCodex implements BridgeCodexApi {
   nextTurnId = 1;
   finalText = "Harness reply";
   tokenUsage: ServerNotification | null = null;
+  createThreadCalls: Array<{
+    profileId: string;
+    title: string;
+  }> = [];
+  registerThreadProfileCalls: Array<{
+    threadId: string;
+    profileId: string;
+  }> = [];
   createdThreadIds: string[] = [];
   turns: Array<{ threadId: string; turnId: string; input: UserInput[] }> = [];
   steerCalls: Array<{ threadId: string; expectedTurnId: string; input: UserInput[] }> = [];
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
   permissionsApprovals: Array<{ id: RequestId; response: PermissionsRequestApprovalResponse }> = [];
+  listModelsCalls: string[] = [];
   snapshotDelayMs = 0;
 
   readonly #eventQueue: AppServerEvent[] = [];
@@ -59,7 +68,11 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
-  async createThread(title: string, options?: {
+  registerThreadProfile(threadId: string, profileId: string): void {
+    this.registerThreadProfileCalls.push({ threadId, profileId });
+  }
+
+  async createThread(profileId: string, title: string, options?: {
     cwd?: string | null;
     settings?: {
       model?: string;
@@ -78,6 +91,10 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    this.createThreadCalls.push({
+      profileId,
+      title
+    });
     const threadId = `thread-${this.createdThreadIds.length + 1}`;
     this.createdThreadIds.push(title);
     if (options?.settings?.model) {
@@ -107,7 +124,7 @@ class ScriptedCodex implements BridgeCodexApi {
     };
   }
 
-  async readGlobalSettings(): Promise<{
+  async readProfileSettings(profileId: string): Promise<{
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
@@ -115,6 +132,7 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     return {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
@@ -123,56 +141,6 @@ class ScriptedCodex implements BridgeCodexApi {
       approvalPolicy: this.approvalPolicy,
       sandboxPolicy: this.sandboxPolicy
     };
-  }
-
-  async updateGlobalSettings(update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    if (update.model) {
-      this.model = update.model;
-    }
-    if ("reasoningEffort" in update) {
-      this.reasoningEffort = update.reasoningEffort ?? null;
-    }
-    if ("serviceTier" in update) {
-      this.serviceTier = update.serviceTier ?? null;
-    }
-    if (update.approvalPolicy) {
-      this.approvalPolicy = update.approvalPolicy;
-    }
-    if (update.sandboxPolicy) {
-      this.sandboxPolicy = update.sandboxPolicy;
-    }
-
-    return this.readGlobalSettings();
-  }
-
-  async updateThreadSettings(_threadId: string, update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    return this.updateGlobalSettings(update);
   }
 
   async ensureThreadLoaded(): Promise<{
@@ -406,7 +374,8 @@ class ScriptedCodex implements BridgeCodexApi {
 
   async respondUnsupportedRequest(): Promise<void> {}
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    this.listModelsCalls.push(profileId);
     return [
       {
         id: "model-1",
@@ -617,6 +586,43 @@ describe("Telegram harness", () => {
       text_elements: []
     });
     expect(codex.turns[0]?.input[1]?.type).toBe("localImage");
+  });
+
+  it("routes root and topic session creation through the expected profile ids", async () => {
+    const codex = new ScriptedCodex("complete");
+    const harness = await buildHarness(codex);
+    harnesses.push(harness);
+
+    await harness.sendRootText("Start the root session");
+    await harness.waitForIdle();
+
+    await harness.sendRootText("/thread Start a topic session");
+    await harness.waitForIdle();
+
+    expect(codex.createThreadCalls).toEqual(
+      expect.arrayContaining([
+        {
+          profileId: "general",
+          title: "Root Chat"
+        },
+        {
+          profileId: "coding",
+          title: expect.any(String)
+        }
+      ])
+    );
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-1",
+          profileId: "general"
+        },
+        {
+          threadId: "thread-2",
+          profileId: "coding"
+        }
+      ])
+    );
   });
 
   it("supports topic image sends and records captionless images in the transcript", async () => {
@@ -1109,13 +1115,41 @@ function createConfig(tempDir: string): AppConfig {
     },
     codex: {
       defaultCwd: "/workspace",
+      profilesConfigPath: "/workspace/config/codex-profiles.json",
+      profiles: {
+        general: {
+          homePath: join(tempDir, "codex-general"),
+          model: "gpt-5",
+          reasoningEffort: "medium",
+          serviceTier: "flex",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "on-request",
+          skills: [],
+          mcps: []
+        },
+        coding: {
+          homePath: join(tempDir, "codex-coding"),
+          model: "gpt-5-codex",
+          reasoningEffort: "high",
+          serviceTier: "fast",
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "never",
+          skills: [],
+          mcps: []
+        }
+      },
+      routing: {
+        general: "general",
+        thread: "coding",
+        plan: "coding"
+      },
+      mcps: {},
       model: undefined,
       modelProvider: undefined,
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
-      developerInstructions: undefined,
+      developerInstructions: "prompt",
       config: undefined
     }
   };

@@ -176,12 +176,14 @@ export class CodexGateway {
   }
 
   async createThread(
+    profileId: string,
     title: string,
     options?: {
       cwd?: string | null;
       settings?: ThreadSettingsOverride | null;
     }
   ): Promise<CreatedThread> {
+    void profileId;
     const threadStartOverrides = omitNullReasoningEffortForThreadStart(buildThreadStartOverrides(
       options?.settings ?? null,
       options?.settings ? sanitizeThreadStartConfig(this.config.config) : null
@@ -194,7 +196,7 @@ export class CodexGateway {
       sandbox: threadStartOverrides.sandbox ?? null,
       config: threadStartOverrides.config ?? null,
       serviceName: this.config.serviceName,
-      baseInstructions: this.config.baseInstructions ?? null,
+      baseInstructions: null,
       developerInstructions: this.config.developerInstructions ?? null,
       experimentalRawEvents: false,
       persistExtendedHistory: false,
@@ -216,7 +218,8 @@ export class CodexGateway {
     };
   }
 
-  async readGlobalSettings(): Promise<ThreadStartSettings> {
+  async readProfileSettings(profileId: string): Promise<ThreadStartSettings> {
+    void profileId;
     const response = await this.client.readConfig({
       includeLayers: false
     });
@@ -224,17 +227,7 @@ export class CodexGateway {
     return threadSettingsFromConfig(response.config, this.config);
   }
 
-  async updateGlobalSettings(update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
-    const edits = buildGlobalConfigEdits(update);
-    if (edits.length === 0) {
-      return this.readGlobalSettings();
-    }
-
-    await this.client.batchWriteConfig({
-      edits
-    });
-    return this.readGlobalSettings();
-  }
+  registerThreadProfile(_threadId: string, _profileId: string): void {}
 
   async bootstrapManagedGlobalConfig(): Promise<void> {
     const edits = buildManagedGlobalConfigEdits(this.config);
@@ -418,7 +411,8 @@ export class CodexGateway {
     return event;
   }
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    void profileId;
     const models: Model[] = [];
     let cursor: string | null = null;
 
@@ -599,58 +593,6 @@ function sandboxPolicyFromConfig(config: Config, defaults: AppConfig["codex"]): 
       };
     }
   }
-}
-
-function buildGlobalConfigEdits(update: ThreadSettingsOverride): ConfigEdit[] {
-  const edits: ConfigEdit[] = [];
-
-  if ("model" in update) {
-    edits.push({
-      keyPath: "model",
-      value: update.model ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("reasoningEffort" in update) {
-    edits.push({
-      keyPath: "model_reasoning_effort",
-      value: update.reasoningEffort ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("serviceTier" in update) {
-    edits.push({
-      keyPath: "service_tier",
-      value: update.serviceTier ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("approvalPolicy" in update) {
-    edits.push({
-      keyPath: "approval_policy",
-      value: update.approvalPolicy ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("sandboxPolicy" in update && update.sandboxPolicy) {
-    const { mode, workspaceWrite } = sandboxConfigFromPolicy(update.sandboxPolicy);
-    edits.push({
-      keyPath: "sandbox_mode",
-      value: mode,
-      mergeStrategy: "replace"
-    });
-    edits.push({
-      keyPath: "sandbox_workspace_write",
-      value: workspaceWrite,
-      mergeStrategy: "replace"
-    });
-  }
-
-  return edits;
 }
 
 function sandboxConfigFromPolicy(

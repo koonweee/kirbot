@@ -66,7 +66,6 @@ describe("CodexGateway", () => {
         sandbox: "danger-full-access",
         approvalPolicy: "never",
         serviceName: "telegram-codex-bridge",
-        baseInstructions: undefined,
         developerInstructions: undefined,
         config: {
           model_reasoning_effort: "high",
@@ -162,7 +161,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -209,7 +207,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -225,7 +222,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread", {
+    const createThreadPromise = gateway.createThread("general", "Test thread", {
       cwd: "/workspace/packages/kirbot-core"
     });
     await Promise.resolve();
@@ -347,7 +344,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -363,7 +359,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread", {
+    const createThreadPromise = gateway.createThread("general", "Test thread", {
       settings: {
         model: "gpt-5.3-codex",
         reasoningEffort: "high",
@@ -471,7 +467,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -509,7 +504,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -574,7 +568,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -590,7 +583,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread", {
+    const createThreadPromise = gateway.createThread("general", "Test thread", {
       settings: {
         model: "gpt-5.3-codex",
         reasoningEffort: null,
@@ -697,7 +690,6 @@ describe("CodexGateway", () => {
       sandbox: "danger-full-access",
       approvalPolicy: "never",
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: {
         model_provider: "openai",
@@ -721,7 +713,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const createThreadPromise = gateway.createThread("Test thread");
+    const createThreadPromise = gateway.createThread("general", "Test thread");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({
@@ -808,7 +800,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -890,7 +881,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -961,7 +951,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1061,6 +1050,216 @@ describe("CodexGateway", () => {
     });
   });
 
+  it.each([
+    "thread/archived",
+    "thread/closed"
+  ] as const)("reloads a thread after %s notifications clear the cache", async (method) => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const firstLoad = gateway.ensureThreadLoaded("thread-1");
+    await Promise.resolve();
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/resume",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        persistExtendedHistory: false
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await expect(firstLoad).resolves.toMatchObject({ cwd: "/workspace" });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      method,
+      params: {
+        threadId: "thread-1"
+      }
+    });
+    await expect(gateway.nextEvent()).resolves.toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method,
+        params: {
+          threadId: "thread-1"
+        }
+      }
+    });
+
+    const secondLoad = gateway.ensureThreadLoaded("thread-1");
+    await Promise.resolve();
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/resume",
+      id: 3,
+      params: {
+        threadId: "thread-1",
+        persistExtendedHistory: false
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await expect(secondLoad).resolves.toMatchObject({ cwd: "/workspace" });
+  });
+
+  it("updates cached thread settings on model/rerouted notifications", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const firstLoad = gateway.ensureThreadLoaded("thread-1");
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await expect(firstLoad).resolves.toMatchObject({ model: "gpt-5-codex" });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      method: "model/rerouted",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toModel: "gpt-5.3-codex"
+      }
+    });
+    await expect(gateway.nextEvent()).resolves.toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method: "model/rerouted",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          toModel: "gpt-5.3-codex"
+        }
+      }
+    });
+
+    await expect(gateway.ensureThreadLoaded("thread-1")).resolves.toMatchObject({
+      model: "gpt-5.3-codex"
+    });
+    expect(transport.sent.filter((message) => typeof message === "object" && message !== null && "method" in message && message.method === "thread/resume")).toHaveLength(1);
+  });
+
   it("passes collaborationMode through on turn/start when provided", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
@@ -1071,7 +1270,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1140,7 +1338,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1200,7 +1397,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1269,7 +1465,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1320,7 +1515,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1336,7 +1530,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const settingsPromise = gateway.readGlobalSettings();
+    const settingsPromise = gateway.readProfileSettings("general");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({
@@ -1377,7 +1571,7 @@ describe("CodexGateway", () => {
     });
   });
 
-  it("updates global settings through config/batchWrite without reloading loaded threads", async () => {
+  it("does not expose profile-settings writes on the gateway", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
@@ -1387,7 +1581,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1403,100 +1596,16 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const settingsPromise = gateway.updateGlobalSettings({
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      serviceTier: "fast"
-    });
-    await Promise.resolve();
-
-    expect(transport.sent.at(-1)).toEqual({
-      jsonrpc: "2.0",
-      method: "config/batchWrite",
-      id: 2,
-      params: {
-        edits: [
-          {
-            keyPath: "model",
-            value: "gpt-5.3-codex",
-            mergeStrategy: "replace"
-          },
-          {
-            keyPath: "model_reasoning_effort",
-            value: "high",
-            mergeStrategy: "replace"
-          },
-          {
-            keyPath: "service_tier",
-            value: "fast",
-            mergeStrategy: "replace"
-          }
-        ]
-      }
-    });
-
-    transport.emitMessage({
-      jsonrpc: "2.0",
-      id: 2,
-      result: {
-        status: "ok",
-        version: "v2",
-        filePath: "/home/test/.codex/config.toml",
-        overriddenMetadata: null
-      }
-    });
-    for (let attempt = 0; attempt < 10 && transport.sent.length < 4; attempt += 1) {
-      await Promise.resolve();
-    }
-
-    expect(transport.sent[3]).toEqual({
-      jsonrpc: "2.0",
-      method: "config/read",
-      id: 3,
-      params: {
-        includeLayers: false
-      }
-    });
-
-    transport.emitMessage({
-      jsonrpc: "2.0",
-      id: 3,
-      result: {
-        config: {
-          model: "gpt-5.3-codex",
-          approval_policy: "on-request",
-          sandbox_mode: "workspace-write",
-          sandbox_workspace_write: {
-            writable_roots: [],
-            network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false
-          },
-          model_reasoning_effort: "high",
-          service_tier: "fast"
-        },
-        origins: {},
-        layers: null
-      }
-    });
-
-    await expect(settingsPromise).resolves.toEqual({
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      serviceTier: "fast",
-      cwd: "/workspace",
-      approvalPolicy: "on-request",
-      sandboxPolicy: {
-        type: "workspaceWrite",
-        writableRoots: [],
-        readOnlyAccess: {
-          type: "fullAccess"
-        },
-        networkAccess: false,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false
-      }
-    });
+    expect("updateProfileSettings" in gateway).toBe(false);
+    expect(
+      transport.sent.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "method" in message &&
+          (message as { method?: string }).method === "config/batchWrite"
+      )
+    ).toBe(false);
   });
 
   it("responds to permissions approval requests with a JSON-RPC result", async () => {
@@ -1509,7 +1618,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1551,7 +1659,6 @@ describe("CodexGateway", () => {
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
-      baseInstructions: undefined,
       developerInstructions: undefined,
       config: undefined
     });
@@ -1567,7 +1674,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const listPromise = gateway.listModels();
+    const listPromise = gateway.listModels("general");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({

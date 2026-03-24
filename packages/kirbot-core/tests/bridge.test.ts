@@ -232,7 +232,9 @@ const ZERO_SPACING_DELIVERY_POLICY = {
 
 class FakeCodex implements BridgeCodexApi {
   createdThreads: string[] = [];
+  createThreadProfileIds: string[] = [];
   readThreadCalls: string[] = [];
+  readProfileSettingsCalls: string[] = [];
   createThreadCalls: Array<{
     title: string;
     cwd?: string | null;
@@ -244,23 +246,10 @@ class FakeCodex implements BridgeCodexApi {
       sandboxPolicy?: SandboxPolicy;
     } | null;
   }> = [];
+  listModelsCalls: string[] = [];
   ensuredThreads: string[] = [];
-  globalSettingsUpdates: Array<{
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }> = [];
   compactThreadCalls: Array<{ threadId: string }> = [];
-  threadSettingsUpdates: Array<{
-    threadId: string;
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }> = [];
+  archiveThreadCalls: Array<{ threadId: string }> = [];
   turns: Array<{ threadId: string; text: string; input: UserInput[]; turnId: string }> = [];
   turnCollaborationModes: Array<{ turnId: string; collaborationMode: unknown | null }> = [];
   turnOverrides: Array<{ turnId: string; overrides: unknown | null }> = [];
@@ -296,7 +285,19 @@ class FakeCodex implements BridgeCodexApi {
   threadSandboxPolicy: SandboxPolicy | undefined = undefined;
   threadCwd: string | undefined = undefined;
   threadName: string | undefined = undefined;
+  missingThreadIds = new Set<string>();
   #nextThreadId = 1;
+  profileSettings: Record<string, Partial<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }>> = {
+    general: {},
+    coding: {}
+  };
   models: Model[] = [
     {
       id: "model-1",
@@ -327,8 +328,19 @@ class FakeCodex implements BridgeCodexApi {
 
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
+  readonly registerThreadProfileCalls: Array<{ threadId: string; profileId: string }> = [];
+  readonly registeredThreadProfiles = new Set<string>();
+  enforceThreadRouteRegistration = false;
 
-  async createThread(optionsTitle: string, options?: {
+  registerThreadProfile(threadId: string, profileId: string): void {
+    this.registerThreadProfileCalls.push({
+      threadId,
+      profileId
+    });
+    this.registeredThreadProfiles.add(threadId);
+  }
+
+  async createThread(profileId: string, optionsTitle: string, options?: {
     cwd?: string | null;
     settings?: {
       model?: string;
@@ -347,6 +359,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    this.createThreadProfileIds.push(profileId);
     this.createdThreads.push(optionsTitle);
     this.createThreadCalls.push({
       title: optionsTitle,
@@ -354,13 +367,17 @@ class FakeCodex implements BridgeCodexApi {
       ...(options?.settings !== undefined ? { settings: options.settings } : {})
     });
     const threadId = `thread-${this.#nextThreadId++}`;
-    const initialSettings = options?.settings ?? {
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
-      serviceTier: this.serviceTier,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy
-    };
+    const profileSettings = this.#getProfileSettings(profileId);
+    const initialSettings =
+      options?.settings && Object.keys(options.settings).length > 0
+        ? options.settings
+        : {
+            model: profileSettings.model,
+            reasoningEffort: profileSettings.reasoningEffort,
+            serviceTier: profileSettings.serviceTier,
+            approvalPolicy: profileSettings.approvalPolicy,
+            sandboxPolicy: profileSettings.sandboxPolicy
+          };
     this.threadModel = initialSettings.model;
     this.threadReasoningEffort = initialSettings.reasoningEffort ?? null;
     this.threadServiceTier = initialSettings.serviceTier ?? null;
@@ -384,6 +401,8 @@ class FakeCodex implements BridgeCodexApi {
     name: string | null;
     cwd: string;
   }> {
+    this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/read");
     this.readThreadCalls.push(threadId);
     return {
       name: this.threadName ?? null,
@@ -391,7 +410,7 @@ class FakeCodex implements BridgeCodexApi {
     };
   }
 
-  async readGlobalSettings(): Promise<{
+  async readProfileSettings(profileId: string): Promise<{
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
@@ -399,48 +418,8 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    return {
-      model: this.model,
-      reasoningEffort: this.reasoningEffort,
-      serviceTier: this.serviceTier,
-      cwd: this.cwd,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy
-    };
-  }
-
-  async updateGlobalSettings(update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    this.globalSettingsUpdates.push(update);
-    if (update.model) {
-      this.model = update.model;
-    }
-    if ("reasoningEffort" in update) {
-      this.reasoningEffort = update.reasoningEffort ?? null;
-    }
-    if ("serviceTier" in update) {
-      this.serviceTier = update.serviceTier ?? null;
-    }
-    if (update.approvalPolicy) {
-      this.approvalPolicy = update.approvalPolicy;
-    }
-    if (update.sandboxPolicy) {
-      this.sandboxPolicy = update.sandboxPolicy;
-    }
-
-    return this.readGlobalSettings();
+    this.readProfileSettingsCalls.push(profileId);
+    return { ...this.#getProfileSettings(profileId) };
   }
 
   async ensureThreadLoaded(threadId: string): Promise<{
@@ -451,6 +430,8 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/load");
     this.ensuredThreads.push(threadId);
     return {
       model: this.threadModel ?? this.model,
@@ -463,44 +444,9 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async compactThread(threadId: string): Promise<void> {
+    this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/compact");
     this.compactThreadCalls.push({ threadId });
-  }
-
-  async updateThreadSettings(threadId: string, update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    this.threadSettingsUpdates.push({
-      threadId,
-      ...update
-    });
-    if (update.model) {
-      this.threadModel = update.model;
-    }
-    if ("reasoningEffort" in update) {
-      this.threadReasoningEffort = update.reasoningEffort ?? null;
-    }
-    if ("serviceTier" in update) {
-      this.threadServiceTier = update.serviceTier ?? null;
-    }
-    if (update.approvalPolicy) {
-      this.threadApprovalPolicy = update.approvalPolicy;
-    }
-    if (update.sandboxPolicy) {
-      this.threadSandboxPolicy = update.sandboxPolicy;
-    }
-
-    return this.ensureThreadLoaded(threadId);
   }
 
   async sendTurn(
@@ -517,6 +463,7 @@ class FakeCodex implements BridgeCodexApi {
       } | null;
     }
   ): Promise<{ id: string }> {
+    this.#assertThreadRouteRegistered(threadId);
     if (this.nextSendTurnError) {
       const error = this.nextSendTurnError;
       this.nextSendTurnError = null;
@@ -569,6 +516,7 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }> {
+    this.#assertThreadRouteRegistered(threadId);
     const steerCall = { threadId, expectedTurnId, text: flattenTextInput(input) } as {
       threadId: string;
       expectedTurnId: string;
@@ -592,6 +540,7 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    this.#assertThreadRouteRegistered(threadId);
     this.interruptCalls.push({ threadId, turnId });
     if (this.nextInterruptError) {
       const error = this.nextInterruptError;
@@ -600,9 +549,15 @@ class FakeCodex implements BridgeCodexApi {
     }
   }
 
-  async archiveThread(): Promise<void> {}
+  async archiveThread(threadId: string): Promise<void> {
+    this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/archive");
+    this.archiveThreadCalls.push({ threadId });
+  }
 
-  async readTurnSnapshot(): Promise<ResolvedTurnSnapshot> {
+  async readTurnSnapshot(threadId: string): Promise<ResolvedTurnSnapshot> {
+    this.#assertThreadRouteRegistered(threadId);
+    this.#maybeThrowMissingThread(threadId, "thread/readTurnSnapshot");
     return {
       text: this.readTurnMessagesResult,
       assistantText: this.readTurnMessagesResult,
@@ -671,7 +626,8 @@ class FakeCodex implements BridgeCodexApi {
     });
   }
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    this.listModelsCalls.push(profileId);
     return this.models;
   }
 
@@ -683,6 +639,49 @@ class FakeCodex implements BridgeCodexApi {
     }
 
     this.#eventQueue.push(event);
+  }
+
+  #assertThreadRouteRegistered(threadId: string): void {
+    if (!this.enforceThreadRouteRegistration) {
+      return;
+    }
+
+    if (!this.registeredThreadProfiles.has(threadId)) {
+      throw new Error(`Thread route not registered before use: ${threadId}`);
+    }
+  }
+
+  #getProfileSettings(profileId: string): {
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  } {
+    return {
+      model: this.model,
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.serviceTier,
+      cwd: this.cwd,
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy,
+      ...(this.profileSettings[profileId] ?? {})
+    };
+  }
+
+  #maybeThrowMissingThread(threadId: string, method: string): void {
+    if (!this.missingThreadIds.has(threadId)) {
+      return;
+    }
+
+    throw new JsonRpcMethodError(method, 1, {
+      code: -32004,
+      message: "Thread not found",
+      data: {
+        kind: "thread_not_found"
+      }
+    });
   }
 }
 
@@ -975,13 +974,41 @@ describe("TelegramCodexBridge", () => {
       },
       codex: {
         defaultCwd: "/workspace",
+        profilesConfigPath: "/workspace/config/codex-profiles.json",
+        profiles: {
+          general: {
+            homePath: "/srv/kirbot/codex-home-general",
+            model: "gpt-5",
+            reasoningEffort: "medium",
+            serviceTier: "flex",
+            sandboxMode: "workspace-write",
+            approvalPolicy: "on-request",
+            skills: [],
+            mcps: []
+          },
+          coding: {
+            homePath: "/srv/kirbot/codex-home-coding",
+            model: "gpt-5-codex",
+            reasoningEffort: "high",
+            serviceTier: "fast",
+            sandboxMode: "danger-full-access",
+            approvalPolicy: "never",
+            skills: [],
+            mcps: []
+          }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        },
+        mcps: {},
         model: undefined,
         modelProvider: undefined,
         sandbox: undefined,
         approvalPolicy: undefined,
         serviceName: "telegram-codex-bridge",
-        baseInstructions: undefined,
-        developerInstructions: undefined,
+        developerInstructions: undefined as unknown as string,
         config: undefined
       }
     };
@@ -1025,6 +1052,404 @@ describe("TelegramCodexBridge", () => {
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
     expect(session?.surface).toEqual({ kind: "general" });
+    expect(session?.profileId).toBe("general");
+  });
+
+  it("routes root session creation through config.codex.routing.general", async () => {
+    config.codex.routing.general = "coding";
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 16,
+      updateId: 26,
+      userId: 42,
+      text: "Use the routed root profile"
+    });
+
+    expect(codex.createThreadProfileIds).toEqual(["coding"]);
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "Root Chat",
+      settings: {
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
+    });
+    expect((await database.getRootSessionByChat(-1001))?.profileId).toBe("coding");
+  });
+
+  it("routes General /fast through the active session profile", async () => {
+    config.codex.routing.general = "coding";
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      serviceTier: null
+    };
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      serviceTier: null
+    };
+
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-root-fast");
+
+    await (bridge as any).handleFastSlashCommand(
+      {
+        chatId: -1001,
+        topicId: null
+      },
+      "on"
+    );
+
+    expect(codex.profileSettings.coding.serviceTier).toBeNull();
+    expect(codex.profileSettings.general.serviceTier).toBeNull();
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      profileId: "coding",
+      settings: {
+        serviceTier: "fast"
+      }
+    });
+    expect(telegram.sentMessages.at(-1)?.text).toBe("General thread fast mode enabled");
+  });
+
+  it("re-registers a persisted root session route before using its thread after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateRootSessionSettings(-1001, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 21,
+      userId: 42,
+      text: "Resume the thread"
+    });
+
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-resumed",
+          profileId: "general"
+        }
+      ])
+    );
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-resumed",
+        text: "Resume the thread",
+        turnId: "turn-1"
+      }
+    ]);
+  });
+
+  it("re-registers a persisted topic session route before opening thread-scoped settings after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 777 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateTopicSessionSettings(-1001, 777, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "/model"
+    });
+
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-resumed",
+          profileId: "coding"
+        }
+      ])
+    );
+    expect(codex.ensuredThreads).toContain("thread-resumed");
+    expect(codex.listModelsCalls).toEqual(["coding"]);
+  });
+
+  it("re-registers a persisted topic session route before a mode command resumes the thread after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 778 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateTopicSessionSettings(-1001, 778, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 778,
+      messageId: 13,
+      updateId: 23,
+      userId: 42,
+      text: "/plan resume with a plan"
+    });
+
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-resumed",
+          profileId: "coding"
+        }
+      ])
+    );
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-resumed",
+        text: "resume with a plan",
+        turnId: "turn-1"
+      }
+    ]);
+  });
+
+  it("surfaces a clear failure when a persisted topic session is no longer available", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 779 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy");
+    await database.updateTopicSessionSettings(-1001, 779, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 779,
+      messageId: 14,
+      updateId: 24,
+      userId: 42,
+      text: "Resume the unavailable session"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This Codex session is no longer available. Start a new session in this chat or topic."
+    );
+    expect(codex.turns).toEqual([]);
+  });
+
+  it("surfaces the unavailable-session message when a persisted session profile is no longer configured", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 7790 },
+      profileId: "shared"
+    });
+    await database.activateSession(pending.id, "thread-legacy-missing-profile");
+    await database.updateTopicSessionSettings(-1001, 7790, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy-missing-profile");
+
+    await expect(
+      bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 7790,
+        messageId: 140,
+        updateId: 240,
+        userId: 42,
+      text: "Resume the session with a missing profile"
+      })
+    ).resolves.toBeUndefined();
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This Codex session is no longer available. Start a new session in this chat or topic."
+    );
+    expect(codex.turns).toEqual([]);
+  });
+
+  it("surfaces a clear failure when a persisted General session is no longer available", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-legacy-root");
+    codex.missingThreadIds.add("thread-legacy-root");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "Resume the unavailable root session"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This Codex session is no longer available. Start a new session in this chat or topic."
+    );
+    expect(codex.turns).toEqual([]);
+  });
+
+  it("does not auto-recover /clear when the persisted General session is no longer available", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-legacy-root");
+    codex.missingThreadIds.add("thread-legacy-root");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "/clear"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This Codex session is no longer available. Start a new session in this chat or topic."
+    );
+    expect(codex.createdThreads).toEqual([]);
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      status: "active",
+      codexThreadId: "thread-legacy-root",
+      profileId: "general"
+    });
+  });
+
+  it("re-registers a persisted topic session route before compacting and archiving after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 780 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateTopicSessionSettings(-1001, 780, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 780,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "/compact"
+    });
+    await bridge.handleTopicClosed({
+      chatId: -1001,
+      topicId: 780
+    });
+
+    expect(codex.compactThreadCalls).toEqual([{ threadId: "thread-resumed" }]);
+    expect(codex.archiveThreadCalls).toEqual([{ threadId: "thread-resumed" }]);
+    expect(
+      codex.registerThreadProfileCalls.filter((call) => (
+        call.threadId === "thread-resumed" && call.profileId === "coding"
+      ))
+    ).toHaveLength(2);
   });
 
   it("treats General as the shared root slash-command scope", () => {
@@ -1035,8 +1460,13 @@ describe("TelegramCodexBridge", () => {
     expect(isAllowedSlashCommandInScope("implement", "general")).toBe(false);
   });
 
-  it("does not persist or reuse the unknown-model sentinel for root defaults", async () => {
-    codex.model = "unknown-model";
+  it("creates a General session from the routed profile settings and persists no overrides", async () => {
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+      serviceTier: "fast"
+    };
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -1049,14 +1479,95 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.createThreadCalls.at(-1)).toEqual({
       title: "Root Chat",
-      settings: expect.not.objectContaining({
-        model: "unknown-model"
-      })
+      settings: {
+        model: "gpt-5.4",
+        reasoningEffort: "medium",
+        serviceTier: "fast",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
+    });
+    expect(codex.readProfileSettingsCalls).toEqual(["general", "general"]);
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      settings: {
+        model: null,
+        reasoningEffort: null,
+        serviceTier: null,
+        approvalPolicy: null,
+        sandboxPolicy: null
+      }
+    });
+  });
+
+  it("creates new topic sessions from the routed profile settings and keeps overrides partial", async () => {
+    config.codex.routing.general = "coding";
+    config.codex.routing.thread = "general";
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high"
+    };
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4-codex",
+      serviceTier: "fast"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 19,
+      updateId: 29,
+      userId: 42,
+      text: "Seed the root defaults"
     });
 
-    const defaults = await database.getChatThreadDefaults("-1001");
-    expect(defaults?.root.model).toBeNull();
-    expect(defaults?.spawn.model).toBeNull();
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 20,
+      updateId: 30,
+      userId: 42,
+      text: "/thread Seed the topic defaults"
+    });
+
+    expect(codex.readProfileSettingsCalls).toEqual(["coding", "coding", "general", "general"]);
+    expect(codex.createThreadCalls.at(0)).toEqual({
+      title: "Root Chat",
+      settings: {
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
+    });
+    expect(codex.createThreadCalls.at(1)).toEqual({
+      title: expect.any(String),
+      settings: {
+        model: "gpt-5.4-codex",
+        serviceTier: "fast",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
+    });
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      settings: {
+        model: null,
+        reasoningEffort: null,
+        serviceTier: null,
+        approvalPolicy: null,
+        sandboxPolicy: null
+      }
+    });
+    expect(await database.getSessionByTopic(-1001, 101)).toMatchObject({
+      settings: {
+        model: null,
+        reasoningEffort: null,
+        serviceTier: null,
+        approvalPolicy: null,
+        sandboxPolicy: null
+      }
+    });
   });
 
   it("does not attach the command keyboard to a completion footer unless requested", async () => {
@@ -1498,7 +2009,8 @@ describe("TelegramCodexBridge", () => {
   it("recovers the root session after a prior provisioning failure left it errored", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     await database.markSessionErrored(pending.id);
 
@@ -1523,6 +2035,7 @@ describe("TelegramCodexBridge", () => {
     const session = await database.getRootSessionByChat(-1001);
     expect(session?.status).toBe("active");
     expect(session?.codexThreadId).toBe("thread-1");
+    expect(session?.profileId).toBe("general");
   });
 
   it("rebuilds and restarts kirbot from root /restart", async () => {
@@ -1622,10 +2135,11 @@ describe("TelegramCodexBridge", () => {
     expect(codex.createThreadCalls).toEqual([
       {
         title: "Draft the rollout",
-        settings: expect.objectContaining({
+        settings: {
           model: "gpt-5-codex",
-          serviceTier: null
-        })
+          approvalPolicy: "on-request",
+          sandboxPolicy: codex.sandboxPolicy
+        }
       }
     ]);
     expect(codex.turns).toEqual([
@@ -1646,6 +2160,106 @@ describe("TelegramCodexBridge", () => {
     });
     expect(getInlineButtonTexts(rootConfirmation)).toEqual(["View"]);
     expect(getButtonUrlByButtonText(rootConfirmation, "View")).toBe("https://t.me/c/1/101");
+
+    const session = await database.getSessionByTopic(-1001, 101);
+    expect(session?.profileId).toBe("coding");
+  });
+
+  it("routes /thread session creation through config.codex.routing.thread", async () => {
+    config.codex.routing.thread = "general";
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "/thread Route this thread"
+    });
+
+    expect(codex.createThreadProfileIds).toEqual(["general"]);
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "Route this thread",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoningEffort: "high",
+        serviceTier: "fast",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
+    });
+    expect((await database.getSessionByTopic(-1001, 101))?.profileId).toBe("general");
+  });
+
+  it("merges profile settings with partial session overrides before sending turns", async () => {
+    codex.profileSettings.coding = {
+      ...codex.profileSettings.coding,
+      model: "gpt-5.4-codex",
+      reasoningEffort: "high",
+      serviceTier: null
+    };
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 10,
+      updateId: 29,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 11,
+      updateId: 30,
+      userId: 42,
+      text: "/fast on"
+    });
+
+    codex.readTurnSnapshotResult = {
+      text: "Updated answer",
+      assistantText: "Updated answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 12,
+      updateId: 31,
+      userId: 42,
+      text: "Use the merged settings"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5.4-codex",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      approvalPolicy: "on-request",
+      sandboxPolicy: codex.sandboxPolicy
+    });
   });
 
   it("rejects bare root /thread before creating a topic", async () => {
@@ -1742,6 +2356,39 @@ describe("TelegramCodexBridge", () => {
     expect(getInlineButtonTexts(rootConfirmation)).toEqual(["View"]);
     expect(getButtonUrlByButtonText(rootConfirmation, "View")).toBe("https://t.me/c/1/101");
 
+  });
+
+  it("routes /plan session creation through config.codex.routing.plan and keeps preferred mode plan", async () => {
+    config.codex.routing.plan = "general";
+    codex.profileSettings.general = {
+      ...codex.profileSettings.general,
+      model: "gpt-5.4-codex",
+      reasoningEffort: "high"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/plan route the plan"
+    });
+
+    expect(codex.createThreadProfileIds).toEqual(["general"]);
+    expect(codex.createThreadCalls.at(-1)).toEqual({
+      title: "route the plan",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoningEffort: "high",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
+    });
+    expect(await database.getSessionByTopic(-1001, 101)).toMatchObject({
+      profileId: "general",
+      preferredMode: "plan"
+    });
   });
 
   it("preserves image attachments for root /plan turns started from an image caption", async () => {
@@ -2355,11 +3002,18 @@ describe("TelegramCodexBridge", () => {
     expect(telegram.sentMessages.at(-1)?.text).toBe(
       "Wait for the current response to finish or stop it first before changing settings"
     );
-    expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
   });
 
-  it("applies root /fast to spawn defaults through explicit scope selection", async () => {
+  it("rejects General /fast changes while a turn is active", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 26,
+      userId: 42,
+      text: "Start General"
+    });
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -2369,39 +3023,132 @@ describe("TelegramCodexBridge", () => {
       text: "/fast on"
     });
 
-    const scopePicker = telegram.sentMessages.at(-1);
-    expect(scopePicker?.text).toBe("Apply fast mode to:");
-    expect(getInlineButtonTexts(scopePicker)).toEqual(["General Thread", "New /thread Topics"]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing settings"
+    );
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      settings: {
+        model: null,
+        reasoningEffort: null,
+        serviceTier: null,
+        approvalPolicy: null,
+        sandboxPolicy: null
+      }
+    });
+  });
 
-    const spawnCallback = getCallbackDataByButtonText(scopePicker, "New /thread Topics");
-    expect(spawnCallback).toBe("slash:fast:apply:spawn:on");
-
-    await bridge.handleCallbackQuery({
-      callbackQueryId: "fast-spawn",
-      data: spawnCallback!,
-      chatId: -1001,
+  it.each([
+    {
+      title: "General",
       topicId: null,
-      userId: 42
+      startText: "Start General",
+      commandText: "/model"
+    },
+    {
+      title: "topic",
+      topicId: 781,
+      startText: "Start the session",
+      commandText: "/model"
+    }
+  ])("rejects $title /model changes while a turn is active", async ({ topicId, startText, commandText }) => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 12,
+      updateId: 28,
+      userId: 42,
+      text: startText
     });
 
-    expect(telegram.sentMessages.at(-1)?.text).toBe("New thread default fast mode enabled");
-    expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId,
+      messageId: 13,
+      updateId: 29,
+      userId: 42,
+      text: commandText
+    });
 
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "Wait for the current response to finish or stop it first before changing settings"
+    );
+    expect(codex.listModelsCalls).toEqual([]);
+  });
+
+  it("applies General /fast only to the active General session", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 10,
+      updateId: 26,
+      userId: 42,
+      text: "Start General"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 27,
+      userId: 42,
+      text: "/fast on"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("General thread fast mode enabled");
+    codex.readTurnSnapshotResult = {
+      text: "General fast answer",
+      assistantText: "General fast answer"
+    };
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
       messageId: 12,
       updateId: 28,
       userId: 42,
+      text: "Use fast mode in General"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5-codex",
+      serviceTier: "fast",
+      approvalPolicy: "on-request",
+      sandboxPolicy: codex.sandboxPolicy
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 13,
+      updateId: 29,
+      userId: 42,
       text: "/thread Use fast mode"
     });
 
     expect(codex.createThreadCalls.at(-1)).toEqual({
       title: "Use fast mode",
-      settings: expect.objectContaining({
-        serviceTier: "fast"
-      })
+      settings: {
+        model: "gpt-5-codex",
+        approvalPolicy: "on-request",
+        sandboxPolicy: codex.sandboxPolicy
+      }
     });
   });
 
@@ -2443,9 +3190,6 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode enabled");
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
-    expect(codex.globalSettingsUpdates).toHaveLength(0);
-
     codex.readTurnSnapshotResult = {
       text: "Fast answer",
       assistantText: "Fast answer"
@@ -2461,19 +3205,9 @@ describe("TelegramCodexBridge", () => {
 
     expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
       model: "gpt-5-codex",
-      reasoningEffort: null,
       serviceTier: "fast",
       approvalPolicy: "on-request",
-      sandboxPolicy: {
-        type: "workspaceWrite",
-        writableRoots: [],
-        readOnlyAccess: {
-          type: "fullAccess"
-        },
-        networkAccess: false,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false
-      }
+      sandboxPolicy: codex.sandboxPolicy
     });
 
     codex.emitNotification({
@@ -2491,6 +3225,65 @@ describe("TelegramCodexBridge", () => {
     await waitForAsyncNotifications();
 
     expect(telegram.sentMessages.at(-1)?.text).toContain("gpt-5-codex fast");
+  });
+
+  it("lets a topic explicitly turn fast mode off even when the profile default is fast", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 10,
+      updateId: 32,
+      userId: 42,
+      text: "Start the session"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 11,
+      updateId: 33,
+      userId: 42,
+      text: "/fast off"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode disabled");
+    codex.readTurnSnapshotResult = {
+      text: "Normal answer",
+      assistantText: "Normal answer"
+    };
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 785,
+      messageId: 12,
+      updateId: 34,
+      userId: 42,
+      text: "Use normal mode"
+    });
+
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5-codex",
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: codex.sandboxPolicy
+    });
   });
 
   it("compacts the current thread and surfaces the compaction notice", async () => {
@@ -2570,6 +3363,33 @@ describe("TelegramCodexBridge", () => {
       }
     ];
 
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 9,
+      updateId: 28,
+      userId: 42,
+      text: "Start General"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -2577,18 +3397,6 @@ describe("TelegramCodexBridge", () => {
       updateId: 29,
       userId: 42,
       text: "/model"
-    });
-
-    const scopePicker = telegram.sentMessages.at(-1);
-    expect(scopePicker?.text).toBe("Choose which settings to update");
-    expect(getInlineButtonTexts(scopePicker)).toEqual(["General Thread", "New /thread Topics"]);
-
-    await bridge.handleCallbackQuery({
-      callbackQueryId: "scope-root-model",
-      data: "slash:scope:model:root",
-      chatId: -1001,
-      topicId: null,
-      userId: 42
     });
 
     const modelPicker = telegram.sentMessages.at(-1);
@@ -2599,6 +3407,7 @@ describe("TelegramCodexBridge", () => {
         "Then choose a reasoning effort"
       ].join("\n")
     );
+    expect(codex.listModelsCalls).toEqual(["general"]);
     const pickCallback = getCallbackDataByButtonText(modelPicker, "gpt-5.3-codex");
     expect(pickCallback).toBe("slash:model:pick:root:1");
 
@@ -2622,8 +3431,6 @@ describe("TelegramCodexBridge", () => {
       userId: 42
     });
 
-    expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
     expect(telegram.sentMessages.at(-1)?.text).toBe("General thread model set to gpt-5.3-codex high");
 
     await bridge.handleUserTextMessage({
@@ -2635,39 +3442,141 @@ describe("TelegramCodexBridge", () => {
       text: "Use the new model"
     });
 
-    expect(codex.createThreadCalls.at(-1)).toEqual({
-      title: "Root Chat",
-      settings: expect.objectContaining({
-        model: "gpt-5.3-codex",
-        reasoningEffort: "high"
-      })
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      approvalPolicy: "on-request",
+      sandboxPolicy: codex.sandboxPolicy
     });
   });
 
-  it.each([
-    {
-      title: "General",
-      callbackQueryId: "scope-root-model-pagination",
-      callbackData: "slash:scope:model:root",
-      expectedTitle: "Choose the model for the General thread",
-      expectedPageCallback: "slash:model:page:root:1",
-      expectedPickCallback: "slash:model:pick:root:6"
-    },
-    {
-      title: "spawn defaults",
-      callbackQueryId: "scope-spawn-model-pagination",
-      callbackData: "slash:scope:model:spawn",
-      expectedTitle: "Choose the default model for new /thread topics",
-      expectedPageCallback: "slash:model:page:spawn:1",
-      expectedPickCallback: "slash:model:pick:spawn:6"
-    }
-  ])("preserves $title model scope when paging through the picker", async ({
-    callbackQueryId,
-    callbackData,
-    expectedTitle,
-    expectedPageCallback,
-    expectedPickCallback
-  }) => {
+  it("resolves an active General session with partial overrides without persisting a complete snapshot", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-root-settings");
+    await database.updateRootSessionSettings("-1001", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: null,
+      sandboxPolicy: null
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 12,
+      updateId: 31,
+      userId: 42,
+      text: "/model"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      [
+        "Choose the model for the General thread",
+        "Current: gpt-5.4-mini",
+        "Then choose a reasoning effort"
+      ].join("\n")
+    );
+    expect(codex.listModelsCalls.at(-1)).toBe("general");
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      settings: {
+        model: "gpt-5.4-mini",
+        reasoningEffort: null,
+        serviceTier: null,
+        approvalPolicy: null,
+        sandboxPolicy: null
+      }
+    });
+  });
+
+  it("reports unavailable persisted topic sessions through the generic callback path", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 781 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy-callback");
+    await database.updateTopicSessionSettings(-1001, 781, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy-callback");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-legacy-model",
+      data: "slash:model:pick:0",
+      chatId: -1001,
+      topicId: 781,
+      userId: 42
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This Codex session is no longer available. Start a new session in this chat or topic."
+    );
+    expect(telegram.callbackAnswers.at(-1)).toEqual({
+      callbackQueryId: "callback-legacy-model",
+      options: {
+        text: "Codex session is no longer available"
+      }
+    });
+  });
+
+  it("reports unavailable implement callbacks without a second ack", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 782 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy-implement-callback");
+    await database.updateTopicSessionSettings(-1001, 782, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy-implement-callback");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-legacy-implement",
+      data: TOPIC_IMPLEMENT_CALLBACK_DATA,
+      chatId: -1001,
+      topicId: 782,
+      userId: 42
+    });
+
+    expect(telegram.sentMessages.some((message) =>
+      message.text === "This Codex session is no longer available. Start a new session in this chat or topic."
+    )).toBe(true);
+    expect(telegram.callbackAnswers).toEqual([{ callbackQueryId: "callback-legacy-implement" }]);
+  });
+
+  it("preserves General model scope when paging through the picker", async () => {
     codex.models = Array.from({ length: 7 }, (_, index) => ({
       id: `model-${index + 1}`,
       model: `gpt-5-model-${index + 1}`,
@@ -2686,6 +3595,13 @@ describe("TelegramCodexBridge", () => {
       isDefault: index === 0
     }));
 
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-root-pagination");
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -2695,26 +3611,18 @@ describe("TelegramCodexBridge", () => {
       text: "/model"
     });
 
-    await bridge.handleCallbackQuery({
-      callbackQueryId,
-      data: callbackData,
-      chatId: -1001,
-      topicId: null,
-      userId: 42
-    });
-
     const firstPage = telegram.sentMessages.at(-1);
     expect(firstPage?.text).toBe([
-      expectedTitle,
+      "Choose the model for the General thread",
       "Current: gpt-5-codex",
       "Then choose a reasoning effort"
     ].join("\n"));
 
     const nextPageCallback = getCallbackDataByButtonText(firstPage, "Next");
-    expect(nextPageCallback).toBe(expectedPageCallback);
+    expect(nextPageCallback).toBe("slash:model:page:root:1");
 
     await bridge.handleCallbackQuery({
-      callbackQueryId: `${callbackQueryId}-page-2`,
+      callbackQueryId: "scope-root-model-pagination-page-2",
       data: nextPageCallback!,
       chatId: -1001,
       topicId: null,
@@ -2723,14 +3631,41 @@ describe("TelegramCodexBridge", () => {
 
     const secondPage = telegram.sentMessages.at(-1);
     expect(secondPage?.text).toBe([
-      expectedTitle,
+      "Choose the model for the General thread",
       "Current: gpt-5-codex",
       "Then choose a reasoning effort"
     ].join("\n"));
-    expect(getCallbackDataByButtonText(secondPage, "gpt-5-model-7")).toBe(expectedPickCallback);
+    expect(getCallbackDataByButtonText(secondPage, "gpt-5-model-7")).toBe("slash:model:pick:root:6");
   });
 
   it("uses General-facing copy when opening root permissions selection", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 9,
+      updateId: 30,
+      userId: 42,
+      text: "Start General"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -2738,14 +3673,6 @@ describe("TelegramCodexBridge", () => {
       updateId: 31,
       userId: 42,
       text: "/permissions"
-    });
-
-    await bridge.handleCallbackQuery({
-      callbackQueryId: "scope-root-permissions",
-      data: "slash:scope:permissions:root",
-      chatId: -1001,
-      topicId: null,
-      userId: 42
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe(
@@ -2757,7 +3684,34 @@ describe("TelegramCodexBridge", () => {
     );
   });
 
-  it("treats /approvals as an alias for /permissions and applies the selected preset to spawn defaults", async () => {
+  it("treats /approvals as an alias for /permissions and applies the selected preset to the active General session", async () => {
+    codex.readTurnSnapshotResult = {
+      text: "Initial answer",
+      assistantText: "Initial answer"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 9,
+      updateId: 31,
+      userId: 42,
+      text: "Start General"
+    });
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
     await bridge.handleUserTextMessage({
       chatId: -1001,
       topicId: null,
@@ -2767,32 +3721,18 @@ describe("TelegramCodexBridge", () => {
       text: "/approvals"
     });
 
-    const scopePicker = telegram.sentMessages.at(-1);
-    expect(scopePicker?.text).toBe("Choose which settings to update");
-    expect(getInlineButtonTexts(scopePicker)).toEqual(["General Thread", "New /thread Topics"]);
-
-    await bridge.handleCallbackQuery({
-      callbackQueryId: "scope-spawn-permissions",
-      data: "slash:scope:permissions:spawn",
-      chatId: -1001,
-      topicId: null,
-      userId: 42
-    });
-
     const permissionsPicker = telegram.sentMessages.at(-1);
     expect(getInlineButtonTexts(permissionsPicker)).toEqual(["Read Only", "• Default", "Full Access"]);
 
     await bridge.handleCallbackQuery({
       callbackQueryId: "permissions-full",
-      data: "slash:permissions:apply:spawn:full-access",
+      data: "slash:permissions:apply:root:full-access",
       chatId: -1001,
       topicId: null,
       userId: 42
     });
 
-    expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
-    expect(telegram.sentMessages.at(-1)?.text).toBe("New thread default permissions set to Full Access");
+    expect(telegram.sentMessages.at(-1)?.text).toBe("General thread permissions set to Full Access");
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -2800,17 +3740,15 @@ describe("TelegramCodexBridge", () => {
       messageId: 11,
       updateId: 33,
       userId: 42,
-      text: "/thread Review deployment"
+      text: "Review deployment"
     });
 
-    expect(codex.createThreadCalls.at(-1)).toEqual({
-      title: "Review deployment",
-      settings: expect.objectContaining({
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "dangerFullAccess"
-        }
-      })
+    expect(codex.turnOverrides.at(-1)?.overrides).toEqual({
+      model: "gpt-5-codex",
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
     });
   });
 
@@ -2895,14 +3833,14 @@ describe("TelegramCodexBridge", () => {
     });
     expect(codex.turnCollaborationModes.at(-1)).toMatchObject({
       turnId: "turn-2",
-      collaborationMode: {
-        mode: "plan",
-        settings: {
-          model: "gpt-5-codex",
-          reasoning_effort: null,
-          developer_instructions: null
+        collaborationMode: {
+          mode: "plan",
+          settings: {
+            model: "gpt-5-codex",
+            reasoning_effort: "high",
+            developer_instructions: null
+          }
         }
-      }
     });
     expect(await database.getSessionByTopic(-1001, 782)).toMatchObject({
       preferredMode: "plan"
@@ -7667,7 +8605,8 @@ describe("TelegramCodexBridge", () => {
   it("keeps generic provisioning messages unmentioned", async () => {
     await database.createProvisioningSession({
       telegramChatId: "-1001",
-      telegramTopicId: 2004
+      telegramTopicId: 2004,
+      profileId: "coding"
     });
 
     await bridge.handleUserTextMessage({
@@ -7684,6 +8623,9 @@ describe("TelegramCodexBridge", () => {
       "This topic is still provisioning a Codex session. Try again in a moment"
     );
     expect(telegram.sentMessages.at(-1)?.text.startsWith("@starter-user ")).toBe(false);
+    expect(await database.getSessionByTopic(-1001, 2004)).toMatchObject({
+      profileId: "coding"
+    });
   });
 
   it("cleans up pending approval prompts when the app server resolves them elsewhere", async () => {

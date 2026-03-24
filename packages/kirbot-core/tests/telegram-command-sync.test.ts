@@ -113,11 +113,11 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "model",
-            description: "Choose the default or thread model"
+            description: "Choose the current session model"
           },
           {
             command: "fast",
-            description: "Toggle default or thread fast mode"
+            description: "Toggle fast mode for the current session"
           },
           {
             command: "compact",
@@ -129,7 +129,7 @@ describe("TelegramCommandSync", () => {
           },
           {
             command: "permissions",
-            description: "Set default or thread permissions"
+            description: "Set permissions for the current session"
           },
           {
             command: "commands",

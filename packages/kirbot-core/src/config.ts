@@ -1,25 +1,14 @@
 import { config as loadDotenv } from "dotenv";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { z } from "zod";
 
-import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
-import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
-import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
-import type { CodexConfig } from "@kirbot/codex-client/config";
-import { resolveKirbotCodexHomePath } from "./codex-home";
+import type { CodexProfilesConfig } from "./codex-profiles";
+import { expandHomePath, parseCodexProfilesConfig } from "./codex-profiles";
+import type { DatabaseProfileRouting } from "./db";
+import { resolveCodexProfilesConfigPath } from "./repo-paths";
 
 loadKirbotDotenv();
-
-const optionalEnvString = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
-  z.preprocess((value) => {
-    if (typeof value === "string" && value.trim() === "") {
-      return undefined;
-    }
-
-    return value;
-  }, schema.optional());
 
 const workspaceChatIdEnv = z.preprocess(
   (value) => value,
@@ -73,17 +62,7 @@ const envSchema = z.object({
     }),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
-  CODEX_HOME_PATH: optionalEnvString(z.string()),
-  CODEX_MODEL: optionalEnvString(z.string()),
-  CODEX_MODEL_PROVIDER: optionalEnvString(z.string()),
-  CODEX_SANDBOX_MODE: optionalEnvString(
-    z.enum(["read-only", "workspace-write", "danger-full-access"])
-  ),
-  CODEX_APPROVAL_POLICY: optionalEnvString(
-    z.enum(["untrusted", "on-request", "on-failure", "never"])
-  ),
   CODEX_SERVICE_NAME: z.string().default("telegram-codex-bridge"),
-  CODEX_CONFIG_JSON: optionalEnvString(z.string())
 });
 
 export type AppConfig = {
@@ -98,11 +77,30 @@ export type AppConfig = {
   database: {
     path: string;
   };
-  codex: CodexConfig;
+  codex: {
+    defaultCwd: string;
+    profilesConfigPath: string;
+    profiles: CodexProfilesConfig["profiles"];
+    routing: DatabaseProfileRouting;
+    mcps: CodexProfilesConfig["mcps"];
+    model: undefined;
+    modelProvider: undefined;
+    sandbox: undefined;
+    approvalPolicy: undefined;
+    serviceName: string;
+    developerInstructions: string;
+    config: undefined;
+  };
 };
 
 export function loadConfig(): AppConfig {
   const parsed = envSchema.parse(process.env);
+  const databasePath = expandHomePath(parsed.DATABASE_PATH);
+  const codexProfilesConfigPath = resolveCodexProfilesConfigPath();
+  const codexProfiles = parseCodexProfilesConfig(readFileSync(codexProfilesConfigPath, "utf8"), {
+    configPath: codexProfilesConfigPath,
+    databasePath
+  });
 
   return {
     telegram: {
@@ -116,46 +114,23 @@ export function loadConfig(): AppConfig {
       }
     },
     database: {
-      path: parsed.DATABASE_PATH
+      path: databasePath
     },
     codex: {
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
-      homePath: resolveKirbotCodexHomePath(parsed.DATABASE_PATH, parsed.CODEX_HOME_PATH),
-      model: parsed.CODEX_MODEL,
-      modelProvider: parsed.CODEX_MODEL_PROVIDER,
-      sandbox: parsed.CODEX_SANDBOX_MODE as SandboxMode | undefined,
-      approvalPolicy: parsed.CODEX_APPROVAL_POLICY as AskForApproval | undefined,
+      profilesConfigPath: codexProfilesConfigPath,
+      profiles: codexProfiles.profiles,
+      routing: codexProfiles.routes as DatabaseProfileRouting,
+      mcps: codexProfiles.mcps,
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
       serviceName: parsed.CODEX_SERVICE_NAME,
-      baseInstructions: undefined,
       developerInstructions: readRequiredTextFile(resolveKirbotPromptPath()),
-      config: parseJsonConfig(parsed.CODEX_CONFIG_JSON)
+      config: undefined
     }
   };
-}
-
-function expandHomePath(value: string): string {
-  if (value === "~") {
-    return homedir();
-  }
-
-  if (value.startsWith("~/")) {
-    return `${homedir()}${value.slice(1)}`;
-  }
-
-  return value;
-}
-
-function parseJsonConfig(
-  value: string | undefined
-): Record<string, JsonValue | undefined> | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return z.record(z.string(), z.unknown()).parse(JSON.parse(value)) as Record<
-    string,
-    JsonValue | undefined
-  >;
 }
 
 function readRequiredTextFile(path: string): string {

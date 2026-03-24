@@ -1,0 +1,31 @@
+{
+  "routes": {
+    "general": "general",
+    "thread": "coding",
+    "plan": "coding"
+  },
+  "skills": {
+    "kirbot-skill-install": {}
+  },
+  "mcps": {},
+  "profiles": {
+    "general": {
+      "model": "gpt-5",
+      "reasoningEffort": "medium",
+      "serviceTier": "flex",
+      "sandboxMode": "workspace-write",
+      "approvalPolicy": "on-request",
+      "skills": [],
+      "mcps": []
+    },
+    "coding": {
+      "model": "gpt-5-codex",
+      "reasoningEffort": "high",
+      "serviceTier": "fast",
+      "sandboxMode": "danger-full-access",
+      "approvalPolicy": "never",
+      "skills": ["kirbot-skill-install"],
+      "mcps": []
+    }
+  }
+}

@@ -27,11 +27,11 @@ kirbot sits between Telegram and a pinned local Codex app server:
 - `packages/kirbot-core/src/telegram-messenger.ts` and `packages/telegram-format/src/*` own Telegram delivery and formatting.
 - `apps/plan-mini-app` is a separate SvelteKit frontend for rendering completed plans from typed URL payloads.
 
-The bridge uses one persistent `General` root session plus topic sessions:
+The bridge routes Telegram surfaces to Codex profiles:
 
-- plain `General` messages continue the same workspace Codex thread
-- `/thread <prompt>` and root `/plan [prompt]` from `General` create topic-backed Codex sessions
-- later messages inside a topic continue that topic's shared Codex thread
+- plain `General` messages use the `general` profile
+- `/thread <prompt>` and root `/plan [prompt]` use the `coding` profile
+- later messages inside a topic stay on that topic's persisted profile
 - pending approvals and user-input requests route back to the surface that owns the session
 
 ## Quick Start
@@ -43,6 +43,7 @@ Prerequisites:
 - a Telegram bot token
 - the Telegram workspace chat ID for the dedicated private forum supergroup
 - a deployed Telegram Mini App URL over `https`
+- an authenticated base Codex setup before first run if you want Kirbot to seed missing `auth.json` from your existing Codex home
 
 Install and configure:
 
@@ -62,17 +63,57 @@ Commonly adjusted settings:
 
 - `DATABASE_PATH`
 - `CODEX_DEFAULT_CWD`
-- `CODEX_HOME_PATH`
-- `CODEX_MODEL`
-- `CODEX_MODEL_PROVIDER`
-- `CODEX_SANDBOX_MODE`
-- `CODEX_APPROVAL_POLICY`
-- `CODEX_CONFIG_JSON`
 
-Bootstrap note:
+Codex profile setup:
 
-- `CODEX_MODEL`, `CODEX_MODEL_PROVIDER`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_CONFIG_JSON` only seed a brand new isolated `CODEX_HOME/config.toml`.
-- After that file exists, treat the isolated `config.toml` as Kirbot's global Codex source of truth.
+```json
+{
+  "routes": {
+    "general": "general",
+    "thread": "coding",
+    "plan": "coding"
+  },
+  "skills": {
+    "brainstorming": {},
+    "kirbot-skill-install": {}
+  },
+  "mcps": {
+    "github": {
+      "type": "stdio",
+      "command": ["github-mcp", "serve"]
+    }
+  },
+  "profiles": {
+    "general": {
+      "model": "gpt-5",
+      "sandboxMode": "workspace-write",
+      "approvalPolicy": "on-request",
+      "skills": [],
+      "mcps": []
+    },
+    "coding": {
+      "model": "gpt-5-codex",
+      "sandboxMode": "danger-full-access",
+      "approvalPolicy": "never",
+      "skills": ["brainstorming", "kirbot-skill-install"],
+      "mcps": ["github"]
+    }
+  }
+}
+```
+
+- `config/codex-profiles.json` is the checked-in source of truth for route selection, shared skill ids, shared MCP definitions, and per-profile defaults.
+- `general` owns the forum `General` surface.
+- `coding` owns `/thread` and `/plan`.
+- each profile gets its own managed isolated Codex home under `dirname(DATABASE_PATH)/homes/<profile>`; with the default database path that is `data/homes/<profile>`.
+
+Managed profile homes:
+
+- Shared skill source lives in checked-in `skills/<skill-id>/`.
+- On startup, Kirbot creates missing profile homes, rewrites each managed `config.toml`, and rebuilds each managed `skills/` subtree from `config/codex-profiles.json`.
+- Kirbot preserves runtime-owned files such as `auth.json`, Codex thread/session state, `rules/`, and `superpowers/`.
+- Do not edit `dirname(DATABASE_PATH)/homes/<profile>/skills/` directly; with the default database path that is `data/homes/<profile>/skills/`. It is generated.
+- The cutover is hard: old sessions from the previous single-home setup are not migrated and will fail when first resumed. Start a new thread or topic instead.
 
 Telegram BotFather requirements:
 
@@ -137,11 +178,12 @@ npm run verify:codex-upgrade
 Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
-- kirbot prepares a dedicated Codex home for newly created sessions by default. Set `CODEX_HOME_PATH` if you need that isolated state somewhere other than beside `DATABASE_PATH`.
-- kirbot keeps a shared-home Codex app-server available for legacy thread ids, so existing topics can still resume while future topics are isolated from other Codex clients on the same machine.
-- Intentional override points over the isolated global `config.toml` are:
-- global `/model`, `/fast`, and `/permissions` changes, which rewrite the isolated Codex config
-- topic-local `/model`, `/fast`, and `/permissions` changes, which apply thread-local overrides instead of rewriting global defaults
+- `config/codex-profiles.json` controls profile routing, MCP selection, the generated per-profile Codex homes, and the default Codex settings for each profile.
+- Shared skills are authored under `skills/` and synced into each managed home on startup.
+
+Intentional override points beyond `config/codex-profiles.json` are:
+- `/model`, `/fast`, and `/permissions` in `General`, which override only the active General session
+- `/model`, `/fast`, and `/permissions` inside a topic, which override only that topic session
 - new-session `cwd` selection, including `/start <path>`, which stays per thread because it is session-specific
 - `apps/bot/KIRBOT.md` is sent as Codex developer instructions.
 - Codex base instructions are intentionally left unset.

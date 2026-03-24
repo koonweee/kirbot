@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
 import { CodexGateway, spawnCodexAppServer } from "@kirbot/codex-client";
+import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
 import type { AppConfig } from "./config";
-import { prepareKirbotCodexHome, resolveKirbotCodexConfigPath } from "./codex-home";
+import { prepareKirbotCodexHome } from "./codex-home";
 import { BridgeDatabase } from "./db";
 import { createConsoleLogTarget, createSourceLogger, type AppLogTarget, type LoggerLike } from "./logging";
 import { TemporaryImageStore } from "./media-store";
@@ -49,7 +49,7 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   const appLogger = createSourceLogger(logTarget, "kirbot");
   const codexLogger = createSourceLogger(logTarget, "codex-app-server");
 
-  const database = new BridgeDatabase(config.database.path);
+  const database = new BridgeDatabase(config.database.path, config.codex.routing);
   const mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
   await database.migrate();
   await mediaStore.cleanupStaleFiles();
@@ -129,44 +129,45 @@ async function initializeCodex(
     };
   }
 
-  if (config.codex.homePath) {
-    prepareKirbotCodexHome({
-      targetHomePath: config.codex.homePath
-    });
-  }
-  // The isolated config.toml is Kirbot's global Codex policy source.
-  // Code should only override it intentionally for thread-local settings or per-session cwd.
-  const shouldBootstrapIsolatedConfig =
-    config.codex.homePath !== undefined && !existsSync(resolveKirbotCodexConfigPath(config.codex.homePath));
-  const shared = await initializeGateway(config, logger);
-  const isolated = await initializeGateway(
-    config,
-    logger,
-    config.codex.homePath ? { homePath: config.codex.homePath } : undefined
-  );
-  if (shouldBootstrapIsolatedConfig) {
-    await isolated.codex.bootstrapManagedGlobalConfig();
+  const gateways: Record<string, { codex: CodexGateway; rpcClient: CodexRpcClient; spawnedAppServer: SpawnedAppServer }> = {};
+
+  try {
+    for (const [profileId, profile] of Object.entries(config.codex.profiles)) {
+      prepareKirbotCodexHome({
+        targetHomePath: profile.homePath,
+        managed: {
+          managedConfigToml: renderManagedConfigToml(profile, config.codex.mcps),
+          managedSkillIds: profile.skills,
+          managedProfilesConfigPath: config.codex.profilesConfigPath
+        }
+      });
+
+      const gateway = await initializeGateway(config, logger, profile.homePath);
+      gateways[profileId] = gateway;
+    }
+  } catch (error) {
+    await Promise.all(
+      Object.values(gateways).map((gateway) =>
+        cleanupGatewayResources(gateway.rpcClient, gateway.spawnedAppServer)
+      )
+    );
+    throw error;
   }
 
   return {
     codex: new RoutedCodexApi(
-      {
-        shared: shared.codex,
-        isolated: isolated.codex
-      },
+      Object.fromEntries(Object.entries(gateways).map(([profileId, gateway]) => [profileId, gateway.codex])),
       logger
     ),
-    rpcClients: [shared.rpcClient, isolated.rpcClient],
-    spawnedAppServers: [shared.spawnedAppServer, isolated.spawnedAppServer]
+    rpcClients: Object.values(gateways).map((gateway) => gateway.rpcClient),
+    spawnedAppServers: Object.values(gateways).map((gateway) => gateway.spawnedAppServer)
   };
 }
 
 async function initializeGateway(
   config: AppConfig,
   logger: LoggerLike,
-  options?: {
-    homePath?: string;
-  }
+  homePath?: string
 ): Promise<{
   codex: CodexGateway;
   rpcClient: CodexRpcClient;
@@ -174,20 +175,107 @@ async function initializeGateway(
 }> {
   const spawnedAppServer = await spawnCodexAppServer({
     logger,
-    ...(options?.homePath ? { homePath: options.homePath } : {})
+    ...(homePath ? { homePath } : {})
   });
-  const transport = new StdioRpcTransport(spawnedAppServer.process);
-  await transport.connect();
+  let transport: StdioRpcTransport | undefined;
+  let rpcClient: CodexRpcClient | undefined;
+  try {
+    transport = new StdioRpcTransport(spawnedAppServer.process);
+    await transport.connect();
 
-  const rpcClient = new CodexRpcClient(transport);
-  const codex = new CodexGateway(rpcClient, config.codex);
-  await withTimeout(codex.initialize(), CODEX_INITIALIZE_TIMEOUT_MS, "Timed out waiting for Codex app server initialization");
+    rpcClient = new CodexRpcClient(transport);
+    const codex = new CodexGateway(rpcClient, config.codex);
+    await withTimeout(codex.initialize(), CODEX_INITIALIZE_TIMEOUT_MS, "Timed out waiting for Codex app server initialization");
 
-  return {
-    codex,
-    rpcClient,
-    spawnedAppServer
-  };
+    return {
+      codex,
+      rpcClient,
+      spawnedAppServer
+    };
+  } catch (error) {
+    await cleanupGatewayResources(rpcClient, spawnedAppServer);
+    throw error;
+  }
+}
+
+async function cleanupGatewayResources(
+  rpcClient: CodexRpcClient | undefined,
+  spawnedAppServer: SpawnedAppServer | undefined
+): Promise<void> {
+  await Promise.allSettled([rpcClient?.close(), spawnedAppServer?.stop()]);
+}
+
+function renderManagedConfigToml(
+  profile: AppConfig["codex"]["profiles"][string],
+  mcpRegistry: AppConfig["codex"]["mcps"]
+): string {
+  const lines: string[] = [];
+
+  if (profile.model) {
+    lines.push(`model = ${renderTomlValue(profile.model)}`);
+  }
+  lines.push(`model_reasoning_effort = ${renderTomlValue(profile.reasoningEffort)}`);
+  lines.push(`service_tier = ${renderTomlValue(profile.serviceTier)}`);
+  if (profile.sandboxMode) {
+    lines.push(`sandbox_mode = ${renderTomlValue(profile.sandboxMode)}`);
+  }
+  if (profile.approvalPolicy !== undefined) {
+    lines.push(`approval_policy = ${renderTomlValue(profile.approvalPolicy as JsonValue)}`);
+  }
+
+  for (const mcpId of profile.mcps) {
+    const mcpConfig = mcpRegistry[mcpId];
+    if (!mcpConfig) {
+      throw new Error(`Profile references missing MCP registry entry ${JSON.stringify(mcpId)}`);
+    }
+
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(`[mcp_servers.${renderTomlKey(mcpId)}]`);
+    for (const [key, value] of Object.entries(mcpConfig).sort(([left], [right]) => left.localeCompare(right))) {
+      if (value === undefined) {
+        continue;
+      }
+
+      lines.push(`${renderTomlKey(key)} = ${renderTomlValue(value)}`);
+    }
+  }
+
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+}
+
+function renderTomlValue(value: JsonValue): string {
+  if (value === null) {
+    throw new Error("Managed Codex config does not support null TOML values");
+  }
+
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new Error(`Managed Codex config only supports finite numeric TOML values, got ${value}`);
+      }
+      return `${value}`;
+    case "string":
+      return JSON.stringify(value);
+    case "object":
+      if (Array.isArray(value)) {
+      return `[${value.map((entry) => renderTomlValue(entry)).join(", ")}]`;
+      }
+
+      return `{ ${Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => `${renderTomlKey(key)} = ${renderTomlValue(entry!)}`)
+        .join(", ")} }`;
+    default:
+      throw new Error(`Unsupported TOML value type: ${typeof value}`);
+  }
+}
+
+function renderTomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
