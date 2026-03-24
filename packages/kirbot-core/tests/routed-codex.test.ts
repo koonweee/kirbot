@@ -35,6 +35,7 @@ class FakeCodexApi implements BridgeCodexApi {
   }> = [];
   readonly readProfileSettingsCalls: string[] = [];
   readonly updateProfileSettingsCalls: Array<{ profileId: string; update: Record<string, unknown> }> = [];
+  readonly registerThreadProfileCalls: Array<{ threadId: string; profileId: string }> = [];
   readonly ensureThreadLoadedCalls: string[] = [];
   readonly readThreadCalls: string[] = [];
   readonly sendTurnCalls: string[] = [];
@@ -51,7 +52,9 @@ class FakeCodexApi implements BridgeCodexApi {
     readonly profileId: string
   ) {}
 
-  registerThreadProfile(_threadId: string, _profileId: string): void {}
+  registerThreadProfile(threadId: string, profileId: string): void {
+    this.registerThreadProfileCalls.push({ threadId, profileId });
+  }
 
   async createThread(
     profileId: string,
@@ -249,5 +252,21 @@ describe("RoutedCodexApi", () => {
 
     expect(general.ensureThreadLoadedCalls).toEqual([]);
     expect(coding.ensureThreadLoadedCalls).toEqual([]);
+  });
+
+  it("forwards thread profile registration to the selected gateway", () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+
+    routed.registerThreadProfile("thread-123", "coding");
+
+    expect(coding.registerThreadProfileCalls).toEqual([
+      {
+        threadId: "thread-123",
+        profileId: "coding"
+      }
+    ]);
+    expect(general.registerThreadProfileCalls).toEqual([]);
   });
 });

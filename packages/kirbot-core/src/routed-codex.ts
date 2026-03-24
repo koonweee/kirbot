@@ -28,6 +28,7 @@ export class RoutedCodexApi implements BridgeCodexApi {
   }
 
   registerThreadProfile(threadId: string, profileId: string): void {
+    this.#getGateway(profileId).registerThreadProfile(threadId, profileId);
     this.#threadRoutes.set(threadId, profileId);
   }
 

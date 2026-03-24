@@ -163,23 +163,6 @@ class ScriptedCodex implements BridgeCodexApi {
     return this.readProfileSettings(profileId);
   }
 
-  async updateThreadSettings(_threadId: string, update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    return this.updateProfileSettings("general", update);
-  }
-
   async ensureThreadLoaded(): Promise<{
     model: string;
     reasoningEffort: ReasoningEffort | null;

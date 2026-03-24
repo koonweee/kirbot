@@ -253,14 +253,6 @@ class FakeCodex implements BridgeCodexApi {
     sandboxPolicy?: SandboxPolicy;
   }> = [];
   compactThreadCalls: Array<{ threadId: string }> = [];
-  threadSettingsUpdates: Array<{
-    threadId: string;
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }> = [];
   turns: Array<{ threadId: string; text: string; input: UserInput[]; turnId: string }> = [];
   turnCollaborationModes: Array<{ turnId: string; collaborationMode: unknown | null }> = [];
   turnOverrides: Array<{ turnId: string; overrides: unknown | null }> = [];
@@ -469,43 +461,6 @@ class FakeCodex implements BridgeCodexApi {
 
   async compactThread(threadId: string): Promise<void> {
     this.compactThreadCalls.push({ threadId });
-  }
-
-  async updateThreadSettings(threadId: string, update: {
-    model?: string;
-    reasoningEffort?: ReasoningEffort | null;
-    serviceTier?: ServiceTier | null;
-    approvalPolicy?: AskForApproval;
-    sandboxPolicy?: SandboxPolicy;
-  }): Promise<{
-    model: string;
-    reasoningEffort: ReasoningEffort | null;
-    serviceTier: ServiceTier | null;
-    cwd: string;
-    approvalPolicy: AskForApproval;
-    sandboxPolicy: SandboxPolicy;
-  }> {
-    this.threadSettingsUpdates.push({
-      threadId,
-      ...update
-    });
-    if (update.model) {
-      this.threadModel = update.model;
-    }
-    if ("reasoningEffort" in update) {
-      this.threadReasoningEffort = update.reasoningEffort ?? null;
-    }
-    if ("serviceTier" in update) {
-      this.threadServiceTier = update.serviceTier ?? null;
-    }
-    if (update.approvalPolicy) {
-      this.threadApprovalPolicy = update.approvalPolicy;
-    }
-    if (update.sandboxPolicy) {
-      this.threadSandboxPolicy = update.sandboxPolicy;
-    }
-
-    return this.ensureThreadLoaded(threadId);
   }
 
   async sendTurn(
@@ -2377,7 +2332,6 @@ describe("TelegramCodexBridge", () => {
       "Wait for the current response to finish or stop it first before changing settings"
     );
     expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
   });
 
   it("applies root /fast to spawn defaults through explicit scope selection", async () => {
@@ -2407,7 +2361,6 @@ describe("TelegramCodexBridge", () => {
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("New thread default fast mode enabled");
     expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
 
     await bridge.handleUserTextMessage({
       chatId: -1001,
@@ -2464,7 +2417,6 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(telegram.sentMessages.at(-1)?.text).toBe("Thread fast mode enabled");
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
     expect(codex.globalSettingsUpdates).toHaveLength(0);
 
     codex.readTurnSnapshotResult = {
@@ -2644,7 +2596,6 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
     expect(telegram.sentMessages.at(-1)?.text).toBe("General thread model set to gpt-5.3-codex high");
 
     await bridge.handleUserTextMessage({
@@ -2812,7 +2763,6 @@ describe("TelegramCodexBridge", () => {
     });
 
     expect(codex.globalSettingsUpdates).toHaveLength(0);
-    expect(codex.threadSettingsUpdates).toHaveLength(0);
     expect(telegram.sentMessages.at(-1)?.text).toBe("New thread default permissions set to Full Access");
 
     await bridge.handleUserTextMessage({
