@@ -252,6 +252,23 @@ describe("core config module", () => {
 
     const { loadConfig } = await import("../src/config");
 
-    expect(() => loadConfig()).toThrow();
+    let error: unknown;
+    try {
+      loadConfig();
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(
+      (error as { issues?: Array<{ path?: Array<string> }> }).issues?.some(
+        (issue) => issue.path?.join(".") === "routing.thread"
+      )
+    ).toBe(true);
+    expect(
+      (error as { issues?: Array<{ path?: Array<string> }> }).issues?.some(
+        (issue) => issue.path?.join(".") === "routing.plan"
+      )
+    ).toBe(true);
   });
 });

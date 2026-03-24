@@ -43,6 +43,7 @@ Prerequisites:
 - a Telegram bot token
 - the Telegram workspace chat ID for the dedicated private forum supergroup
 - a deployed Telegram Mini App URL over `https`
+- an authenticated base Codex setup before first run, because profile homes bootstrap from your existing Codex home/auth state
 
 Install and configure:
 
