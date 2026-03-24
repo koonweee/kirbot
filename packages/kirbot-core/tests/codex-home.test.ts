@@ -27,34 +27,19 @@ describe("codex home helpers", () => {
     );
   });
 
-  it("keeps the legacy bootstrap-only path intact", () => {
+  it("requires managed reconciliation inputs", () => {
     const sourceHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-source-"));
     const targetHome = mkdtempSync(join(tmpdir(), "kirbot-codex-home-target-"));
     tempDirs.push(sourceHome, targetHome);
 
     fs.writeFileSync(join(sourceHome, "auth.json"), '{"token":"abc"}');
-    fs.mkdirSync(join(sourceHome, "skills"), { recursive: true });
-    fs.writeFileSync(join(sourceHome, "skills", "local-skill.md"), "# local skill\n");
-    fs.mkdirSync(join(sourceHome, "superpowers"), { recursive: true });
-    fs.writeFileSync(join(sourceHome, "superpowers", "manifest.txt"), "skill-index\n");
-    fs.mkdirSync(join(sourceHome, "rules"), { recursive: true });
-    fs.writeFileSync(join(sourceHome, "rules", "local.md"), "# local rule\n");
-    fs.mkdirSync(join(sourceHome, "sessions"), { recursive: true });
-    fs.writeFileSync(join(sourceHome, "sessions", "thread.jsonl"), "{}\n");
-    fs.writeFileSync(join(sourceHome, "state_5.sqlite"), "sqlite");
 
-    prepareKirbotCodexHome({
-      sourceHomePath: sourceHome,
-      targetHomePath: targetHome
-    });
-
-    expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"abc"}');
-    expect(fs.readFileSync(join(targetHome, "skills", "local-skill.md"), "utf8")).toBe("# local skill\n");
-    expect(fs.readFileSync(join(targetHome, "superpowers", "manifest.txt"), "utf8")).toBe("skill-index\n");
-    expect(fs.readFileSync(join(targetHome, "rules", "local.md"), "utf8")).toBe("# local rule\n");
-    expect(() => fs.readFileSync(join(targetHome, "config.toml"), "utf8")).toThrow();
-    expect(() => fs.readFileSync(join(targetHome, "sessions", "thread.jsonl"), "utf8")).toThrow();
-    expect(() => fs.readFileSync(join(targetHome, "state_5.sqlite"), "utf8")).toThrow();
+    expect(() =>
+      prepareKirbotCodexHome({
+        sourceHomePath: sourceHome,
+        targetHomePath: targetHome
+      } as any)
+    ).toThrow(/managed reconciliation requires config\.toml, skill ids, and the resolved profiles config path together/);
   });
 
   it("creates a missing managed home, seeds auth.json from the base home, rewrites config.toml, and rebuilds managed skills exactly", () => {

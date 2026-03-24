@@ -2,9 +2,6 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const SEEDED_CODEX_FILES = ["auth.json"] as const;
-const SEEDED_CODEX_DIRECTORIES = ["rules", "skills", "superpowers"] as const;
-
 export type ManagedKirbotCodexHome = {
   managedConfigToml: string;
   managedSkillIds: readonly string[];
@@ -14,7 +11,7 @@ export type ManagedKirbotCodexHome = {
 export type PrepareKirbotCodexHomeOptions = {
   targetHomePath: string;
   sourceHomePath?: string;
-  managed?: ManagedKirbotCodexHome;
+  managed: ManagedKirbotCodexHome;
 };
 
 export function resolveKirbotCodexHomePath(databasePath: string, explicitPath?: string): string {
@@ -32,14 +29,6 @@ export function resolveKirbotCodexConfigPath(homePath: string): string {
 export function prepareKirbotCodexHome(options: PrepareKirbotCodexHomeOptions): void {
   const sourceHomePath = options.sourceHomePath ?? join(homedir(), ".codex");
   fs.mkdirSync(options.targetHomePath, { recursive: true });
-
-  if (options.managed === undefined) {
-    seedLegacyCodexHome({
-      sourceHomePath,
-      targetHomePath: options.targetHomePath
-    });
-    return;
-  }
 
   validateManagedCodexHome(options.managed);
   const managedSkills = resolveManagedSkills(
@@ -61,24 +50,9 @@ export function prepareKirbotCodexHome(options: PrepareKirbotCodexHomeOptions): 
   }
 }
 
-function seedLegacyCodexHome(options: {
-  targetHomePath: string;
-  sourceHomePath: string;
-}): void {
-  for (const fileName of SEEDED_CODEX_FILES) {
-    copyIntoIsolatedHomeIfPresent(join(options.sourceHomePath, fileName), join(options.targetHomePath, fileName));
-  }
-
-  for (const directoryName of SEEDED_CODEX_DIRECTORIES) {
-    copyIntoIsolatedHomeIfPresent(
-      join(options.sourceHomePath, directoryName),
-      join(options.targetHomePath, directoryName)
-    );
-  }
-}
-
-function validateManagedCodexHome(managed: ManagedKirbotCodexHome): void {
+function validateManagedCodexHome(managed: ManagedKirbotCodexHome | undefined): void {
   if (
+    managed === undefined ||
     typeof managed.managedConfigToml !== "string" ||
     !Array.isArray(managed.managedSkillIds) ||
     managed.managedSkillIds.some((skillId) => typeof skillId !== "string") ||

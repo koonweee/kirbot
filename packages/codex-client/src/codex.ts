@@ -227,19 +227,6 @@ export class CodexGateway {
     return threadSettingsFromConfig(response.config, this.config);
   }
 
-  async updateProfileSettings(profileId: string, update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
-    void profileId;
-    const edits = buildGlobalConfigEdits(update);
-    if (edits.length === 0) {
-      return this.readProfileSettings(profileId);
-    }
-
-    await this.client.batchWriteConfig({
-      edits
-    });
-    return this.readProfileSettings(profileId);
-  }
-
   registerThreadProfile(_threadId: string, _profileId: string): void {}
 
   async bootstrapManagedGlobalConfig(): Promise<void> {
@@ -606,58 +593,6 @@ function sandboxPolicyFromConfig(config: Config, defaults: AppConfig["codex"]): 
       };
     }
   }
-}
-
-function buildGlobalConfigEdits(update: ThreadSettingsOverride): ConfigEdit[] {
-  const edits: ConfigEdit[] = [];
-
-  if ("model" in update) {
-    edits.push({
-      keyPath: "model",
-      value: update.model ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("reasoningEffort" in update) {
-    edits.push({
-      keyPath: "model_reasoning_effort",
-      value: update.reasoningEffort ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("serviceTier" in update) {
-    edits.push({
-      keyPath: "service_tier",
-      value: update.serviceTier ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("approvalPolicy" in update) {
-    edits.push({
-      keyPath: "approval_policy",
-      value: update.approvalPolicy ?? null,
-      mergeStrategy: "replace"
-    });
-  }
-
-  if ("sandboxPolicy" in update && update.sandboxPolicy) {
-    const { mode, workspaceWrite } = sandboxConfigFromPolicy(update.sandboxPolicy);
-    edits.push({
-      keyPath: "sandbox_mode",
-      value: mode,
-      mergeStrategy: "replace"
-    });
-    edits.push({
-      keyPath: "sandbox_workspace_write",
-      value: workspaceWrite,
-      mergeStrategy: "replace"
-    });
-  }
-
-  return edits;
 }
 
 function sandboxConfigFromPolicy(
