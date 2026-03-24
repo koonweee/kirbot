@@ -48,6 +48,7 @@ class ScriptedCodex implements BridgeCodexApi {
   steerCalls: Array<{ threadId: string; expectedTurnId: string; input: UserInput[] }> = [];
   commandApprovals: Array<{ id: RequestId; decision: CommandExecutionApprovalDecision }> = [];
   permissionsApprovals: Array<{ id: RequestId; response: PermissionsRequestApprovalResponse }> = [];
+  listModelsCalls: string[] = [];
   snapshotDelayMs = 0;
 
   readonly #eventQueue: AppServerEvent[] = [];
@@ -394,7 +395,8 @@ class ScriptedCodex implements BridgeCodexApi {
 
   async respondUnsupportedRequest(): Promise<void> {}
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    this.listModelsCalls.push(profileId);
     return [
       {
         id: "model-1",

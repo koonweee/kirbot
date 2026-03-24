@@ -154,7 +154,8 @@ class FakeCodexApi implements BridgeCodexApi {
     };
   }
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    void profileId;
     return [];
   }
 
@@ -258,6 +259,55 @@ describe("RoutedCodexApi", () => {
 
     expect(general.ensureThreadLoadedCalls).toEqual([]);
     expect(coding.ensureThreadLoadedCalls).toEqual([]);
+  });
+
+  it("drops thread routes after a successful archive", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+    const thread = await routed.createThread("coding", "New session");
+
+    await routed.archiveThread(thread.threadId);
+
+    await expect(routed.ensureThreadLoaded(thread.threadId)).rejects.toThrow(
+      `Unknown Codex thread route: ${thread.threadId}`
+    );
+    expect(coding.ensureThreadLoadedCalls).toEqual([]);
+  });
+
+  it.each([
+    "thread/archived",
+    "thread/closed"
+  ] as const)("drops thread routes after %s notifications", async (method) => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+    const thread = await routed.createThread("coding", "New session");
+    coding.events.push({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method,
+        params: {
+          threadId: thread.threadId
+        }
+      } as never
+    });
+
+    await expect(routed.nextEvent()).resolves.toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method,
+        params: {
+          threadId: thread.threadId
+        }
+      } as never
+    });
+
+    await expect(routed.ensureThreadLoaded(thread.threadId)).rejects.toThrow(
+      `Unknown Codex thread route: ${thread.threadId}`
+    );
   });
 
   it("forwards thread profile registration to the selected gateway", () => {

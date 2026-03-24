@@ -244,6 +244,7 @@ class FakeCodex implements BridgeCodexApi {
       sandboxPolicy?: SandboxPolicy;
     } | null;
   }> = [];
+  listModelsCalls: string[] = [];
   ensuredThreads: string[] = [];
   globalSettingsUpdates: Array<{
     model?: string;
@@ -649,7 +650,8 @@ class FakeCodex implements BridgeCodexApi {
     });
   }
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    this.listModelsCalls.push(profileId);
     return this.models;
   }
 
@@ -1059,12 +1061,14 @@ describe("TelegramCodexBridge", () => {
       text: "Resume the thread"
     });
 
-    expect(codex.registerThreadProfileCalls).toEqual([
-      {
-        threadId: "thread-resumed",
-        profileId: "general"
-      }
-    ]);
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-resumed",
+          profileId: "general"
+        }
+      ])
+    );
     expect(codex.turns).toEqual([
       {
         threadId: "thread-resumed",
@@ -1072,6 +1076,52 @@ describe("TelegramCodexBridge", () => {
         turnId: "turn-1"
       }
     ]);
+  });
+
+  it("re-registers a persisted topic session route before opening thread-scoped settings after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 777 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateTopicSessionSettings(-1001, 777, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 777,
+      messageId: 12,
+      updateId: 22,
+      userId: 42,
+      text: "/model"
+    });
+
+    expect(codex.registerThreadProfileCalls).toEqual(
+      expect.arrayContaining([
+        {
+          threadId: "thread-resumed",
+          profileId: "coding"
+        }
+      ])
+    );
+    expect(codex.ensuredThreads).toContain("thread-resumed");
+    expect(codex.listModelsCalls).toEqual(["coding"]);
   });
 
   it("treats General as the shared root slash-command scope", () => {
@@ -2649,6 +2699,7 @@ describe("TelegramCodexBridge", () => {
         "Then choose a reasoning effort"
       ].join("\n")
     );
+    expect(codex.listModelsCalls).toEqual(["general"]);
     const pickCallback = getCallbackDataByButtonText(modelPicker, "gpt-5.3-codex");
     expect(pickCallback).toBe("slash:model:pick:root:1");
 

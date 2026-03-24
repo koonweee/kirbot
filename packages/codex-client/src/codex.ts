@@ -424,7 +424,8 @@ export class CodexGateway {
     return event;
   }
 
-  async listModels(): Promise<Model[]> {
+  async listModels(profileId: string): Promise<Model[]> {
+    void profileId;
     const models: Model[] = [];
     let cursor: string | null = null;
 

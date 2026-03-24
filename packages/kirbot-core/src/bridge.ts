@@ -133,7 +133,7 @@ export interface BridgeCodexApi {
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   archiveThread(threadId: string): Promise<void>;
   readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
-  listModels(): Promise<Model[]>;
+  listModels(profileId: string): Promise<Model[]>;
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
   respondToPermissionsApproval(id: RequestId, response: PermissionsRequestApprovalResponse): Promise<void>;
@@ -1405,7 +1405,9 @@ export class TelegramCodexBridge {
     message: { chatId: number; topicId: number | null },
     scope: SettingsSelectionScope
   ): Promise<boolean> {
-    const target = await this.resolveThreadSettingsTarget(message, scope);
+    const target = await this.resolveThreadSettingsTarget(message, scope, {
+      rejectIfActiveTurn: true
+    });
     if (!target) {
       return false;
     }
@@ -1446,7 +1448,7 @@ export class TelegramCodexBridge {
       return false;
     }
 
-    const models = await this.codex.listModels();
+    const models = await this.codex.listModels(this.resolveModelListProfileId(target));
     if (models.length === 0) {
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
@@ -1521,7 +1523,7 @@ export class TelegramCodexBridge {
       return false;
     }
 
-    const models = await this.codex.listModels();
+    const models = await this.codex.listModels(this.resolveModelListProfileId(target));
     const model = models[modelIndex];
     if (!model) {
       await this.sendScopedBridgeMessage({
@@ -1562,7 +1564,14 @@ export class TelegramCodexBridge {
     reasoningEffort: ReasoningEffort,
     scope: SettingsSelectionScope = "thread"
   ): Promise<boolean> {
-    const models = await this.codex.listModels();
+    const target = await this.resolveThreadSettingsTarget(message, scope, {
+      rejectIfActiveTurn: true
+    });
+    if (!target) {
+      return false;
+    }
+
+    const models = await this.codex.listModels(this.resolveModelListProfileId(target));
     const model = models[modelIndex];
     if (!model) {
       await this.sendScopedBridgeMessage({
@@ -1570,13 +1579,6 @@ export class TelegramCodexBridge {
         ...(message.topicId !== null ? { topicId: message.topicId } : {}),
         text: "That model is no longer available"
       });
-      return false;
-    }
-
-    const target = await this.resolveThreadSettingsTarget(message, scope, {
-      rejectIfActiveTurn: true
-    });
-    if (!target) {
       return false;
     }
 
@@ -2199,6 +2201,18 @@ export class TelegramCodexBridge {
     };
   }
 
+  private resolveModelListProfileId(target: ThreadSettingsTarget): string {
+    if (target.scope === "thread") {
+      return target.session.profileId;
+    }
+
+    if (target.scope === "root") {
+      return target.session?.profileId ?? "general";
+    }
+
+    return this.config.codex.routing.thread;
+  }
+
   private async resolveCodexSettingsCommandTarget(
     location: {
       chatId: number;
@@ -2247,7 +2261,7 @@ export class TelegramCodexBridge {
 
     return {
       scope: "thread",
-      session,
+      session: await this.ensurePersistedSessionSettings(session),
       settings: await this.resolveThreadStartSettings(session)
     };
   }
@@ -2908,8 +2922,9 @@ export class TelegramCodexBridge {
   }
 
   private async resolveThreadStartSettings(session: TopicSession | BridgeSession): Promise<ThreadStartSettings> {
-    const loaded = await this.codex.ensureThreadLoaded(session.codexThreadId!);
-    return persistedThreadSettingsToThreadStartSettings(session.settings, loaded.cwd);
+    const hydratedSession = await this.ensurePersistedSessionSettings(session);
+    const loaded = await this.codex.ensureThreadLoaded(hydratedSession.codexThreadId!);
+    return persistedThreadSettingsToThreadStartSettings(hydratedSession.settings, loaded.cwd);
   }
 
   private async updateSessionSettingsForSurface(

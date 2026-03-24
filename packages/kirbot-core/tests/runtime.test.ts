@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 const mocks = vi.hoisted(() => {
+  const existsSync = vi.fn();
   const spawnCodexAppServer = vi.fn();
   const prepareKirbotCodexHome = vi.fn();
   const initializeTelegramCommandSyncFailOpen = vi.fn();
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => {
   const codexGatewayInitializeErrors: Array<Error | undefined> = [];
 
   return {
+    existsSync,
     spawnCodexAppServer,
     prepareKirbotCodexHome,
     initializeTelegramCommandSyncFailOpen,
@@ -23,6 +25,14 @@ const mocks = vi.hoisted(() => {
     rpcClients,
     codexGatewayInstances,
     codexGatewayInitializeErrors
+  };
+});
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    existsSync: mocks.existsSync
   };
 });
 
@@ -129,6 +139,7 @@ import { createKirbotRuntime } from "../src/runtime";
 
 describe("createKirbotRuntime profile routing", () => {
   beforeEach(() => {
+    mocks.existsSync.mockReset();
     mocks.spawnCodexAppServer.mockImplementation(async ({ homePath }: { homePath?: string }) => {
       const stop = vi.fn(async () => undefined);
       const server = {
@@ -142,6 +153,7 @@ describe("createKirbotRuntime profile routing", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    mocks.existsSync.mockReset();
     mocks.codexGatewayInstances.length = 0;
     mocks.spawnedAppServers.length = 0;
     mocks.rpcClients.length = 0;
@@ -207,6 +219,37 @@ describe("createKirbotRuntime profile routing", () => {
     expect(mocks.spawnedAppServers[1]!.stop).toHaveBeenCalledTimes(1);
     expect(mocks.rpcClients[0]!.close).toHaveBeenCalledTimes(1);
     expect(mocks.rpcClients[1]!.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("bootstraps managed global config when config.toml is missing", async () => {
+    mocks.existsSync.mockReturnValue(false);
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath);
+
+    await createKirbotRuntime({
+      config,
+      telegramApi: {} as TelegramApi
+    });
+
+    expect(mocks.existsSync).toHaveBeenCalledTimes(3);
+    expect(mocks.codexGatewayInstances.every((instance) => instance.bootstrapManagedGlobalConfig.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("skips managed global config bootstrap when config.toml already exists", async () => {
+    mocks.existsSync.mockReturnValue(true);
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath);
+
+    await createKirbotRuntime({
+      config,
+      telegramApi: {} as TelegramApi
+    });
+
+    expect(mocks.existsSync).toHaveBeenCalledTimes(3);
+    expect(mocks.codexGatewayInstances).toHaveLength(3);
+    expect(mocks.codexGatewayInstances.every((instance) => instance.bootstrapManagedGlobalConfig.mock.calls.length === 0)).toBe(true);
   });
 });
 

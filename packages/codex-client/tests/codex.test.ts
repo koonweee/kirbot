@@ -1061,6 +1061,218 @@ describe("CodexGateway", () => {
     });
   });
 
+  it.each([
+    "thread/archived",
+    "thread/closed"
+  ] as const)("reloads a thread after %s notifications clear the cache", async (method) => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const firstLoad = gateway.ensureThreadLoaded("thread-1");
+    await Promise.resolve();
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/resume",
+      id: 2,
+      params: {
+        threadId: "thread-1",
+        persistExtendedHistory: false
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await expect(firstLoad).resolves.toMatchObject({ cwd: "/workspace" });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      method,
+      params: {
+        threadId: "thread-1"
+      }
+    });
+    await expect(gateway.nextEvent()).resolves.toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method,
+        params: {
+          threadId: "thread-1"
+        }
+      }
+    });
+
+    const secondLoad = gateway.ensureThreadLoaded("thread-1");
+    await Promise.resolve();
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "thread/resume",
+      id: 3,
+      params: {
+        threadId: "thread-1",
+        persistExtendedHistory: false
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await expect(secondLoad).resolves.toMatchObject({ cwd: "/workspace" });
+  });
+
+  it("updates cached thread settings on model/rerouted notifications", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      baseInstructions: undefined,
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const firstLoad = gateway.ensureThreadLoaded("thread-1");
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        thread: {
+          id: "thread-1"
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: {
+          type: "workspaceWrite",
+          writableRoots: [],
+          readOnlyAccess: {
+            type: "fullAccess"
+          },
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        },
+        reasoningEffort: null
+      }
+    });
+    await expect(firstLoad).resolves.toMatchObject({ model: "gpt-5-codex" });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      method: "model/rerouted",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toModel: "gpt-5.3-codex"
+      }
+    });
+    await expect(gateway.nextEvent()).resolves.toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method: "model/rerouted",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          toModel: "gpt-5.3-codex"
+        }
+      }
+    });
+
+    await expect(gateway.ensureThreadLoaded("thread-1")).resolves.toMatchObject({
+      model: "gpt-5.3-codex"
+    });
+    expect(transport.sent.filter((message) => typeof message === "object" && message !== null && "method" in message && message.method === "thread/resume")).toHaveLength(1);
+  });
+
   it("passes collaborationMode through on turn/start when provided", async () => {
     const transport = new FakeTransport();
     const client = new CodexRpcClient(transport);
@@ -1567,7 +1779,7 @@ describe("CodexGateway", () => {
     });
     await initializePromise;
 
-    const listPromise = gateway.listModels();
+    const listPromise = gateway.listModels("general");
     await Promise.resolve();
 
     expect(transport.sent.at(-1)).toEqual({

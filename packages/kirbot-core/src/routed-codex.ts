@@ -86,15 +86,17 @@ export class RoutedCodexApi implements BridgeCodexApi {
   }
 
   async archiveThread(threadId: string) {
-    return this.#runThreadOperation(threadId, (gateway) => gateway.archiveThread(threadId));
+    const result = await this.#runThreadOperation(threadId, (gateway) => gateway.archiveThread(threadId));
+    this.#threadRoutes.delete(threadId);
+    return result;
   }
 
   async readTurnSnapshot(threadId: string, turnId: string) {
     return this.#runThreadOperation(threadId, (gateway) => gateway.readTurnSnapshot(threadId, turnId));
   }
 
-  async listModels() {
-    return this.#firstGateway().listModels();
+  async listModels(profileId: string) {
+    return this.#getGateway(profileId).listModels(profileId);
   }
 
   async respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }) {
@@ -186,6 +188,9 @@ export class RoutedCodexApi implements BridgeCodexApi {
     const threadId = getEventThreadId(event);
     if (threadId) {
       this.#threadRoutes.set(threadId, profileId);
+      if (event.kind === "notification" && isTerminalThreadNotification(event.notification.method)) {
+        this.#threadRoutes.delete(threadId);
+      }
     }
 
     if (event.kind === "serverRequest") {
@@ -227,18 +232,14 @@ export class RoutedCodexApi implements BridgeCodexApi {
 
     return gateway;
   }
-  #firstGateway(): BridgeCodexApi {
-    const firstGatewayId = this.#gatewayIds[0];
-    if (!firstGatewayId) {
-      throw new Error("No Codex gateways configured");
-    }
-
-    return this.gateways[firstGatewayId]!;
-  }
 }
 
 function getEventThreadId(event: AppServerEvent): string | null {
   const params = event.kind === "serverRequest" ? event.request.params : event.notification.params;
   const threadId = params && typeof params === "object" && "threadId" in params ? params.threadId : null;
   return typeof threadId === "string" ? threadId : null;
+}
+
+function isTerminalThreadNotification(method: string): boolean {
+  return method === "thread/archived" || method === "thread/closed";
 }
