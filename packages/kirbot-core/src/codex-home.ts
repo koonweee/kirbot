@@ -203,6 +203,9 @@ function resolveTopLevelSourceEntryContainingTargetHomePath(
   }
 
   const [topLevelSourceEntryName] = relativeTargetHomePath.split(/[\\/]/, 1);
+  if (topLevelSourceEntryName === undefined) {
+    return undefined;
+  }
 
   return isSafeSinglePathSegment(topLevelSourceEntryName) ? topLevelSourceEntryName : undefined;
 }
