@@ -7,7 +7,7 @@ import { Generated, Kysely, Selectable, SqliteDialect } from "kysely";
 
 import type {
   BridgeSession,
-  ChatThreadDefaults,
+  ChatProfileDefaults,
   CustomCommand,
   PendingCustomCommandAdd,
   PendingCustomCommandStatus,
@@ -20,13 +20,14 @@ import type {
 } from "./domain";
 
 type TimestampString = string;
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 type SessionsTable = {
   id: Generated<number>;
   telegram_chat_id: string;
   surface_kind: "general" | "topic";
   telegram_topic_id: number | null;
+  profile_id: string;
   codex_thread_id: string | null;
   status: SessionStatus;
   preferred_mode: SessionMode;
@@ -37,18 +38,14 @@ type SessionsTable = {
   sandbox_policy_json: string | null;
 };
 
-type ChatThreadDefaultsTable = {
+type ChatProfileDefaultsTable = {
   telegram_chat_id: string;
-  root_model: string | null;
-  root_reasoning_effort: string | null;
-  root_service_tier: string | null;
-  root_approval_policy: string | null;
-  root_sandbox_policy_json: string | null;
-  spawn_model: string | null;
-  spawn_reasoning_effort: string | null;
-  spawn_service_tier: string | null;
-  spawn_approval_policy: string | null;
-  spawn_sandbox_policy_json: string | null;
+  profile_id: string;
+  model: string | null;
+  reasoning_effort: string | null;
+  service_tier: string | null;
+  approval_policy: string | null;
+  sandbox_policy_json: string | null;
 };
 
 type ServerRequestsTable = {
@@ -89,7 +86,7 @@ type ProcessedUpdatesTable = {
 
 export type DatabaseSchema = {
   sessions: SessionsTable;
-  chat_thread_defaults: ChatThreadDefaultsTable;
+  chat_profile_defaults: ChatProfileDefaultsTable;
   server_requests: ServerRequestsTable;
   custom_commands: CustomCommandsTable;
   pending_custom_command_adds: PendingCustomCommandAddsTable;
@@ -116,6 +113,7 @@ function mapSession(row: Selectable<SessionsTable>): BridgeSession {
     id: row.id,
     telegramChatId: row.telegram_chat_id,
     surface,
+    profileId: row.profile_id,
     codexThreadId: row.codex_thread_id,
     status: row.status,
     preferredMode: row.preferred_mode,
@@ -129,22 +127,16 @@ function mapSession(row: Selectable<SessionsTable>): BridgeSession {
   };
 }
 
-function mapChatThreadDefaults(row: Selectable<ChatThreadDefaultsTable>): ChatThreadDefaults {
+function mapChatProfileDefaults(row: Selectable<ChatProfileDefaultsTable>): ChatProfileDefaults {
   return {
     telegramChatId: row.telegram_chat_id,
-    root: mapPersistedThreadSettings({
-      model: row.root_model,
-      reasoningEffort: row.root_reasoning_effort,
-      serviceTier: row.root_service_tier,
-      approvalPolicyJson: row.root_approval_policy,
-      sandboxPolicyJson: row.root_sandbox_policy_json
-    }),
-    spawn: mapPersistedThreadSettings({
-      model: row.spawn_model,
-      reasoningEffort: row.spawn_reasoning_effort,
-      serviceTier: row.spawn_service_tier,
-      approvalPolicyJson: row.spawn_approval_policy,
-      sandboxPolicyJson: row.spawn_sandbox_policy_json
+    profileId: row.profile_id,
+    ...mapPersistedThreadSettings({
+      model: row.model,
+      reasoningEffort: row.reasoning_effort,
+      serviceTier: row.service_tier,
+      approvalPolicyJson: row.approval_policy,
+      sandboxPolicyJson: row.sandbox_policy_json
     })
   };
 }
@@ -248,18 +240,25 @@ export class BridgeDatabase {
   async migrate(): Promise<void> {
     const currentVersion = this.#readSchemaVersion();
     if (currentVersion === SCHEMA_VERSION) {
-      this.#createSchemaV8();
+      this.#createSchemaV9();
       return;
     }
 
     if (currentVersion === 0) {
-      this.#createSchemaV8();
+      this.#createSchemaV9();
+      this.#writeSchemaVersion(SCHEMA_VERSION);
+      return;
+    }
+
+    if (currentVersion === 8) {
+      this.#migrateFromV8ToV9();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
 
     if (currentVersion === 7) {
       this.#migrateFromV7ToV8();
+      this.#migrateFromV8ToV9();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -267,6 +266,7 @@ export class BridgeDatabase {
     if (currentVersion === 6) {
       this.#migrateFromV6ToV7();
       this.#migrateFromV7ToV8();
+      this.#migrateFromV8ToV9();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -275,6 +275,7 @@ export class BridgeDatabase {
       this.#migrateFromV5ToV6();
       this.#migrateFromV6ToV7();
       this.#migrateFromV7ToV8();
+      this.#migrateFromV8ToV9();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -284,6 +285,7 @@ export class BridgeDatabase {
       this.#migrateFromV5ToV6();
       this.#migrateFromV6ToV7();
       this.#migrateFromV7ToV8();
+      this.#migrateFromV8ToV9();
       this.#writeSchemaVersion(SCHEMA_VERSION);
       return;
     }
@@ -310,15 +312,18 @@ export class BridgeDatabase {
   async createProvisioningSession(input: {
     telegramChatId: string;
     telegramTopicId: number;
+    profileId: string;
   }): Promise<TopicSession>;
   async createProvisioningSession(input: {
     telegramChatId: string;
     surface: SessionSurface;
+    profileId: string;
   }): Promise<BridgeSession>;
   async createProvisioningSession(input: {
     telegramChatId: string;
     telegramTopicId?: number;
     surface?: SessionSurface;
+    profileId: string;
   }): Promise<TopicSession | BridgeSession> {
     const surface: SessionSurface = input.surface ?? { kind: "topic", topicId: input.telegramTopicId! };
     const sessionRow = sessionSurfaceToRow(surface);
@@ -327,6 +332,7 @@ export class BridgeDatabase {
         .insertInto("sessions")
         .values({
           telegram_chat_id: input.telegramChatId,
+          profile_id: input.profileId,
           ...sessionRow,
           codex_thread_id: null,
           status: "provisioning",
@@ -352,6 +358,7 @@ export class BridgeDatabase {
         await this.kysely
           .updateTable("sessions")
           .set({
+            profile_id: input.profileId,
             codex_thread_id: null,
             status: "provisioning",
             model: null,
@@ -738,57 +745,50 @@ export class BridgeDatabase {
     return Number(row.count);
   }
 
-  async upsertChatThreadDefaults(
+  async upsertChatProfileDefaults(
     telegramChatId: string,
-    defaults: Omit<ChatThreadDefaults, "telegramChatId">
-  ): Promise<ChatThreadDefaults> {
+    profileId: string,
+    defaults: PersistedThreadSettings
+  ): Promise<ChatProfileDefaults> {
     await this.kysely
-      .insertInto("chat_thread_defaults")
+      .insertInto("chat_profile_defaults")
       .values({
         telegram_chat_id: telegramChatId,
-        root_model: defaults.root.model,
-        root_reasoning_effort: defaults.root.reasoningEffort,
-        root_service_tier: defaults.root.serviceTier,
-        root_approval_policy: defaults.root.approvalPolicy ? JSON.stringify(defaults.root.approvalPolicy) : null,
-        root_sandbox_policy_json: defaults.root.sandboxPolicy ? JSON.stringify(defaults.root.sandboxPolicy) : null,
-        spawn_model: defaults.spawn.model,
-        spawn_reasoning_effort: defaults.spawn.reasoningEffort,
-        spawn_service_tier: defaults.spawn.serviceTier,
-        spawn_approval_policy: defaults.spawn.approvalPolicy ? JSON.stringify(defaults.spawn.approvalPolicy) : null,
-        spawn_sandbox_policy_json: defaults.spawn.sandboxPolicy ? JSON.stringify(defaults.spawn.sandboxPolicy) : null
+        profile_id: profileId,
+        model: defaults.model,
+        reasoning_effort: defaults.reasoningEffort,
+        service_tier: defaults.serviceTier,
+        approval_policy: defaults.approvalPolicy ? JSON.stringify(defaults.approvalPolicy) : null,
+        sandbox_policy_json: defaults.sandboxPolicy ? JSON.stringify(defaults.sandboxPolicy) : null
       })
       .onConflict((oc) =>
-        oc.column("telegram_chat_id").doUpdateSet({
-          root_model: defaults.root.model,
-          root_reasoning_effort: defaults.root.reasoningEffort,
-          root_service_tier: defaults.root.serviceTier,
-          root_approval_policy: defaults.root.approvalPolicy ? JSON.stringify(defaults.root.approvalPolicy) : null,
-          root_sandbox_policy_json: defaults.root.sandboxPolicy ? JSON.stringify(defaults.root.sandboxPolicy) : null,
-          spawn_model: defaults.spawn.model,
-          spawn_reasoning_effort: defaults.spawn.reasoningEffort,
-          spawn_service_tier: defaults.spawn.serviceTier,
-          spawn_approval_policy: defaults.spawn.approvalPolicy ? JSON.stringify(defaults.spawn.approvalPolicy) : null,
-          spawn_sandbox_policy_json: defaults.spawn.sandboxPolicy ? JSON.stringify(defaults.spawn.sandboxPolicy) : null
+        oc.columns(["telegram_chat_id", "profile_id"]).doUpdateSet({
+          model: defaults.model,
+          reasoning_effort: defaults.reasoningEffort,
+          service_tier: defaults.serviceTier,
+          approval_policy: defaults.approvalPolicy ? JSON.stringify(defaults.approvalPolicy) : null,
+          sandbox_policy_json: defaults.sandboxPolicy ? JSON.stringify(defaults.sandboxPolicy) : null
         })
       )
       .execute();
 
-    return this.getChatThreadDefaults(telegramChatId).then((value) => {
+    return this.getChatProfileDefaults(telegramChatId, profileId).then((value) => {
       if (!value) {
-        throw new Error(`Failed to load chat thread defaults for ${telegramChatId}`);
+        throw new Error(`Failed to load chat profile defaults for ${telegramChatId}/${profileId}`);
       }
       return value;
     });
   }
 
-  async getChatThreadDefaults(telegramChatId: string): Promise<ChatThreadDefaults | undefined> {
+  async getChatProfileDefaults(telegramChatId: string, profileId: string): Promise<ChatProfileDefaults | undefined> {
     const row = await this.kysely
-      .selectFrom("chat_thread_defaults")
+      .selectFrom("chat_profile_defaults")
       .selectAll()
       .where("telegram_chat_id", "=", telegramChatId)
+      .where("profile_id", "=", profileId)
       .executeTakeFirst();
 
-    return row ? mapChatThreadDefaults(row) : undefined;
+    return row ? mapChatProfileDefaults(row) : undefined;
   }
 
   async createCustomCommand(input: {
@@ -966,6 +966,7 @@ export class BridgeDatabase {
       id: session.id,
       telegramChatId: session.telegramChatId,
       telegramTopicId: session.surface.topicId,
+      profileId: session.profileId,
       codexThreadId: session.codexThreadId,
       status: session.status,
       preferredMode: session.preferredMode,
@@ -973,13 +974,14 @@ export class BridgeDatabase {
     };
   }
 
-  #createSchemaV8(): void {
+  #createSchemaV9(): void {
     this.#sqlite.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         telegram_chat_id TEXT NOT NULL,
         surface_kind TEXT NOT NULL,
         telegram_topic_id INTEGER,
+        profile_id TEXT NOT NULL,
         codex_thread_id TEXT,
         status TEXT NOT NULL,
         preferred_mode TEXT NOT NULL DEFAULT 'default',
@@ -1007,18 +1009,15 @@ export class BridgeDatabase {
         ON sessions (codex_thread_id)
         WHERE codex_thread_id IS NOT NULL;
 
-      CREATE TABLE IF NOT EXISTS chat_thread_defaults (
-        telegram_chat_id TEXT PRIMARY KEY,
-        root_model TEXT,
-        root_reasoning_effort TEXT,
-        root_service_tier TEXT,
-        root_approval_policy TEXT,
-        root_sandbox_policy_json TEXT,
-        spawn_model TEXT,
-        spawn_reasoning_effort TEXT,
-        spawn_service_tier TEXT,
-        spawn_approval_policy TEXT,
-        spawn_sandbox_policy_json TEXT
+      CREATE TABLE IF NOT EXISTS chat_profile_defaults (
+        telegram_chat_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT,
+        PRIMARY KEY (telegram_chat_id, profile_id)
       );
 
       CREATE TABLE IF NOT EXISTS server_requests (
@@ -1304,6 +1303,20 @@ export class BridgeDatabase {
         ON sessions (codex_thread_id)
         WHERE codex_thread_id IS NOT NULL;
 
+      CREATE TABLE IF NOT EXISTS chat_thread_defaults (
+        telegram_chat_id TEXT PRIMARY KEY,
+        root_model TEXT,
+        root_reasoning_effort TEXT,
+        root_service_tier TEXT,
+        root_approval_policy TEXT,
+        root_sandbox_policy_json TEXT,
+        spawn_model TEXT,
+        spawn_reasoning_effort TEXT,
+        spawn_service_tier TEXT,
+        spawn_approval_policy TEXT,
+        spawn_sandbox_policy_json TEXT
+      );
+
       COMMIT;
     `);
   }
@@ -1363,6 +1376,148 @@ export class BridgeDatabase {
 
       DROP TABLE sessions;
       ALTER TABLE sessions_v8 RENAME TO sessions;
+
+      CREATE UNIQUE INDEX sessions_general_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'general';
+
+      CREATE UNIQUE INDEX sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS chat_thread_defaults (
+        telegram_chat_id TEXT PRIMARY KEY,
+        root_model TEXT,
+        root_reasoning_effort TEXT,
+        root_service_tier TEXT,
+        root_approval_policy TEXT,
+        root_sandbox_policy_json TEXT,
+        spawn_model TEXT,
+        spawn_reasoning_effort TEXT,
+        spawn_service_tier TEXT,
+        spawn_approval_policy TEXT,
+        spawn_sandbox_policy_json TEXT
+      );
+
+      COMMIT;
+    `);
+  }
+
+  #migrateFromV8ToV9(): void {
+    this.#sqlite.exec(`
+      BEGIN;
+
+      CREATE TABLE sessions_v9 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        profile_id TEXT NOT NULL,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT,
+        CHECK (surface_kind IN ('general', 'topic')),
+        CHECK (
+          (surface_kind = 'general' AND telegram_topic_id IS NULL)
+          OR (surface_kind = 'topic' AND telegram_topic_id IS NOT NULL)
+        )
+      );
+
+      INSERT INTO sessions_v9 (
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        profile_id,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      )
+      SELECT
+        id,
+        telegram_chat_id,
+        surface_kind,
+        telegram_topic_id,
+        CASE
+          WHEN surface_kind = 'general' THEN 'general'
+          ELSE 'coding'
+        END,
+        codex_thread_id,
+        status,
+        preferred_mode,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      FROM sessions;
+
+      CREATE TABLE chat_profile_defaults (
+        telegram_chat_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT,
+        PRIMARY KEY (telegram_chat_id, profile_id)
+      );
+
+      INSERT INTO chat_profile_defaults (
+        telegram_chat_id,
+        profile_id,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      )
+      SELECT
+        telegram_chat_id,
+        'general',
+        root_model,
+        root_reasoning_effort,
+        root_service_tier,
+        root_approval_policy,
+        root_sandbox_policy_json
+      FROM chat_thread_defaults;
+
+      INSERT INTO chat_profile_defaults (
+        telegram_chat_id,
+        profile_id,
+        model,
+        reasoning_effort,
+        service_tier,
+        approval_policy,
+        sandbox_policy_json
+      )
+      SELECT
+        telegram_chat_id,
+        'coding',
+        spawn_model,
+        spawn_reasoning_effort,
+        spawn_service_tier,
+        spawn_approval_policy,
+        spawn_sandbox_policy_json
+      FROM chat_thread_defaults;
+
+      DROP TABLE sessions;
+      ALTER TABLE sessions_v9 RENAME TO sessions;
+      DROP TABLE chat_thread_defaults;
 
       CREATE UNIQUE INDEX sessions_general_unique
         ON sessions (telegram_chat_id, surface_kind)

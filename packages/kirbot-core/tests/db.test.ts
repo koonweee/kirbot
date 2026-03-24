@@ -26,16 +26,19 @@ describe("BridgeDatabase", () => {
   it("creates, activates, and archives topic sessions", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      telegramTopicId: 22
+      telegramTopicId: 22,
+      profileId: "coding"
     });
 
     expect(pending.status).toBe("provisioning");
     expect(pending.preferredMode).toBe("default");
+    expect(pending.profileId).toBe("coding");
 
     const active = await database.activateSession(pending.id, "thread-1");
     expect(active.status).toBe("active");
     expect(active.codexThreadId).toBe("thread-1");
     expect(active.preferredMode).toBe("default");
+    expect(active.profileId).toBe("coding");
 
     const updatedMode = await database.updateSessionPreferredMode(-1001, 22, "plan");
     expect(updatedMode?.preferredMode).toBe("plan");
@@ -52,7 +55,8 @@ describe("BridgeDatabase", () => {
     await expect(
       database.createProvisioningSession({
         telegramChatId: "-1001",
-        surface: { kind: "topic" } as SessionSurface
+        surface: { kind: "topic" } as SessionSurface,
+        profileId: "coding"
       })
     ).rejects.toThrow("Topic sessions require a numeric topic id");
   });
@@ -60,23 +64,29 @@ describe("BridgeDatabase", () => {
   it("creates and looks up a general session separately from topic sessions", async () => {
     const pendingGeneral = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     expect("surface" in pendingGeneral && pendingGeneral.surface.kind).toBe("general");
+    expect(pendingGeneral.profileId).toBe("general");
 
     const activeGeneral = await database.activateSession(pendingGeneral.id, "general-thread");
     expect("surface" in activeGeneral && activeGeneral.surface.kind).toBe("general");
+    expect(activeGeneral.profileId).toBe("general");
 
     const firstTopic = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "topic", topicId: 22 }
+      surface: { kind: "topic", topicId: 22 },
+      profileId: "coding"
     });
     const secondTopic = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "topic", topicId: 23 }
+      surface: { kind: "topic", topicId: 23 },
+      profileId: "coding"
     });
     const activeFirstTopic = await database.activateSession(firstTopic.id, "topic-thread-22");
     expect("surface" in activeFirstTopic && activeFirstTopic.surface.kind).toBe("topic");
+    expect(activeFirstTopic.profileId).toBe("coding");
     expect(secondTopic.id).not.toBe(firstTopic.id);
 
     const rootLookup = await database.getRootSessionByChat(-1001);
@@ -92,63 +102,25 @@ describe("BridgeDatabase", () => {
     expect(otherTopicLookup?.telegramTopicId).toBe(23);
   });
 
-  it("stores per-session settings separately from chat defaults", async () => {
-    await database.upsertChatThreadDefaults("-1001", {
-      root: {
-        model: "gpt-5.4",
-        reasoningEffort: "medium",
-        serviceTier: null,
-        approvalPolicy: "on-request",
-        sandboxPolicy: {
-          type: "workspaceWrite",
-          writableRoots: [],
-          readOnlyAccess: {
-            type: "fullAccess"
-          },
-          networkAccess: false,
-          excludeTmpdirEnvVar: false,
-          excludeSlashTmp: false
-        }
-      },
-      spawn: {
-        model: "gpt-5.4-mini",
-        reasoningEffort: "high",
-        serviceTier: "fast",
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "dangerFullAccess"
-        }
-      }
-    });
-
-    const pendingTopic = await database.createProvisioningSession({
-      telegramChatId: "-1001",
-      surface: { kind: "topic", topicId: 22 }
-    });
-    await database.activateSession(pendingTopic.id, "topic-thread");
-
-    const updatedTopic = await database.updateTopicSessionSettings(-1001, 22, {
-      model: "gpt-5.3-codex-spark",
-      reasoningEffort: "high",
-      serviceTier: "fast",
-      approvalPolicy: "never",
+  it("stores profile-aware defaults by chat and profile id", async () => {
+    await database.upsertChatProfileDefaults("-1001", "general", {
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+      serviceTier: null,
+      approvalPolicy: "on-request",
       sandboxPolicy: {
-        type: "dangerFullAccess"
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
       }
     });
 
-    expect(updatedTopic?.settings).toEqual({
-      model: "gpt-5.3-codex-spark",
-      reasoningEffort: "high",
-      serviceTier: "fast",
-      approvalPolicy: "never",
-      sandboxPolicy: {
-        type: "dangerFullAccess"
-      }
-    });
-
-    const defaults = await database.getChatThreadDefaults("-1001");
-    expect(defaults?.spawn).toEqual({
+    await database.upsertChatProfileDefaults("-1001", "coding", {
       model: "gpt-5.4-mini",
       reasoningEffort: "high",
       serviceTier: "fast",
@@ -157,12 +129,21 @@ describe("BridgeDatabase", () => {
         type: "dangerFullAccess"
       }
     });
+
+    const generalDefaults = await database.getChatProfileDefaults("-1001", "general");
+    expect(generalDefaults?.profileId).toBe("general");
+    expect(generalDefaults?.model).toBe("gpt-5.4");
+
+    const codingDefaults = await database.getChatProfileDefaults("-1001", "coding");
+    expect(codingDefaults?.profileId).toBe("coding");
+    expect(codingDefaults?.model).toBe("gpt-5.4-mini");
   });
 
-  it("stores general session settings via root/default helpers", async () => {
+  it("stores general session settings via profile-aware helpers", async () => {
     const pendingGeneral = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     await database.activateSession(pendingGeneral.id, "general-thread");
 
@@ -184,18 +165,21 @@ describe("BridgeDatabase", () => {
     });
 
     expect(updatedRoot?.surface).toEqual({ kind: "general" });
+    expect(updatedRoot?.profileId).toBe("general");
     expect(updatedRoot?.settings.model).toBe("gpt-5.4-mini");
     expect(updatedRoot?.settings.reasoningEffort).toBe("medium");
     expect(updatedRoot?.settings.approvalPolicy).toBe("on-request");
 
     const rootLookup = await database.getRootSessionByChat("-1001");
     expect(rootLookup?.surface).toEqual({ kind: "general" });
+    expect(rootLookup?.profileId).toBe("general");
   });
 
   it("repoints an active general session to a fresh Codex thread without changing settings", async () => {
     const pendingGeneral = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     await database.activateSession(pendingGeneral.id, "thread-1");
 
@@ -226,12 +210,14 @@ describe("BridgeDatabase", () => {
   it("returns the existing general provisioning session when creation races", async () => {
     const first = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
 
     const second = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
 
     expect(second).toEqual(first);
@@ -240,14 +226,16 @@ describe("BridgeDatabase", () => {
   it("reclaims an errored general session when provisioning is retried", async () => {
     const first = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
 
     await database.markSessionErrored(first.id);
 
     const retried = await database.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
 
     expect(retried.id).toBe(first.id);
@@ -263,6 +251,7 @@ describe("BridgeDatabase", () => {
           telegram_chat_id: "-1001",
           surface_kind: "topic",
           telegram_topic_id: null,
+          profile_id: "coding",
           codex_thread_id: null,
           status: "active",
           preferred_mode: "default",
@@ -284,6 +273,7 @@ describe("BridgeDatabase", () => {
           telegram_chat_id: "-1001",
           surface_kind: "general",
           telegram_topic_id: 99,
+          profile_id: "general",
           codex_thread_id: null,
           status: "active",
           preferred_mode: "default",
@@ -378,19 +368,22 @@ describe("BridgeDatabase", () => {
 
     const repeatedGeneral = await migratedDatabase.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     expect(repeatedGeneral.id).toBe(general?.id);
 
     const repeatedTopic = await migratedDatabase.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "topic", topicId: 22 }
+      surface: { kind: "topic", topicId: 22 },
+      profileId: "coding"
     });
     expect(repeatedTopic.id).toBe(topic?.id);
 
     const newTopic = await migratedDatabase.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "topic", topicId: 23 }
+      surface: { kind: "topic", topicId: 23 },
+      profileId: "coding"
     });
     expect(newTopic.surface).toEqual({ kind: "topic", topicId: 23 });
 
@@ -483,6 +476,7 @@ describe("BridgeDatabase", () => {
           telegram_chat_id: "-1001",
           surface_kind: "general",
           telegram_topic_id: null,
+          profile_id: "general",
           codex_thread_id: "duplicate-general-thread",
           status: "active",
           preferred_mode: "default",
@@ -502,6 +496,7 @@ describe("BridgeDatabase", () => {
           telegram_chat_id: "-1001",
           surface_kind: "general",
           telegram_topic_id: 77,
+          profile_id: "general",
           codex_thread_id: "malformed-general-thread",
           status: "active",
           preferred_mode: "default",
@@ -516,53 +511,122 @@ describe("BridgeDatabase", () => {
 
     const repeatedGeneral = await migratedDatabase.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "general" }
+      surface: { kind: "general" },
+      profileId: "general"
     });
     expect(repeatedGeneral.id).toBe(general?.id);
 
     const newTopic = await migratedDatabase.createProvisioningSession({
       telegramChatId: "-1001",
-      surface: { kind: "topic", topicId: 32 }
+      surface: { kind: "topic", topicId: 32 },
+      profileId: "coding"
     });
     expect(newTopic.surface).toEqual({ kind: "topic", topicId: 32 });
 
     await migratedDatabase.close();
   });
 
-  it("stores separate root and spawn defaults", async () => {
-    await database.upsertChatThreadDefaults("-1001", {
-      root: {
-        model: "gpt-5.4-mini",
-        reasoningEffort: "medium",
-        serviceTier: "fast",
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "dangerFullAccess"
-        }
-      },
-      spawn: {
-        model: "gpt-5-codex",
-        reasoningEffort: "high",
-        serviceTier: null,
-        approvalPolicy: "on-request",
-        sandboxPolicy: {
-          type: "workspaceWrite",
-          writableRoots: [],
-          readOnlyAccess: {
-            type: "fullAccess"
-          },
-          networkAccess: false,
-          excludeTmpdirEnvVar: false,
-          excludeSlashTmp: false
-        }
-      }
-    });
+  it("migrates chat thread defaults to profile-aware defaults on v9", async () => {
+    const legacyPath = join(tempDir, "legacy-v8.sqlite");
+    const sqlite = new SqliteDatabase(legacyPath);
 
-    const defaults = await database.getChatThreadDefaults("-1001");
-    expect(defaults?.root.model).toBe("gpt-5.4-mini");
-    expect(defaults?.root.approvalPolicy).toBe("never");
-    expect(defaults?.spawn.model).toBe("gpt-5-codex");
-    expect(defaults?.spawn.reasoningEffort).toBe("high");
+    sqlite.exec(`
+      CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_chat_id TEXT NOT NULL,
+        surface_kind TEXT NOT NULL,
+        telegram_topic_id INTEGER,
+        codex_thread_id TEXT,
+        status TEXT NOT NULL,
+        preferred_mode TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        reasoning_effort TEXT,
+        service_tier TEXT,
+        approval_policy TEXT,
+        sandbox_policy_json TEXT,
+        CHECK (surface_kind IN ('general', 'topic')),
+        CHECK (
+          (surface_kind = 'general' AND telegram_topic_id IS NULL)
+          OR (surface_kind = 'topic' AND telegram_topic_id IS NOT NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX sessions_general_unique
+        ON sessions (telegram_chat_id, surface_kind)
+        WHERE surface_kind = 'general';
+
+      CREATE UNIQUE INDEX sessions_topic_unique
+        ON sessions (telegram_chat_id, telegram_topic_id)
+        WHERE surface_kind = 'topic';
+
+      CREATE UNIQUE INDEX sessions_thread_unique
+        ON sessions (codex_thread_id)
+        WHERE codex_thread_id IS NOT NULL;
+
+      CREATE TABLE chat_thread_defaults (
+        telegram_chat_id TEXT PRIMARY KEY,
+        root_model TEXT,
+        root_reasoning_effort TEXT,
+        root_service_tier TEXT,
+        root_approval_policy TEXT,
+        root_sandbox_policy_json TEXT,
+        spawn_model TEXT,
+        spawn_reasoning_effort TEXT,
+        spawn_service_tier TEXT,
+        spawn_approval_policy TEXT,
+        spawn_sandbox_policy_json TEXT
+      );
+    `);
+
+    sqlite.pragma("user_version = 8");
+    sqlite.prepare(`
+      INSERT INTO chat_thread_defaults (
+        telegram_chat_id,
+        root_model,
+        root_reasoning_effort,
+        root_service_tier,
+        root_approval_policy,
+        root_sandbox_policy_json,
+        spawn_model,
+        spawn_reasoning_effort,
+        spawn_service_tier,
+        spawn_approval_policy,
+        spawn_sandbox_policy_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "-1001",
+      "gpt-5.4",
+      "medium",
+      null,
+      JSON.stringify("on-request"),
+      JSON.stringify({
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: { type: "fullAccess" },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }),
+      "gpt-5.4-mini",
+      "high",
+      "fast",
+      JSON.stringify("never"),
+      JSON.stringify({ type: "dangerFullAccess" })
+    );
+    sqlite.close();
+
+    const migratedDatabase = new BridgeDatabase(legacyPath);
+    await migratedDatabase.migrate();
+
+    const defaults = await migratedDatabase.getChatProfileDefaults("-1001", "general");
+    expect(defaults?.profileId).toBe("general");
+    expect(defaults?.model).toBe("gpt-5.4");
+
+    const codingDefaults = await migratedDatabase.getChatProfileDefaults("-1001", "coding");
+    expect(codingDefaults?.profileId).toBe("coding");
+    expect(codingDefaults?.model).toBe("gpt-5.4-mini");
+
+    await migratedDatabase.close();
   });
 
   it("stores and resolves pending server requests", async () => {

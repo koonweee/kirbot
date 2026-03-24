@@ -20,6 +20,11 @@ export type PersistedThreadSettings = {
   sandboxPolicy: SandboxPolicy | null;
 };
 
+export type ChatProfileDefaults = {
+  telegramChatId: string;
+  profileId: string;
+} & PersistedThreadSettings;
+
 export type ChatThreadDefaults = {
   telegramChatId: string;
   root: PersistedThreadSettings;
@@ -39,6 +44,7 @@ export type TopicSession = {
   id: number;
   telegramChatId: string;
   telegramTopicId: number;
+  profileId: string;
   codexThreadId: string | null;
   status: SessionStatus;
   preferredMode: SessionMode;
@@ -49,6 +55,7 @@ export type BridgeSession = {
   id: number;
   telegramChatId: string;
   surface: SessionSurface;
+  profileId: string;
   codexThreadId: string | null;
   status: SessionStatus;
   preferredMode: SessionMode;
