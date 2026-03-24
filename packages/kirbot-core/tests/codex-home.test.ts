@@ -116,13 +116,22 @@ describe("codex home helpers", () => {
       }
     });
 
+    const mirrorManifest = JSON.parse(fs.readFileSync(join(targetHome, ".kirbot-managed-home-mirror.json"), "utf8")) as {
+      mirroredTopLevelNames?: string[];
+    };
+
     expect(fs.existsSync(join(targetHome, ".ssh"))).toBe(true);
     expect(fs.lstatSync(join(targetHome, ".ssh")).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(join(targetHome, ".ssh"))).toBe(fs.realpathSync(join(sourceHome, ".ssh")));
     expect(fs.existsSync(join(targetHome, ".gitconfig"))).toBe(true);
     expect(fs.lstatSync(join(targetHome, ".gitconfig")).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(join(targetHome, ".gitconfig"))).toBe(fs.realpathSync(join(sourceHome, ".gitconfig")));
     expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
     expect(fs.existsSync(join(targetHome, "auth.json"))).toBe(true);
     expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"codex-token"}');
+    expect(mirrorManifest.mirroredTopLevelNames).toHaveLength(2);
+    expect(mirrorManifest.mirroredTopLevelNames).toEqual(expect.arrayContaining([".ssh", ".gitconfig"]));
+    expect(mirrorManifest.mirroredTopLevelNames).not.toContain(".codex");
   });
 
   it("removes stale mirrored entries on reconcile but keeps runtime-owned Codex directories", () => {
@@ -139,6 +148,7 @@ describe("codex home helpers", () => {
     fs.writeFileSync(join(sourceHome, ".config", "user.json"), "{}");
 
     fs.symlinkSync(join(sourceHome, ".config"), join(targetHome, ".obsolete"), "dir");
+    fs.writeFileSync(join(targetHome, ".stray"), "keep");
     fs.mkdirSync(join(targetHome, "sessions"), { recursive: true });
     fs.writeFileSync(join(targetHome, "sessions", "keep.txt"), "keep");
     fs.mkdirSync(join(targetHome, "shell_snapshots"), { recursive: true });
@@ -160,9 +170,15 @@ describe("codex home helpers", () => {
       }
     });
 
+    const mirrorManifest = JSON.parse(fs.readFileSync(join(targetHome, ".kirbot-managed-home-mirror.json"), "utf8")) as {
+      mirroredTopLevelNames?: string[];
+    };
+
     expect(fs.existsSync(join(targetHome, ".obsolete"))).toBe(false);
+    expect(fs.existsSync(join(targetHome, ".stray"))).toBe(true);
     expect(fs.readFileSync(join(targetHome, "sessions", "keep.txt"), "utf8")).toBe("keep");
     expect(fs.readFileSync(join(targetHome, "shell_snapshots", "keep.txt"), "utf8")).toBe("keep");
+    expect(mirrorManifest.mirroredTopLevelNames).toEqual([".config"]);
   });
 
   it("prefers managed Codex files over mirrored home entries", () => {
