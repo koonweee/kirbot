@@ -293,7 +293,7 @@ describe("status presentation", () => {
     );
   });
 
-  it("renders a thread-start footer that explains General and /thread", () => {
+  it("renders a thread-start footer as a plain status line", () => {
     expect(
       buildRenderedThreadStartFooter({
         mode: "default",
@@ -304,11 +304,11 @@ describe("status presentation", () => {
         branch: "main"
       })
     ).toEqual({
-      text: "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n<1s • 100% left • /workspace • main • gpt-5",
+      text: "<1s • 100% left • /workspace • main • gpt-5",
       entities: [
         {
           type: "pre",
-          offset: "General stays shared for workspace-wide work. Use /thread to create a separate topic.\n".length,
+          offset: 0,
           length: "<1s • 100% left • /workspace • main • gpt-5".length,
           language: "status"
         }

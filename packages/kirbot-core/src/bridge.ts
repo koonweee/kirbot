@@ -1838,6 +1838,7 @@ export class TelegramCodexBridge {
       name: title,
       options: await this.#topicIconPicker.pickCreateForumTopicOptions()
     });
+    await this.maybeSendTopicCreatedConfirmation(message, forumTopic.topicId);
     const topicMessage = {
       ...message,
       topicId: forumTopic.topicId
@@ -1874,6 +1875,7 @@ export class TelegramCodexBridge {
       name: title,
       options: await this.#topicIconPicker.pickCreateForumTopicOptions()
     });
+    await this.maybeSendTopicCreatedConfirmation(message, forumTopic.topicId);
 
     const topicMessage = {
       ...message,
@@ -2048,6 +2050,26 @@ export class TelegramCodexBridge {
       });
     } catch (error) {
       this.logger.error("Failed to send initial prompt mirror into Telegram topic", error);
+    }
+  }
+
+  private async maybeSendTopicCreatedConfirmation(message: UserTurnMessage, topicId: number): Promise<void> {
+    try {
+      const topicUrl = buildTelegramTopicUrl(message.chatId, topicId);
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        text: "Thread created",
+        replyToMessageId: message.messageId,
+        ...(topicUrl
+          ? {
+              replyMarkup: {
+                inline_keyboard: [[{ text: "View", url: topicUrl }]]
+              }
+            }
+          : {})
+      });
+    } catch (error) {
+      this.logger.error("Failed to send root topic creation confirmation", error);
     }
   }
 
@@ -2880,6 +2902,15 @@ export class TelegramCodexBridge {
     await this.updateSessionSettingsForSurface(chatId, { kind: "general" }, update);
   }
 
+}
+
+function buildTelegramTopicUrl(chatId: number, topicId: number): string | null {
+  const chatIdText = String(chatId);
+  if (!chatIdText.startsWith("-100") || chatIdText.length <= 4) {
+    return null;
+  }
+
+  return `https://t.me/c/${chatIdText.slice(4)}/${topicId}`;
 }
 
 function getServerRequestTurnId(request: ServerRequest): string | null {
