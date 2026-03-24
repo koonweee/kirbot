@@ -1,261 +1,360 @@
-# Kirbot Multi-Profile Codex Home Design
+# Kirbot Managed Codex Profile Config Design
 
 Date: 2026-03-24
 
 ## Summary
 
-Kirbot will move from one shared isolated Codex home for all newly created sessions to multiple isolated Codex homes, each selected by a persisted session profile.
+Kirbot will move from environment-driven profile routing to a checked-in profile
+configuration model centered on `config/codex-profiles.json`.
 
-In the new model:
+That JSON file becomes the single authored source of truth for:
 
-- `General` always uses a dedicated `general` profile.
-- `/thread` and `/plan` both use a shared `coding` profile.
-- future commands such as `/read-only` may map to their own profile.
-- the legacy shared-home fallback path is removed entirely.
+- command-to-profile routing
+- per-profile Codex defaults
+- shared skill definitions by id
+- shared MCP definitions by key
+- per-profile selection of skill ids and MCP keys
 
-The goal is to let different conversation surfaces run with different skills, MCPs, and Codex config, while keeping routing deterministic after restart.
+Kirbot will derive each profile home automatically under the data directory,
+materialize the managed parts of that home on every startup, and preserve
+runtime state such as authentication and thread history.
 
 ## Goals
 
-- support multiple isolated Codex environments inside one Kirbot deployment
-- make environment selection explicit and persistent per session
-- keep `General` separate from work-oriented topic threads
-- allow multiple commands to share the same environment profile
-- remove the shared-home legacy compatibility path
+- make profile routing and profile behavior live in one checked-in config file
+- remove inline env JSON for Codex profile configuration
+- derive managed profile homes automatically instead of requiring explicit
+  `homePath` boilerplate
+- let profiles share repo-authored skills and shared MCP definitions by name
+- fail early on invalid profile config before any Codex gateway starts
+- keep profile homes reproducible without destroying runtime-owned state
 
 ## Non-Goals
 
-- migrate old shared-home thread state into new isolated homes
-- preserve support for the old single `CODEX_HOME_PATH` configuration model
-- infer a profile from topic title, prior messages, or runtime heuristics
-- make `/plan` and `/thread` different environments unless explicitly configured that way later
+- manage `rules/` or `superpowers/` in v1
+- support hand-edited profile `config.toml` files as a stable workflow
+- support host-local skill source directories outside the repo convention
+- migrate legacy shared-home sessions into the new managed homes
 
-## Terms
+## Source Of Truth
 
-- Profile: a named Codex environment backed by its own isolated `CODEX_HOME`
-- Mode: the session behavior inside a thread, such as default mode or plan mode
-- Surface: the Telegram location for the session, either `general` or a `topic`
+Kirbot will use one checked-in config file:
 
-Profile and mode are separate concerns:
+- `config/codex-profiles.json`
 
-- profile decides Codex home, skills, MCPs, and global config
-- mode decides how the conversation behaves inside that profile
+This file replaces `CODEX_PROFILES_JSON` as the authored profile config.
 
-## Current State
+The remaining env vars stay focused on deployment and secrets such as:
 
-Kirbot currently starts two gateways:
+- Telegram credentials
+- workspace chat id
+- mini app URL
+- database path
 
-- one gateway using the shared home
-- one gateway using a single isolated Kirbot home
+Profile routing and profile capability selection will no longer be authored in
+environment variables.
 
-All newly created sessions are created on the isolated gateway. The shared gateway remains only as a fallback for legacy thread ids that no longer exist in the isolated home.
+## Shared Asset Layout
 
-This means:
+Shared skills will use a fixed repo convention:
 
-- all new `General` sessions use the same isolated home
-- all new topic sessions use the same isolated home
-- there is no concept of multiple isolated profiles today
+- `skills/<skill-id>/`
 
-## Proposed Model
+Each shared skill directory must contain:
 
-Kirbot will start one isolated gateway per configured profile and route every session directly to the gateway for its persisted `profileId`.
+- `SKILL.md`
 
-Initial profiles:
+Kirbot will treat the repo-local `skills/` directory as the source for
+profile-managed skills. Profile homes will not be the place where humans edit
+shared skill source.
 
-- `general`
-- `coding`
+Shared MCPs will live inline in `config/codex-profiles.json` under a top-level
+registry map. Profiles will reference MCP definitions by key only.
 
-Initial entrypoint mapping:
+## Config Shape
 
-- `General` -> `general`
-- `/thread` -> `coding`
-- `/plan` -> `coding`
-
-Possible future extension:
-
-- `/read-only` -> `read-only`
-
-No shared-home gateway will exist in the new model.
-
-## Configuration
-
-Kirbot will use a JSON configuration object for profile declarations and routing.
+The config file will use a generic command-like route map and shared registries
+for skills and MCPs.
 
 Example:
 
 ```json
 {
-  "profiles": {
-    "general": {
-      "homePath": "/srv/kirbot/codex-home-general"
-    },
-    "coding": {
-      "homePath": "/srv/kirbot/codex-home-coding"
-    },
-    "read-only": {
-      "homePath": "/srv/kirbot/codex-home-read-only"
-    }
-  },
-  "routing": {
+  "routes": {
     "general": "general",
     "thread": "coding",
     "plan": "coding",
-    "read-only": "read-only"
+    "read-only": "readonly"
+  },
+  "skills": {
+    "brainstorming": {},
+    "requesting-code-review": {},
+    "kirbot-skill-install": {}
+  },
+  "mcps": {
+    "github": {
+      "type": "stdio",
+      "command": [
+        "github-mcp",
+        "serve"
+      ]
+    }
+  },
+  "profiles": {
+    "general": {
+      "model": "gpt-5",
+      "sandboxMode": "workspace-write",
+      "approvalPolicy": "on-request",
+      "skills": [],
+      "mcps": []
+    },
+    "coding": {
+      "model": "gpt-5-codex",
+      "sandboxMode": "danger-full-access",
+      "approvalPolicy": "never",
+      "skills": [
+        "brainstorming",
+        "requesting-code-review",
+        "kirbot-skill-install"
+      ],
+      "mcps": [
+        "github"
+      ]
+    }
   }
 }
 ```
 
-Configuration requirements:
+Notes:
 
-- every routing target must reference a declared profile
-- every declared profile must define its isolated home path
-- profile ids must be stable strings suitable for persistence
+- route keys are command-like ids, not a fixed enum limited to today's commands
+- the application still requires `general`, `thread`, and `plan`
+- profiles reference shared skills and MCPs by key only
+- `skills` is a registry of known shared skills, even though the source on disk
+  also exists under `skills/<skill-id>/`
 
-Kirbot will not preserve the old single-home config path as a supported configuration mode.
+## Route Semantics
 
-## Home Preparation
+The initial route contract remains:
 
-Each profile home will be prepared the same way the current isolated home is prepared:
+- `general` -> dedicated `general` profile
+- `thread` -> `coding` profile
+- `plan` -> `coding` profile
 
-- create the target directory if needed
-- seed `auth.json` if available
-- seed `rules/`, `skills/`, and `superpowers/` if available
+Future commands can add more route keys without changing the config format.
 
-This keeps each profile self-contained and independently configurable after bootstrap.
+Kirbot must still enforce:
 
-## Session Persistence
+- required routes `general`, `thread`, and `plan` exist
+- every route target references a declared profile
+- `general` uses a dedicated profile and cannot share with another route
 
-Kirbot session records will gain a persisted `profileId`.
+## Derived Profile Homes
 
-Rules:
+Profile homes become managed artifacts derived from the database location.
 
-- root session rows store the routed `general` profile
-- topic session rows store the profile chosen when the session is created
-- later resume, turn, compact, archive, and approval operations route from the persisted `profileId`
+For profile `<id>`, Kirbot derives:
 
-Routing will not depend on:
+- `dirname(DATABASE_PATH)/homes/<id>`
 
-- whether the session is new or old
-- whether the session is `General` or a topic at the time of resume
-- probing multiple gateways until one succeeds
+Example:
 
-The database becomes the source of truth for environment selection.
+- `DATABASE_PATH=data/telegram-codex-bridge.sqlite`
+- `general` home -> `data/homes/general`
+- `coding` home -> `data/homes/coding`
 
-## Thread Creation Semantics
+There is no authored `homePath` in normal config.
 
-Thread creation will follow profile routing first, then mode behavior.
+Kirbot creates missing home directories on startup.
 
-### General
+## Home Ownership Boundary
 
-- first normal message in `General` creates a root session
-- the root session uses profile `general`
+Each profile home contains both managed artifacts and runtime-owned state.
 
-### `/thread`
+Managed by Kirbot on every startup:
 
-- creates a topic session
-- the topic session uses profile `coding`
-- the session starts in normal mode
+- `config.toml`
+- `skills/`
 
-### `/plan`
+Preserved as runtime-owned:
 
-- creates a topic session
-- the topic session uses profile `coding`
-- the session starts in plan mode
+- `auth.json`
+- Codex thread and session state
+- logs and caches
+- `rules/`
+- `superpowers/`
+- other non-managed files
 
-This keeps `/thread` and `/plan` in the same coding environment while preserving their different workflow behavior.
+This means profile homes are not treated as fully disposable directories, but
+their managed subtrees are fully reconciled from config.
+
+## Startup Reconciliation
+
+After config validation passes, Kirbot reconciles each profile home on startup.
+
+Expected behavior:
+
+- create the profile home if missing
+- preserve `auth.json` if already present
+- seed `auth.json` from the base Codex home if needed
+- rewrite the full managed `config.toml`
+- rebuild the managed `skills/` directory to exactly match the profile config
+- preserve unmanaged files and directories
+
+Manual edits to:
+
+- `data/homes/<profile>/config.toml`
+- `data/homes/<profile>/skills/`
+
+are unsupported and will be overwritten on the next startup.
+
+## Managed `config.toml`
+
+Kirbot will treat `config/codex-profiles.json` as the only authored source for
+profile-global Codex config and will rewrite the full `config.toml` for each
+profile on every startup.
+
+That generated file will include:
+
+- model selection
+- sandbox mode
+- approval policy
+- generated MCP configuration for the profile's selected MCP keys
+- any other Kirbot-managed Codex keys needed for a reproducible profile
+
+Kirbot should use Codex-generated types and enums where possible when parsing
+and generating these values.
+
+## Managed Skills
+
+Shared skill source lives in:
+
+- `skills/<skill-id>/`
+
+Kirbot will materialize `data/homes/<profile>/skills/` from the profile's
+declared skill ids.
+
+Desired implementation:
+
+- prefer symlinks from the profile home into repo-local `skills/<skill-id>/`
+- fall back to copying if symlinks are unavailable or unsuitable
+
+This materialization detail is internal. The config contract remains "profile
+references these skill ids."
+
+Reconciliation behavior:
+
+- declared skills appear in the profile home
+- undeclared managed skills are removed from that profile home
+- direct edits inside the managed profile-home `skills/` directory are not
+  preserved
+
+## Managed MCPs
+
+Shared MCP definitions live inline in the config file under a top-level `mcps`
+map.
+
+Profiles reference MCPs by key only.
+
+Kirbot will resolve the selected MCP keys for each profile and write the
+resulting MCP configuration into the generated profile `config.toml`.
+
+Kirbot will not create a separate MCP source directory in v1.
+
+## Validation
+
+Startup must validate `config/codex-profiles.json` completely before creating
+gateways.
+
+Hard startup errors:
+
+- required routes `general`, `thread`, or `plan` are missing
+- a route references an undeclared profile
+- `general` shares a profile with another route
+- a profile references a missing skill id
+- a referenced skill directory is missing
+- a referenced skill directory lacks `SKILL.md`
+- a profile references a missing MCP key
+- per-profile model, sandbox, or approval values fail validation
+- generated home paths would collide
+- JSON shape is invalid
+
+Warnings only:
+
+- extra folders under `skills/` that are not referenced by any profile
+- MCP registry entries that are declared but unused by every profile
+
+Error messages should be actionable and name the broken key or path.
 
 ## Runtime Routing
 
-The current two-gateway `shared` versus `isolated` router will be replaced by a profile router.
+Session routing remains profile-based and persistent:
 
-Conceptually:
+- General sessions persist the routed profile for `general`
+- topic sessions persist the routed profile for the command that created them
+- later resume, turn, archive, approval, and user-input operations route from
+  the persisted `profileId`
 
-- `general` -> gateway for the `general` home
-- `coding` -> gateway for the `coding` home
-- future profile ids -> their own gateways
+This design does not change the user-facing routing decision:
 
-Operations that use `profileId` routing:
+- `General` still uses `general`
+- `/thread` and `/plan` still use `coding`
 
-- thread creation
-- thread resume and metadata reads
-- turn start and steer
-- interrupt
-- archive
-- approvals and user-input responses
-- event ownership and request routing
+It changes where profile behavior is authored and how profile homes are built.
 
-Kirbot will no longer treat "newly created thread" as equivalent to "single isolated gateway". A new thread will be created on the gateway selected by its profile.
+## Legacy Session Behavior
 
-## Legacy Cleanup
+The hard-cutover behavior remains:
 
-The legacy shared-home path will be removed completely.
+- no shared-home fallback
+- no migration of old shared-home sessions
+- old sessions fail when first resumed
 
-This includes:
+User-facing error text should continue directing people to start a new thread or
+topic when a legacy removed-home session is touched.
 
-- stop starting the shared-home app-server
-- delete fallback routing that probes shared-home for unknown thread ids
-- remove tests that assert shared fallback behavior
-- remove docs that describe the legacy shared-home resume path
+## Documentation And Agent Guidance
 
-No migration will be attempted for old shared-home sessions.
+Kirbot will add a repo-local skill:
 
-## Failure Behavior For Old Sessions
+- `skills/kirbot-skill-install/`
 
-Old sessions that only exist in the removed shared-home environment will fail when they are first resumed or otherwise loaded.
+That skill explains the non-standard skill installation model:
 
-Chosen behavior:
+- shared skill source is authored in `skills/<skill-id>/`
+- `config/codex-profiles.json` enables the skill for profiles by id
+- agents must not edit `data/homes/<profile>/skills/` directly
 
-- no startup scan
-- no proactive marking of sessions as unusable
-- fail on first resume attempt
+Kirbot should also add a note in:
 
-User-facing behavior:
+- `apps/bot/KIRBOT.md`
 
-- Kirbot should surface a clear message that the session belongs to a removed legacy Codex home and cannot be resumed
-- the message should tell the user to start a new thread or restart the session in a new topic
-
-This keeps cleanup explicit and avoids carrying silent migration complexity.
-
-## Settings Behavior
-
-Profile and thread settings remain layered:
-
-- profile home owns skills, MCPs, and profile-global Codex config
-- thread-local overrides still handle per-session values such as model, reasoning effort, permissions, sandbox policy, and cwd
-
-This preserves the current thread-local settings behavior while moving environment-level concerns into profile homes.
-
-## Data Model Changes
-
-Expected persistence changes:
-
-- add `profile_id` to session records
-- keep session surface and preferred mode as separate fields
-- evolve chat defaults to become profile-aware rather than only `root` and `spawn`
-
-The existing `root` versus `spawn` default split is not rich enough once multiple topic profiles exist. Defaults should align with profile identities instead of only surface categories.
+to point agents at `kirbot-skill-install` and clarify that profile-home
+`skills/` is generated.
 
 ## Testing
 
 Add coverage for:
 
-- runtime initialization with multiple configured profile gateways
-- config validation for profile declarations and routing targets
-- `General` creating sessions on `general`
-- `/thread` creating sessions on `coding`
-- `/plan` creating sessions on `coding` while setting plan mode
-- persisted `profileId` driving resume and turn routing after restart
-- missing legacy thread ids failing directly instead of probing another gateway
-- removal of shared-home fallback behavior
+- config parsing and semantic validation of `config/codex-profiles.json`
+- required route enforcement and dedicated `general` profile validation
+- missing skill directory and missing `SKILL.md` failures
+- warnings for unused shared skills and unused MCP definitions
+- derived home path calculation from `DATABASE_PATH`
+- startup reconciliation of managed `config.toml`
+- startup reconciliation of managed `skills/`
+- preservation of `auth.json` and other unmanaged files
+- MCP generation into per-profile `config.toml`
+- profile routing continuing to work with the new config source
 
 ## Rollout Notes
 
-This is a hard-cutover change.
+Operationally, rollout becomes:
 
-Operationally:
+- check in `config/codex-profiles.json`
+- check in shared skills under `skills/`
+- deploy the new Kirbot build
+- let Kirbot create and reconcile `data/homes/<profile>` on startup
 
-- deploy new multi-profile config
-- start Kirbot with profile-specific isolated homes
-- accept that old shared-home sessions will fail when first resumed
-
-No compatibility window is planned.
+Existing legacy sessions from the removed shared-home path are still not
+migrated and will fail on first resume.
