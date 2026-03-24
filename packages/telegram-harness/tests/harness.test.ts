@@ -800,7 +800,9 @@ describe("Telegram harness", () => {
 
     const topicMessages = harness.getTranscript().topics[0]?.messages ?? [];
     const finalAnswerIndex = topicMessages.findIndex((message) => message.text === "Final answer");
-    const footerIndex = topicMessages.findIndex((message) => message.text.startsWith("<1s • "));
+    const footerIndex = topicMessages.reduce((lastIndex, message, index) => (
+      message.text.includes("% left") ? index : lastIndex
+    ), -1);
     expect(finalAnswerIndex).toBeGreaterThanOrEqual(0);
     expect(footerIndex).toBeGreaterThan(finalAnswerIndex);
     expect(harness.getTelegramEvents().some((event) => event.type === "telegram.editMessageText")).toBe(true);

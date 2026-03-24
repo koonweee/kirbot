@@ -17,8 +17,8 @@ Each flow has three lenses:
 User experience:
 
 - A normal message in the workspace chat's `General` topic continues one persistent shared Codex thread for the whole workspace.
-- `/thread <prompt>` from `General` creates a Telegram topic with a random icon, creates a new shared Codex thread for that topic, mirrors the initial prompt into the topic, and starts the first turn there immediately.
-- Root `/plan [prompt]` from `General` still creates a new plan-oriented topic instead of switching the shared root session into plan mode.
+- `/thread <prompt>` from `General` creates a Telegram topic with a random icon, replies in `General` with `Thread created` plus a `View` button, mirrors the initial prompt into the topic, and starts the first turn there immediately.
+- Root `/plan [prompt]` from `General` still creates a new plan-oriented topic instead of switching the shared root session into plan mode, and it gets the same `Thread created` plus `View` confirmation in `General`.
 - Direct messages are rejected or redirected; they do not create a private root conversation.
 
 Owned by:
@@ -37,6 +37,7 @@ User experience:
 
 - If the user sends a normal message inside a topic that kirbot has not mapped yet, kirbot starts a session in that existing topic instead of creating a new one.
 - kirbot posts the startup footer before any other topic message for that new thread.
+- That startup footer is now just the topic-local status line; it no longer includes `General` guidance copy.
 - That startup footer also refreshes a topic-local reply keyboard with the built-in thread commands plus any saved custom thread commands.
 - Later messages in that topic continue the same Codex thread.
 - Every topic session is shared by all participants in that topic, so follow-up turns and approvals are visible to the whole forum thread.

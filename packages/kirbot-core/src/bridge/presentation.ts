@@ -418,25 +418,12 @@ export function buildRenderedThreadStartFooter(details: Pick<
   CompletionFooterDetails,
   "mode" | "model" | "reasoningEffort" | "serviceTier" | "cwd" | "branch"
 >): TelegramRenderedMessage {
-  const guidance = "General stays shared for workspace-wide work. Use /thread to create a separate topic.";
-  const footer = buildRenderedCompletionFooter({
+  return buildRenderedCompletionFooter({
     ...details,
     durationMs: 0,
     changedFiles: 0,
     contextLeftPercent: null
   });
-
-  return {
-    text: `${guidance}\n${footer.text}`,
-    ...(footer.entities
-      ? {
-          entities: footer.entities.map((entity) => ({
-            ...entity,
-            offset: entity.offset + guidance.length + 1
-          }))
-        }
-      : {})
-  };
 }
 
 export function buildRenderedInitialPromptMessage(text: string): TelegramRenderedMessage {
