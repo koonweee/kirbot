@@ -65,7 +65,7 @@ class FakeCodexApi implements BridgeCodexApi {
     this.createThreadCalls.push({
       profileId,
       title,
-      options
+      ...(options !== undefined ? { options } : {})
     });
     this.threadIds.add(threadId);
     return {
@@ -197,8 +197,7 @@ describe("RoutedCodexApi", () => {
     expect(coding.createThreadCalls).toEqual([
       {
         profileId: "coding",
-        title: "New session",
-        options: undefined
+        title: "New session"
       }
     ]);
     expect(general.createThreadCalls).toEqual([]);

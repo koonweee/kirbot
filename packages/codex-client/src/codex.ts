@@ -176,20 +176,43 @@ export class CodexGateway {
   }
 
   async createThread(
+    profileId: string,
     title: string,
     options?: {
       cwd?: string | null;
       settings?: ThreadSettingsOverride | null;
     }
+  ): Promise<CreatedThread>;
+  async createThread(
+    title: string,
+    options?: {
+      cwd?: string | null;
+      settings?: ThreadSettingsOverride | null;
+    }
+  ): Promise<CreatedThread>;
+  async createThread(
+    profileIdOrTitle: string,
+    titleOrOptions?:
+      | string
+      | {
+          cwd?: string | null;
+          settings?: ThreadSettingsOverride | null;
+        },
+    options?: {
+      cwd?: string | null;
+      settings?: ThreadSettingsOverride | null;
+    }
   ): Promise<CreatedThread> {
+    const title = typeof titleOrOptions === "string" ? titleOrOptions : profileIdOrTitle;
+    const effectiveOptions = typeof titleOrOptions === "string" ? options : titleOrOptions;
     const threadStartOverrides = omitNullReasoningEffortForThreadStart(buildThreadStartOverrides(
-      options?.settings ?? null,
-      options?.settings ? sanitizeThreadStartConfig(this.config.config) : null
-    ), options?.settings);
+      effectiveOptions?.settings ?? null,
+      effectiveOptions?.settings ? sanitizeThreadStartConfig(this.config.config) : null
+    ), effectiveOptions?.settings);
     const response = await this.client.startThread({
-      cwd: options?.cwd ?? this.config.defaultCwd,
+      cwd: effectiveOptions?.cwd ?? this.config.defaultCwd,
       model: threadStartOverrides.model ?? null,
-      modelProvider: options?.settings ? this.config.modelProvider ?? null : null,
+      modelProvider: effectiveOptions?.settings ? this.config.modelProvider ?? null : null,
       approvalPolicy: threadStartOverrides.approvalPolicy ?? null,
       sandbox: threadStartOverrides.sandbox ?? null,
       config: threadStartOverrides.config ?? null,
@@ -216,7 +239,8 @@ export class CodexGateway {
     };
   }
 
-  async readGlobalSettings(): Promise<ThreadStartSettings> {
+  async readProfileSettings(profileId: string): Promise<ThreadStartSettings> {
+    void profileId;
     const response = await this.client.readConfig({
       includeLayers: false
     });
@@ -224,16 +248,25 @@ export class CodexGateway {
     return threadSettingsFromConfig(response.config, this.config);
   }
 
-  async updateGlobalSettings(update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
+  async updateProfileSettings(profileId: string, update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
+    void profileId;
     const edits = buildGlobalConfigEdits(update);
     if (edits.length === 0) {
-      return this.readGlobalSettings();
+      return this.readProfileSettings(profileId);
     }
 
     await this.client.batchWriteConfig({
       edits
     });
-    return this.readGlobalSettings();
+    return this.readProfileSettings(profileId);
+  }
+
+  async readGlobalSettings(): Promise<ThreadStartSettings> {
+    return this.readProfileSettings("general");
+  }
+
+  async updateGlobalSettings(update: ThreadSettingsOverride): Promise<ThreadStartSettings> {
+    return this.updateProfileSettings("general", update);
   }
 
   async bootstrapManagedGlobalConfig(): Promise<void> {

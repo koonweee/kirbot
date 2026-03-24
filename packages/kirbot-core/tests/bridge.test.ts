@@ -328,7 +328,7 @@ class FakeCodex implements BridgeCodexApi {
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
 
-  async createThread(optionsTitle: string, options?: {
+  async createThread(profileId: string, optionsTitle: string, options?: {
     cwd?: string | null;
     settings?: {
       model?: string;
@@ -347,6 +347,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     this.createdThreads.push(optionsTitle);
     this.createThreadCalls.push({
       title: optionsTitle,
@@ -391,7 +392,7 @@ class FakeCodex implements BridgeCodexApi {
     };
   }
 
-  async readGlobalSettings(): Promise<{
+  async readProfileSettings(profileId: string): Promise<{
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
@@ -399,6 +400,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     return {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
@@ -409,7 +411,7 @@ class FakeCodex implements BridgeCodexApi {
     };
   }
 
-  async updateGlobalSettings(update: {
+  async updateProfileSettings(profileId: string, update: {
     model?: string;
     reasoningEffort?: ReasoningEffort | null;
     serviceTier?: ServiceTier | null;
@@ -423,6 +425,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     this.globalSettingsUpdates.push(update);
     if (update.model) {
       this.model = update.model;
@@ -440,7 +443,35 @@ class FakeCodex implements BridgeCodexApi {
       this.sandboxPolicy = update.sandboxPolicy;
     }
 
-    return this.readGlobalSettings();
+    return this.readProfileSettings(profileId);
+  }
+
+  async readGlobalSettings(): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    return this.readProfileSettings("general");
+  }
+
+  async updateGlobalSettings(update: {
+    model?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    serviceTier?: ServiceTier | null;
+    approvalPolicy?: AskForApproval;
+    sandboxPolicy?: SandboxPolicy;
+  }): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    return this.updateProfileSettings("general", update);
   }
 
   async ensureThreadLoaded(threadId: string): Promise<{

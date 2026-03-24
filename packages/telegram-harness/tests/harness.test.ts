@@ -59,7 +59,7 @@ class ScriptedCodex implements BridgeCodexApi {
     private readonly behavior: "complete" | "commandApproval" | "lateCommandApprovalDuringCompletion" | "planArtifact" = "complete"
   ) {}
 
-  async createThread(title: string, options?: {
+  async createThread(profileId: string, title: string, options?: {
     cwd?: string | null;
     settings?: {
       model?: string;
@@ -78,6 +78,7 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     const threadId = `thread-${this.createdThreadIds.length + 1}`;
     this.createdThreadIds.push(title);
     if (options?.settings?.model) {
@@ -107,7 +108,7 @@ class ScriptedCodex implements BridgeCodexApi {
     };
   }
 
-  async readGlobalSettings(): Promise<{
+  async readProfileSettings(profileId: string): Promise<{
     model: string;
     reasoningEffort: ReasoningEffort | null;
     serviceTier: ServiceTier | null;
@@ -115,6 +116,7 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     return {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
@@ -125,7 +127,7 @@ class ScriptedCodex implements BridgeCodexApi {
     };
   }
 
-  async updateGlobalSettings(update: {
+  async updateProfileSettings(profileId: string, update: {
     model?: string;
     reasoningEffort?: ReasoningEffort | null;
     serviceTier?: ServiceTier | null;
@@ -139,6 +141,7 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    void profileId;
     if (update.model) {
       this.model = update.model;
     }
@@ -155,7 +158,7 @@ class ScriptedCodex implements BridgeCodexApi {
       this.sandboxPolicy = update.sandboxPolicy;
     }
 
-    return this.readGlobalSettings();
+    return this.readProfileSettings(profileId);
   }
 
   async updateThreadSettings(_threadId: string, update: {
@@ -172,7 +175,35 @@ class ScriptedCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
-    return this.updateGlobalSettings(update);
+    return this.updateProfileSettings("general", update);
+  }
+
+  async readGlobalSettings(): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    return this.readProfileSettings("general");
+  }
+
+  async updateGlobalSettings(update: {
+    model?: string;
+    reasoningEffort?: ReasoningEffort | null;
+    serviceTier?: ServiceTier | null;
+    approvalPolicy?: AskForApproval;
+    sandboxPolicy?: SandboxPolicy;
+  }): Promise<{
+    model: string;
+    reasoningEffort: ReasoningEffort | null;
+    serviceTier: ServiceTier | null;
+    cwd: string;
+    approvalPolicy: AskForApproval;
+    sandboxPolicy: SandboxPolicy;
+  }> {
+    return this.updateProfileSettings("general", update);
   }
 
   async ensureThreadLoaded(): Promise<{
@@ -1109,13 +1140,22 @@ function createConfig(tempDir: string): AppConfig {
     },
     codex: {
       defaultCwd: "/workspace",
+      profiles: {
+        general: { homePath: join(tempDir, "codex-general") },
+        coding: { homePath: join(tempDir, "codex-coding") }
+      },
+      routing: {
+        general: "general",
+        thread: "coding",
+        plan: "coding"
+      },
       model: undefined,
       modelProvider: undefined,
       sandbox: undefined,
       approvalPolicy: undefined,
       serviceName: "telegram-codex-bridge",
       baseInstructions: undefined,
-      developerInstructions: undefined,
+      developerInstructions: "prompt",
       config: undefined
     }
   };
