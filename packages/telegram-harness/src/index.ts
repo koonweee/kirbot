@@ -92,7 +92,7 @@ export async function createTelegramHarness(options: CreateTelegramHarnessOption
       ...(options.codexApi ? { codexApi: options.codexApi } : {})
     });
     harnessLogger.info(
-      `Started harness with state dir ${stateDir} (codex=stdio, cwd=${config.codex.defaultCwd})`
+      `Started harness with state dir ${stateDir} (codex=stdio, cwd=${resolvedHarnessWorkspaceDir(config)})`
     );
     return runtime;
   };
@@ -299,7 +299,15 @@ async function buildHarnessConfig(
     },
     codex: {
       ...baseConfig.codex,
-      defaultCwd: workspaceDir
+      profiles: Object.fromEntries(
+        Object.entries(baseConfig.codex.profiles).map(([profileId, profile]) => [
+          profileId,
+          {
+            ...profile,
+            defaultCwd: workspaceDir
+          }
+        ])
+      )
     }
   };
 }
@@ -318,7 +326,7 @@ function resolveHarnessWorkspaceDir(
 
   if (options.workspaceMode === "inherit") {
     return {
-      workspaceDir: baseConfig.codex.defaultCwd,
+      workspaceDir: resolvedHarnessWorkspaceDir(baseConfig),
       createWorkspaceDir: false
     };
   }
@@ -327,6 +335,14 @@ function resolveHarnessWorkspaceDir(
     workspaceDir: join(stateDir, "workspace"),
     createWorkspaceDir: true
   };
+}
+
+function resolvedHarnessWorkspaceDir(config: AppConfig): string {
+  return (
+    config.codex.profiles[config.codex.routing.thread]?.defaultCwd ??
+    config.codex.profiles[config.codex.routing.general]?.defaultCwd ??
+    process.cwd()
+  );
 }
 
 function buildUserMessage(

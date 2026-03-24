@@ -1,4 +1,5 @@
 import { CodexGateway, spawnCodexAppServer } from "@kirbot/codex-client";
+import type { AppConfig as CodexClientAppConfig } from "@kirbot/codex-client";
 import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
 import type { AppConfig } from "./config";
@@ -142,7 +143,7 @@ async function initializeCodex(
         }
       });
 
-      const gateway = await initializeGateway(config, logger, profile.homePath);
+      const gateway = await initializeGateway(buildGatewayConfig(config, profile), logger, profile.homePath);
       gateways[profileId] = gateway;
     }
   } catch (error) {
@@ -165,9 +166,9 @@ async function initializeCodex(
 }
 
 async function initializeGateway(
-  config: AppConfig,
+  config: CodexClientAppConfig["codex"],
   logger: LoggerLike,
-  homePath?: string
+  codexHomePath?: string
 ): Promise<{
   codex: CodexGateway;
   rpcClient: CodexRpcClient;
@@ -175,7 +176,7 @@ async function initializeGateway(
 }> {
   const spawnedAppServer = await spawnCodexAppServer({
     logger,
-    ...(homePath ? { homePath } : {})
+    ...(codexHomePath ? { codexHomePath } : {})
   });
   let transport: StdioRpcTransport | undefined;
   let rpcClient: CodexRpcClient | undefined;
@@ -184,7 +185,7 @@ async function initializeGateway(
     await transport.connect();
 
     rpcClient = new CodexRpcClient(transport);
-    const codex = new CodexGateway(rpcClient, config.codex);
+    const codex = new CodexGateway(rpcClient, config);
     await withTimeout(codex.initialize(), CODEX_INITIALIZE_TIMEOUT_MS, "Timed out waiting for Codex app server initialization");
 
     return {
@@ -196,6 +197,22 @@ async function initializeGateway(
     await cleanupGatewayResources(rpcClient, spawnedAppServer);
     throw error;
   }
+}
+
+function buildGatewayConfig(
+  config: AppConfig,
+  profile: AppConfig["codex"]["profiles"][string]
+): CodexClientAppConfig["codex"] {
+  return {
+    defaultCwd: profile.defaultCwd,
+    model: config.codex.model,
+    modelProvider: config.codex.modelProvider,
+    sandbox: config.codex.sandbox,
+    approvalPolicy: config.codex.approvalPolicy,
+    serviceName: config.codex.serviceName,
+    developerInstructions: config.codex.developerInstructions,
+    config: config.codex.config
+  };
 }
 
 async function cleanupGatewayResources(

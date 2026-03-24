@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
   const codexGatewayInstances: Array<{
     initialize: ReturnType<typeof vi.fn>;
     bootstrapManagedGlobalConfig: ReturnType<typeof vi.fn>;
+    config: unknown;
   }> = [];
   const codexGatewayInitializeErrors: Array<Error | undefined> = [];
   const codexGatewayBootstrapErrors: Array<Error | undefined> = [];
@@ -158,10 +159,10 @@ describe("createKirbotRuntime profile routing", () => {
   beforeEach(() => {
     mocks.existsSync.mockReset();
     mocks.loadConfig.mockReset();
-    mocks.spawnCodexAppServer.mockImplementation(async ({ homePath }: { homePath?: string }) => {
+    mocks.spawnCodexAppServer.mockImplementation(async ({ codexHomePath }: { codexHomePath?: string }) => {
       const stop = vi.fn(async () => undefined);
       const server = {
-        process: { homePath },
+        process: { codexHomePath },
         stop
       };
       mocks.spawnedAppServers.push(server);
@@ -240,10 +241,15 @@ describe("createKirbotRuntime profile routing", () => {
         managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
       }
     });
-    expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.homePath)).toEqual([
+    expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.codexHomePath)).toEqual([
       generalHomePath,
       codingHomePath,
       docsHomePath
+    ]);
+    expect(mocks.codexGatewayInstances.map((instance) => (instance.config as { defaultCwd: string }).defaultCwd)).toEqual([
+      "/home/dev",
+      "/home/dev/coding",
+      "/home/dev/docs"
     ]);
     expect(mocks.codexGatewayInstances).toHaveLength(3);
   });
@@ -259,7 +265,7 @@ describe("createKirbotRuntime profile routing", () => {
     });
 
     expect(mocks.spawnCodexAppServer.mock.calls).toHaveLength(2);
-    expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.homePath)).toEqual([
+    expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.codexHomePath)).toEqual([
       generalHomePath,
       codingHomePath
     ]);
@@ -344,6 +350,7 @@ describe("createKirbotRuntime profile routing", () => {
     const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
     const config = buildConfig(generalHomePath, codingHomePath);
     config.codex.profiles.general = {
+      defaultCwd: "/home/dev",
       homePath: generalHomePath,
       model: undefined,
       reasoningEffort: "medium",
@@ -445,10 +452,10 @@ function buildConfig(
       path: join(tmpdir(), `kirbot-db-${randomUUID()}.sqlite`)
     },
     codex: {
-      defaultCwd: "/srv/kirbot",
       profilesConfigPath: "/workspace/config/codex-profiles.json",
       profiles: {
         general: {
+          defaultCwd: "/home/dev",
           homePath: generalHomePath,
           model: "gpt-5",
           reasoningEffort: "medium",
@@ -459,6 +466,7 @@ function buildConfig(
           mcps: []
         },
         coding: {
+          defaultCwd: "/home/dev/coding",
           homePath: codingHomePath,
           model: "gpt-5-codex",
           reasoningEffort: "high",
@@ -471,6 +479,7 @@ function buildConfig(
         ...(includeDocs
           ? {
               docs: {
+                defaultCwd: "/home/dev/docs",
                 homePath: docsHomePath,
                 model: "gpt-5",
                 reasoningEffort: "medium",

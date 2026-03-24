@@ -4,7 +4,6 @@ import type { JsonValue } from "./generated/codex/serde_json/JsonValue";
 
 export type CodexConfig = {
   defaultCwd: string;
-  homePath?: string;
   model: string | undefined;
   modelProvider: string | undefined;
   sandbox: SandboxMode | undefined;

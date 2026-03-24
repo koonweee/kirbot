@@ -54,23 +54,23 @@ export type CreatedThread = {
 
 export type AppServerOptions = {
   logger?: LoggerLike;
-  homePath?: string;
+  codexHomePath?: string;
 };
 
 export function buildAppServerSpawnEnv(
   env: NodeJS.ProcessEnv,
-  homePath?: string
+  codexHomePath?: string
 ): NodeJS.ProcessEnv {
   return {
     ...env,
-    ...(homePath ? { HOME: homePath, CODEX_HOME: homePath } : {})
+    ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {})
   };
 }
 
 export async function spawnCodexAppServer(options: AppServerOptions): Promise<SpawnedAppServer> {
   const codex = resolvePinnedCodexInvocation();
   const child = spawn(codex.command, [...codex.args, "app-server"], {
-    env: buildAppServerSpawnEnv(process.env, options.homePath),
+    env: buildAppServerSpawnEnv(process.env, options.codexHomePath),
     stdio: ["pipe", "pipe", "pipe"]
   });
   child.stderr?.on("data", (chunk) => {
