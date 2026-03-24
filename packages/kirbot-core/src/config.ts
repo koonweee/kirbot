@@ -3,22 +3,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 
-import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
-import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
-import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 import type { CodexProfilesConfig } from "./codex-profiles";
 import { expandHomePath, parseCodexProfilesConfig } from "./codex-profiles";
 
 loadKirbotDotenv();
-
-const optionalEnvString = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
-  z.preprocess((value) => {
-    if (typeof value === "string" && value.trim() === "") {
-      return undefined;
-    }
-
-    return value;
-  }, schema.optional());
 
 const workspaceChatIdEnv = z.preprocess(
   (value) => value,
@@ -72,17 +60,7 @@ const envSchema = z.object({
     }),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
   CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
-  CODEX_MODEL: optionalEnvString(z.string()),
-  CODEX_MODEL_PROVIDER: optionalEnvString(z.string()),
-  CODEX_SANDBOX_MODE: optionalEnvString(
-    z.enum(["read-only", "workspace-write", "danger-full-access"])
-  ),
-  CODEX_APPROVAL_POLICY: optionalEnvString(
-    z.enum(["untrusted", "on-request", "on-failure", "never"])
-  ),
   CODEX_SERVICE_NAME: z.string().default("telegram-codex-bridge"),
-  CODEX_PROFILES_JSON: z.string().min(1),
-  CODEX_CONFIG_JSON: optionalEnvString(z.string())
 });
 
 export type AppConfig = {
@@ -100,21 +78,26 @@ export type AppConfig = {
   codex: {
     defaultCwd: string;
     profiles: CodexProfilesConfig["profiles"];
-    routing: CodexProfilesConfig["routing"];
-    model: string | undefined;
-    modelProvider: string | undefined;
-    sandbox: SandboxMode | undefined;
-    approvalPolicy: AskForApproval | undefined;
+    routing: CodexProfilesConfig["routes"];
+    model: undefined;
+    modelProvider: undefined;
+    sandbox: undefined;
+    approvalPolicy: undefined;
     serviceName: string;
     baseInstructions: string | undefined;
     developerInstructions: string;
-    config: Record<string, JsonValue | undefined> | undefined;
+    config: undefined;
   };
 };
 
 export function loadConfig(): AppConfig {
   const parsed = envSchema.parse(process.env);
-  const codexProfiles = parseCodexProfilesConfig(parsed.CODEX_PROFILES_JSON);
+  const databasePath = expandHomePath(parsed.DATABASE_PATH);
+  const codexProfilesConfigPath = resolveCodexProfilesConfigPath();
+  const codexProfiles = parseCodexProfilesConfig(readFileSync(codexProfilesConfigPath, "utf8"), {
+    configPath: codexProfilesConfigPath,
+    databasePath
+  });
 
   return {
     telegram: {
@@ -128,35 +111,22 @@ export function loadConfig(): AppConfig {
       }
     },
     database: {
-      path: parsed.DATABASE_PATH
+      path: databasePath
     },
     codex: {
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
       profiles: codexProfiles.profiles,
-      routing: codexProfiles.routing,
-      model: parsed.CODEX_MODEL,
-      modelProvider: parsed.CODEX_MODEL_PROVIDER,
-      sandbox: parsed.CODEX_SANDBOX_MODE as SandboxMode | undefined,
-      approvalPolicy: parsed.CODEX_APPROVAL_POLICY as AskForApproval | undefined,
+      routing: codexProfiles.routes,
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
       serviceName: parsed.CODEX_SERVICE_NAME,
       baseInstructions: undefined,
       developerInstructions: readRequiredTextFile(resolveKirbotPromptPath()),
-      config: parseJsonConfig(parsed.CODEX_CONFIG_JSON)
+      config: undefined
     }
   };
-}
-
-function parseJsonConfig(
-  value: string | undefined
-): Record<string, JsonValue | undefined> | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return z.record(z.string(), z.unknown()).parse(JSON.parse(value)) as Record<
-    string,
-    JsonValue | undefined
-  >;
 }
 
 function readRequiredTextFile(path: string): string {
@@ -200,6 +170,24 @@ function resolveKirbotPromptPath(): string {
   }
 
   throw new Error("Could not locate apps/bot/KIRBOT.md");
+}
+
+function resolveCodexProfilesConfigPath(): string {
+  const candidates = [
+    resolve(process.cwd(), "config", "codex-profiles.json"),
+    resolve(process.cwd(), "..", "config", "codex-profiles.json"),
+    resolve(process.cwd(), "..", "..", "config", "codex-profiles.json"),
+    resolve(__dirname, "..", "..", "..", "config", "codex-profiles.json"),
+    resolve(__dirname, "..", "..", "..", "..", "config", "codex-profiles.json")
+  ];
+
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+
+  throw new Error("Could not locate config/codex-profiles.json");
 }
 
 function defaultTelegramMediaTempDir(): string {

@@ -1,0 +1,25 @@
+{
+  "routes": {
+    "general": "general",
+    "thread": "coding",
+    "plan": "coding"
+  },
+  "skills": {},
+  "mcps": {},
+  "profiles": {
+    "general": {
+      "model": "gpt-5",
+      "sandboxMode": "workspace-write",
+      "approvalPolicy": "on-request",
+      "skills": [],
+      "mcps": []
+    },
+    "coding": {
+      "model": "gpt-5-codex",
+      "sandboxMode": "danger-full-access",
+      "approvalPolicy": "never",
+      "skills": [],
+      "mcps": []
+    }
+  }
+}

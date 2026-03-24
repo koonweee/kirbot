@@ -1,81 +1,198 @@
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { z } from "zod";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 
-const codexProfileSchema = z.object({
-  homePath: z.string().min(1)
-});
+import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
+import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
+import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 
-const codexProfilesConfigSchema = z
+export type CodexProfileId = string;
+
+export type CodexProfileConfig = {
+  homePath: string;
+  model: string | undefined;
+  sandboxMode: SandboxMode | undefined;
+  approvalPolicy: AskForApproval | undefined;
+  skills: string[];
+  mcps: string[];
+};
+
+export type CodexProfilesConfig = {
+  routes: Record<string, CodexProfileId>;
+  skills: Record<string, Record<string, JsonValue | undefined>>;
+  mcps: Record<string, Record<string, JsonValue | undefined>>;
+  profiles: Record<string, CodexProfileConfig>;
+};
+
+const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+
+const approvalPolicySchema = z.union([
+  z.enum(["untrusted", "on-failure", "on-request", "never"]),
+  z
+    .object({
+      granular: z
+        .object({
+          sandbox_approval: z.boolean(),
+          rules: z.boolean(),
+          skill_approval: z.boolean(),
+          request_permissions: z.boolean(),
+          mcp_elicitations: z.boolean()
+        })
+        .strict()
+    })
+    .strict()
+]) as z.ZodType<AskForApproval>;
+
+const codexProfileSourceSchema = z
   .object({
-    profiles: z.record(z.string(), codexProfileSchema),
-    routing: z
+    model: z.string().trim().min(1).optional(),
+    sandboxMode: sandboxModeSchema.optional(),
+    approvalPolicy: approvalPolicySchema.optional(),
+    skills: z.array(z.string().min(1)).optional(),
+    mcps: z.array(z.string().min(1)).optional()
+  })
+  .strict();
+
+const codexProfilesSourceSchema = z
+  .object({
+    routes: z
       .object({
         general: z.string().min(1),
         thread: z.string().min(1),
         plan: z.string().min(1)
       })
-      .catchall(z.string().min(1))
+      .catchall(z.string().min(1)),
+    skills: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
+    mcps: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
+    profiles: z.record(z.string(), codexProfileSourceSchema)
   })
-  .superRefine((value, ctx) => {
-    for (const [entrypoint, profileId] of Object.entries(value.routing)) {
-      if (!(profileId in value.profiles)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["routing", entrypoint],
-          message: `routing target ${JSON.stringify(profileId)} references an undeclared profile`
-        });
-      }
+  .strict();
+
+type CodexProfilesSourceConfig = z.infer<typeof codexProfilesSourceSchema>;
+
+export function parseCodexProfilesConfig(
+  value: string,
+  options: {
+    configPath: string;
+    databasePath: string;
+  }
+): CodexProfilesConfig {
+  const parsed = codexProfilesSourceSchema.parse(JSON.parse(value)) as CodexProfilesSourceConfig;
+  const issues: z.ZodIssue[] = [];
+  const profiles: CodexProfilesConfig["profiles"] = {};
+  const skillUsage = new Set<string>();
+  const mcpUsage = new Set<string>();
+  const seenHomePaths = new Map<string, string>();
+  const baseHomeDir = resolve(dirname(options.databasePath), "homes");
+  const repoSkillsDir = resolve(dirname(options.configPath), "..", "skills");
+
+  for (const [routeName, profileId] of Object.entries(parsed.routes)) {
+    if (!(profileId in parsed.profiles)) {
+      issues.push({
+        code: "custom",
+        path: ["routes", routeName],
+        message: `routing target ${JSON.stringify(profileId)} references an undeclared profile`
+      });
+    }
+  }
+
+  const generalProfileId = parsed.routes.general;
+  for (const [routeName, profileId] of Object.entries(parsed.routes)) {
+    if (routeName === "general" || profileId !== generalProfileId) {
+      continue;
     }
 
-    for (const [entrypoint, profileId] of Object.entries(value.routing)) {
-      if (entrypoint === "general" || profileId !== value.routing.general) {
+    issues.push({
+      code: "custom",
+      path: ["routes", "general"],
+      message: `routes.general must use a dedicated profile and cannot share ${JSON.stringify(profileId)} with routes.${routeName}`
+    });
+  }
+
+  for (const [profileId, profile] of Object.entries(parsed.profiles)) {
+    if (!isSafeProfileId(profileId)) {
+      issues.push({
+        code: "custom",
+        path: ["profiles", profileId],
+        message: `profile id ${JSON.stringify(profileId)} must be a single path segment without path separators or traversal`
+      });
+      continue;
+    }
+
+    const homePath = resolve(baseHomeDir, profileId);
+    const existingProfileId = seenHomePaths.get(homePath);
+    if (existingProfileId) {
+      issues.push({
+        code: "custom",
+        path: ["profiles", profileId, "homePath"],
+        message: `generated home path ${JSON.stringify(homePath)} for profile ${profileId} collides with profile ${existingProfileId}`
+      });
+    } else {
+      seenHomePaths.set(homePath, profileId);
+    }
+
+    const profileSkills = profile.skills ?? [];
+    const profileMcps = profile.mcps ?? [];
+
+    for (const [index, skillId] of profileSkills.entries()) {
+      if (!(skillId in parsed.skills)) {
+        issues.push({
+          code: "custom",
+          path: ["profiles", profileId, "skills", index],
+          message: `profile ${profileId} references undeclared skill ${JSON.stringify(skillId)}`
+        });
         continue;
       }
 
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["routing", "general"],
-        message: `routing.general must use a dedicated profile and cannot share ${JSON.stringify(profileId)} with routing.${entrypoint}`
-      });
-    }
-  });
-
-export type CodexProfileId = string;
-
-export type CodexProfilesConfig = {
-  profiles: Record<string, { homePath: string }>;
-  routing: {
-    general: string;
-    thread: string;
-    plan: string;
-    [entrypoint: string]: string;
-  };
-};
-
-export function parseCodexProfilesConfig(value: string): CodexProfilesConfig {
-  const parsed = codexProfilesConfigSchema.parse(JSON.parse(value)) as CodexProfilesConfig;
-  const profiles: CodexProfilesConfig["profiles"] = {};
-  const seenHomePaths = new Map<string, string>();
-
-  for (const [profileId, profile] of Object.entries(parsed.profiles)) {
-    const homePath =
-      profile.homePath === "~"
-        ? failBareHomeRoot(profileId)
-        : canonicalizeHomePath(profile.homePath);
-    const existingProfileId = seenHomePaths.get(homePath);
-    if (existingProfileId) {
-      throw new Error(
-        `Codex profiles ${existingProfileId} and ${profileId} must not share the same homePath`
-      );
+      skillUsage.add(skillId);
+      validateProfileSkillDirectory(profileId, skillId, repoSkillsDir, issues, ["profiles", profileId, "skills", index]);
     }
 
-    seenHomePaths.set(homePath, profileId);
-    profiles[profileId] = { homePath };
+    for (const [index, mcpId] of profileMcps.entries()) {
+      if (!(mcpId in parsed.mcps)) {
+        issues.push({
+          code: "custom",
+          path: ["profiles", profileId, "mcps", index],
+          message: `profile ${profileId} references undeclared MCP key ${JSON.stringify(mcpId)}`
+        });
+        continue;
+      }
+
+      mcpUsage.add(mcpId);
+    }
+
+    profiles[profileId] = {
+      homePath,
+      model: profile.model,
+      sandboxMode: profile.sandboxMode,
+      approvalPolicy: profile.approvalPolicy,
+      skills: profileSkills,
+      mcps: profileMcps
+    };
+  }
+
+  for (const skillId of Object.keys(parsed.skills)) {
+    if (!skillUsage.has(skillId)) {
+      console.warn(`Unused declared skill id ${skillId}`);
+    }
+  }
+
+  warnAboutStraySkillsFolders(repoSkillsDir, parsed.skills);
+
+  for (const mcpId of Object.keys(parsed.mcps)) {
+    if (!mcpUsage.has(mcpId)) {
+      console.warn(`Unused MCP registry entry ${mcpId}`);
+    }
+  }
+
+  if (issues.length > 0) {
+    throw new z.ZodError(issues);
   }
 
   return {
-    ...parsed,
+    routes: parsed.routes,
+    skills: parsed.skills,
+    mcps: parsed.mcps,
     profiles
   };
 }
@@ -92,10 +209,61 @@ export function expandHomePath(value: string): string {
   return value;
 }
 
-function canonicalizeHomePath(value: string): string {
-  return resolve(expandHomePath(value));
+function validateProfileSkillDirectory(
+  profileId: string,
+  skillId: string,
+  repoSkillsDir: string,
+  issues: z.ZodIssue[],
+  path: Array<string | number>
+): void {
+  const skillDir = resolve(repoSkillsDir, skillId);
+  if (!existsSync(skillDir) || !statSync(skillDir).isDirectory()) {
+    issues.push({
+      code: "custom",
+      path,
+      message: `profile ${profileId} references missing skill directory ${skillDir}`
+    });
+    return;
+  }
+
+  const skillReadme = resolve(skillDir, "SKILL.md");
+  if (!existsSync(skillReadme)) {
+    issues.push({
+      code: "custom",
+      path,
+      message: `profile ${profileId} skill directory ${skillDir} is missing SKILL.md`
+    });
+  }
 }
 
-function failBareHomeRoot(profileId: string): never {
-  throw new Error(`Codex profile ${profileId} homePath must not be the user home root`);
+function warnAboutStraySkillsFolders(
+  repoSkillsDir: string,
+  declaredSkills: Record<string, Record<string, JsonValue | undefined>>
+): void {
+  if (!existsSync(repoSkillsDir) || !statSync(repoSkillsDir).isDirectory()) {
+    return;
+  }
+
+  const declaredSkillIds = new Set(Object.keys(declaredSkills));
+  for (const entry of readdirSync(repoSkillsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || declaredSkillIds.has(entry.name)) {
+      continue;
+    }
+
+    console.warn(`Repo-local skills/ folder ${entry.name} has no matching declared skill id`);
+  }
+}
+
+function homedir(): string {
+  return process.env.HOME ?? process.env.USERPROFILE ?? "/";
+}
+
+function isSafeProfileId(profileId: string): boolean {
+  return (
+    profileId.length > 0 &&
+    profileId !== "." &&
+    profileId !== ".." &&
+    !profileId.includes("/") &&
+    !profileId.includes("\\")
+  );
 }
