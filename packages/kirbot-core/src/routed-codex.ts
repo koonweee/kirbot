@@ -124,6 +124,7 @@ export class RoutedCodexApi implements BridgeCodexApi {
 
     const queued = this.#eventQueue.shift();
     if (queued) {
+      this.#pruneThreadRouteForDeliveredEvent(queued);
       return queued;
     }
 
@@ -169,9 +170,14 @@ export class RoutedCodexApi implements BridgeCodexApi {
   }
 
   #enqueueEvent(event: AppServerEvent): void {
+    const shouldPruneAfterDelivery = event.kind === "notification" && isTerminalThreadNotification(event.notification.method);
+    const threadId = shouldPruneAfterDelivery ? getEventThreadId(event) : null;
     const waiter = this.#eventWaiters.shift();
     if (waiter) {
       waiter(event);
+      if (threadId) {
+        this.#threadRoutes.delete(threadId);
+      }
       return;
     }
 
@@ -188,9 +194,6 @@ export class RoutedCodexApi implements BridgeCodexApi {
     const threadId = getEventThreadId(event);
     if (threadId) {
       this.#threadRoutes.set(threadId, profileId);
-      if (event.kind === "notification" && isTerminalThreadNotification(event.notification.method)) {
-        this.#threadRoutes.delete(threadId);
-      }
     }
 
     if (event.kind === "serverRequest") {
@@ -231,6 +234,17 @@ export class RoutedCodexApi implements BridgeCodexApi {
     }
 
     return gateway;
+  }
+
+  #pruneThreadRouteForDeliveredEvent(event: AppServerEvent): void {
+    if (event.kind !== "notification" || !isTerminalThreadNotification(event.notification.method)) {
+      return;
+    }
+
+    const threadId = getEventThreadId(event);
+    if (threadId) {
+      this.#threadRoutes.delete(threadId);
+    }
   }
 }
 

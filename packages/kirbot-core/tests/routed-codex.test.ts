@@ -275,6 +275,82 @@ describe("RoutedCodexApi", () => {
     expect(coding.ensureThreadLoadedCalls).toEqual([]);
   });
 
+  it("keeps a thread route through queued completion handling before pruning a terminal notification", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+    const thread = await routed.createThread("coding", "New session");
+    coding.events.push(
+      {
+        kind: "notification",
+        notification: {
+          jsonrpc: "2.0",
+          method: "turn/completed",
+          params: {
+            threadId: thread.threadId,
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              items: []
+            }
+          }
+        } as never
+      },
+      {
+        kind: "notification",
+        notification: {
+          jsonrpc: "2.0",
+          method: "thread/closed",
+          params: {
+            threadId: thread.threadId
+          }
+        } as never
+      }
+    );
+
+    const firstEvent = await routed.nextEvent();
+    expect(firstEvent).toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: thread.threadId,
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: []
+          }
+        }
+      } as never
+    });
+
+    await expect(routed.readTurnSnapshot(thread.threadId, "turn-1")).resolves.toEqual({
+      text: "",
+      assistantText: "",
+      planText: "",
+      changedFiles: 0,
+      cwd: "/workspace",
+      branch: "main"
+    });
+
+    const secondEvent = await routed.nextEvent();
+    expect(secondEvent).toEqual({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method: "thread/closed",
+        params: {
+          threadId: thread.threadId
+        }
+      } as never
+    });
+
+    await expect(routed.ensureThreadLoaded(thread.threadId)).rejects.toThrow(
+      `Unknown Codex thread route: ${thread.threadId}`
+    );
+  });
+
   it.each([
     "thread/archived",
     "thread/closed"
