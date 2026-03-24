@@ -44,6 +44,7 @@ class FakeCodexApi implements BridgeCodexApi {
   readonly permissionsApprovalResponses: RequestId[] = [];
   readonly userInputResponses: RequestId[] = [];
   readonly unsupportedResponses: RequestId[] = [];
+  nextCommandApprovalError: Error | null = null;
   readonly events: AppServerEvent[] = [];
   readonly threadIds = new Set<string>();
   readonly missingThreadIds = new Set<string>();
@@ -158,6 +159,11 @@ class FakeCodexApi implements BridgeCodexApi {
   }
 
   async respondToCommandApproval(id: RequestId, _response: { decision: CommandExecutionApprovalDecision }): Promise<void> {
+    if (this.nextCommandApprovalError) {
+      const error = this.nextCommandApprovalError;
+      this.nextCommandApprovalError = null;
+      throw error;
+    }
     this.commandApprovalResponses.push(id);
   }
 
@@ -268,5 +274,41 @@ describe("RoutedCodexApi", () => {
       }
     ]);
     expect(general.registerThreadProfileCalls).toEqual([]);
+  });
+
+  it("keeps request routes available after a transient approval failure", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+    const thread = await routed.createThread("coding", "New session");
+    coding.events.push({
+      kind: "serverRequest",
+      request: {
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        id: 99,
+        params: {
+          threadId: thread.threadId
+        }
+      } as never
+    });
+
+    await routed.nextEvent();
+    coding.nextCommandApprovalError = new Error("transient approval failure");
+
+    await expect(
+      routed.respondToCommandApproval(99, {
+        decision: "accept"
+      })
+    ).rejects.toThrow("transient approval failure");
+
+    await expect(
+      routed.respondToCommandApproval(99, {
+        decision: "accept"
+      })
+    ).resolves.toBeUndefined();
+
+    expect(coding.commandApprovalResponses).toEqual([99]);
+    expect(general.commandApprovalResponses).toEqual([]);
   });
 });

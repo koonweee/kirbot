@@ -202,11 +202,9 @@ export class RoutedCodexApi implements BridgeCodexApi {
       throw new Error(`Unknown Codex request route: ${String(id)}`);
     }
 
-    try {
-      return await operation(this.#getGateway(route));
-    } finally {
-      this.#requestRoutes.delete(id);
-    }
+    const result = await operation(this.#getGateway(route));
+    this.#requestRoutes.delete(id);
+    return result;
   }
 
   async #runThreadOperation<T>(
