@@ -49,7 +49,7 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
   const appLogger = createSourceLogger(logTarget, "kirbot");
   const codexLogger = createSourceLogger(logTarget, "codex-app-server");
 
-  const database = new BridgeDatabase(config.database.path);
+  const database = new BridgeDatabase(config.database.path, config.codex.routing);
   const mediaStore = new TemporaryImageStore(config.telegram.mediaTempDir);
   await database.migrate();
   await mediaStore.cleanupStaleFiles();

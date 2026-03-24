@@ -21,6 +21,11 @@ import type {
 
 type TimestampString = string;
 const SCHEMA_VERSION = 9;
+const DEFAULT_MIGRATION_PROFILE_ROUTING = {
+  general: "general",
+  thread: "coding",
+  plan: "coding"
+} as const;
 
 type SessionsTable = {
   id: Generated<number>;
@@ -93,8 +98,18 @@ export type DatabaseSchema = {
   processed_updates: ProcessedUpdatesTable;
 };
 
+export type DatabaseProfileRouting = {
+  general: string;
+  thread: string;
+  plan: string;
+};
+
 function now(): string {
   return new Date().toISOString();
+}
+
+function sqlStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function isSqliteUniqueConstraintError(error: unknown): error is { code: string } {
@@ -227,11 +242,13 @@ function sessionSurfaceToRow(surface: SessionSurface): Pick<SessionsTable, "surf
 export class BridgeDatabase {
   readonly kysely: Kysely<DatabaseSchema>;
   readonly #sqlite: InstanceType<typeof Database>;
+  readonly #migrationProfileRouting: DatabaseProfileRouting;
 
-  constructor(path: string) {
+  constructor(path: string, migrationProfileRouting: DatabaseProfileRouting = DEFAULT_MIGRATION_PROFILE_ROUTING) {
     mkdirSync(dirname(path), { recursive: true });
     this.#sqlite = new Database(path);
     this.#sqlite.pragma("journal_mode = WAL");
+    this.#migrationProfileRouting = { ...migrationProfileRouting };
     this.kysely = new Kysely<DatabaseSchema>({
       dialect: new SqliteDialect({ database: this.#sqlite })
     });
@@ -1408,6 +1425,10 @@ export class BridgeDatabase {
   }
 
   #migrateFromV8ToV9(): void {
+    const generalProfileId = sqlStringLiteral(this.#migrationProfileRouting.general);
+    const threadProfileId = sqlStringLiteral(this.#migrationProfileRouting.thread);
+    const planProfileId = sqlStringLiteral(this.#migrationProfileRouting.plan);
+
     this.#sqlite.exec(`
       BEGIN;
 
@@ -1453,8 +1474,9 @@ export class BridgeDatabase {
         surface_kind,
         telegram_topic_id,
         CASE
-          WHEN surface_kind = 'general' THEN 'general'
-          ELSE 'coding'
+          WHEN surface_kind = 'general' THEN ${generalProfileId}
+          WHEN preferred_mode = 'plan' THEN ${planProfileId}
+          ELSE ${threadProfileId}
         END,
         codex_thread_id,
         status,
@@ -1488,7 +1510,7 @@ export class BridgeDatabase {
       )
       SELECT
         telegram_chat_id,
-        'general',
+        ${generalProfileId},
         root_model,
         root_reasoning_effort,
         root_service_tier,
@@ -1507,7 +1529,7 @@ export class BridgeDatabase {
       )
       SELECT
         telegram_chat_id,
-        'coding',
+        ${threadProfileId},
         spawn_model,
         spawn_reasoning_effort,
         spawn_service_tier,

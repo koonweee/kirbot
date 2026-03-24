@@ -1301,6 +1301,83 @@ describe("TelegramCodexBridge", () => {
     expect(codex.turns).toEqual([]);
   });
 
+  it("provisions a fresh root session after a removed legacy home failure archives the dead General session", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-legacy-root");
+    codex.missingThreadIds.add("thread-legacy-root");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 15,
+      updateId: 25,
+      userId: 42,
+      text: "Resume the removed root session"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic."
+    );
+    expect(codex.turns).toEqual([]);
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 16,
+      updateId: 26,
+      userId: 42,
+      text: "Start the General session again"
+    });
+
+    expect(codex.createdThreads).toEqual(["Root Chat"]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-1",
+        text: "Start the General session again",
+        turnId: "turn-1"
+      }
+    ]);
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      status: "active",
+      codexThreadId: "thread-1",
+      profileId: "general"
+    });
+  });
+
+  it("recovers root /clear after a removed legacy home leaves the General session dead", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-legacy-root");
+    codex.missingThreadIds.add("thread-legacy-root");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "/clear"
+    });
+
+    expect(telegram.sentMessages.map((message) => message.text)).toContain(
+      "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic."
+    );
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Started a fresh Codex thread");
+    expect(codex.createdThreads).toEqual(["Root Chat"]);
+    expect(await database.getRootSessionByChat(-1001)).toMatchObject({
+      status: "active",
+      codexThreadId: "thread-1",
+      profileId: "general"
+    });
+  });
+
   it("re-registers a persisted topic session route before compacting and archiving after restart", async () => {
     codex.enforceThreadRouteRegistration = true;
     const pending = await database.createProvisioningSession({

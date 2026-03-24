@@ -1205,6 +1205,9 @@ export class TelegramCodexBridge {
       });
     } catch (error) {
       if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        if (message.topicId === null && isRootBridgeSession(session)) {
+          await this.recoverRootSessionAfterLegacyHomeRemoval(message.chatId, session.settings);
+        }
         return;
       }
 
@@ -1215,6 +1218,46 @@ export class TelegramCodexBridge {
         text: `Failed to start a fresh thread: ${formatError(error)}`
       });
     }
+  }
+
+  private async recoverRootSessionAfterLegacyHomeRemoval(
+    chatId: number,
+    previousSettings: PersistedThreadSettings
+  ): Promise<void> {
+    await this.runSessionProvisioning(chatId, null, async () => {
+      await this.sendScopedBridgeMessage({
+        chatId,
+        text: ROOT_SESSION_PROVISIONING_TEXT
+      });
+    }, async () => {
+      const profileId = this.resolveConfiguredProfileId("general");
+      const pending = await this.database.createProvisioningSession({
+        telegramChatId: String(chatId),
+        surface: { kind: "general" },
+        profileId
+      });
+
+      try {
+        const fallbackSettings = (await this.getChatThreadSettingsDefaults(chatId)).root;
+        const nextSettings = persistedThreadSettingsAreComplete(previousSettings) ? previousSettings : fallbackSettings;
+        const thread = await this.codex.createThread(profileId, DEFAULT_ROOT_SESSION_TITLE, {
+          settings: toCodexThreadSettingsOverride(nextSettings)
+        });
+        this.codex.registerThreadProfile(thread.threadId, profileId);
+        await this.database.activateSession(pending.id, thread.threadId);
+        await this.database.updateRootSessionSettings(chatId, toPersistedThreadSettings(thread));
+        await this.sendScopedBridgeMessage({
+          chatId,
+          text: "Started a fresh Codex thread"
+        });
+      } catch (error) {
+        await this.database.markSessionErrored(pending.id);
+        await this.sendScopedBridgeMessage({
+          chatId,
+          text: `Failed to create Codex session for "${DEFAULT_ROOT_SESSION_TITLE}": ${formatError(error)}`
+        });
+      }
+    });
   }
 
   private async stopActiveTurn(message: UserTurnMessage): Promise<void> {
@@ -3003,6 +3046,9 @@ export class TelegramCodexBridge {
       return await operation(threadId);
     } catch (error) {
       if (session && this.isRemovedLegacyCodexHomeThreadError(error)) {
+        if (isRootBridgeSession(session)) {
+          await this.database.archiveSessionBySurface(session.telegramChatId, { kind: "general" });
+        }
         await this.sendLegacyRemovedCodexHomeMessage(session);
         throw new LegacyRemovedCodexHomeSessionError();
       }
