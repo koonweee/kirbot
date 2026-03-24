@@ -129,20 +129,25 @@ async function initializeCodex(
     };
   }
 
-  if (config.codex.homePath) {
-    prepareKirbotCodexHome({
-      targetHomePath: config.codex.homePath
-    });
-  }
+  const sharedProfileHomePath = resolveCodexProfileHomePath(config, config.codex.routing.general);
+  const isolatedProfileHomePath = resolveCodexProfileHomePath(config, config.codex.routing.thread);
+
+  prepareKirbotCodexHome({
+    targetHomePath: sharedProfileHomePath
+  });
+  prepareKirbotCodexHome({
+    targetHomePath: isolatedProfileHomePath
+  });
+
   // The isolated config.toml is Kirbot's global Codex policy source.
   // Code should only override it intentionally for thread-local settings or per-session cwd.
   const shouldBootstrapIsolatedConfig =
-    config.codex.homePath !== undefined && !existsSync(resolveKirbotCodexConfigPath(config.codex.homePath));
-  const shared = await initializeGateway(config, logger);
+    !existsSync(resolveKirbotCodexConfigPath(isolatedProfileHomePath));
+  const shared = await initializeGateway(config, logger, sharedProfileHomePath);
   const isolated = await initializeGateway(
     config,
     logger,
-    config.codex.homePath ? { homePath: config.codex.homePath } : undefined
+    isolatedProfileHomePath
   );
   if (shouldBootstrapIsolatedConfig) {
     await isolated.codex.bootstrapManagedGlobalConfig();
@@ -164,9 +169,7 @@ async function initializeCodex(
 async function initializeGateway(
   config: AppConfig,
   logger: LoggerLike,
-  options?: {
-    homePath?: string;
-  }
+  homePath?: string
 ): Promise<{
   codex: CodexGateway;
   rpcClient: CodexRpcClient;
@@ -174,7 +177,7 @@ async function initializeGateway(
 }> {
   const spawnedAppServer = await spawnCodexAppServer({
     logger,
-    ...(options?.homePath ? { homePath: options.homePath } : {})
+    ...(homePath ? { homePath } : {})
   });
   const transport = new StdioRpcTransport(spawnedAppServer.process);
   await transport.connect();
@@ -188,6 +191,15 @@ async function initializeGateway(
     rpcClient,
     spawnedAppServer
   };
+}
+
+function resolveCodexProfileHomePath(config: AppConfig, profileId: string): string {
+  const profile = config.codex.profiles[profileId];
+  if (!profile) {
+    throw new Error(`Unknown Codex profile referenced by routing: ${profileId}`);
+  }
+
+  return profile.homePath;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

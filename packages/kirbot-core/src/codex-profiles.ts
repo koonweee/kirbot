@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { homedir } from "node:os";
 
 const codexProfileSchema = z.object({
   homePath: z.string().min(1)
@@ -40,5 +41,29 @@ export type CodexProfilesConfig = {
 };
 
 export function parseCodexProfilesConfig(value: string): CodexProfilesConfig {
-  return codexProfilesConfigSchema.parse(JSON.parse(value)) as CodexProfilesConfig;
+  const parsed = codexProfilesConfigSchema.parse(JSON.parse(value)) as CodexProfilesConfig;
+
+  return {
+    ...parsed,
+    profiles: Object.fromEntries(
+      Object.entries(parsed.profiles).map(([profileId, profile]) => [
+        profileId,
+        {
+          homePath: expandHomePath(profile.homePath)
+        }
+      ])
+    )
+  };
+}
+
+function expandHomePath(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+
+  if (value.startsWith("~/")) {
+    return `${homedir()}${value.slice(1)}`;
+  }
+
+  return value;
 }

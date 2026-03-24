@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { homedir } from "node:os";
 
 vi.mock("dotenv", () => ({
   config: vi.fn()
@@ -118,6 +119,33 @@ describe("core config module", () => {
       general: "general",
       thread: "coding",
       plan: "coding"
+    });
+  });
+
+  it("expands homePath values in profile config", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "~/kirbot/codex-home-general" },
+          coding: { homePath: "~/kirbot/codex-home-coding" }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(loadConfig().codex.profiles).toEqual({
+      general: { homePath: `${homedir()}/kirbot/codex-home-general` },
+      coding: { homePath: `${homedir()}/kirbot/codex-home-coding` }
     });
   });
 
