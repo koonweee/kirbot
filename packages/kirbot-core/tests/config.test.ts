@@ -335,6 +335,21 @@ describe("core config module", () => {
     );
   });
 
+  it("rejects declared skill ids that are path-like", async () => {
+    await withFixture(
+      createConfig({
+        skills: {
+          "../escape-skill": {}
+        }
+      }),
+      {},
+      async () => {
+        const error = await captureLoadConfigError();
+        expect(issuePaths(error)).toContain("skills.../escape-skill");
+      }
+    );
+  });
+
   it("rejects profiles that reference skill directories missing SKILL.md", async () => {
     await withFixture(
       createConfig({
@@ -351,6 +366,25 @@ describe("core config module", () => {
 
         const error = await captureLoadConfigError();
         expect(issuePaths(error)).toContain("profiles.general.skills.0");
+      }
+    );
+  });
+
+  it("rejects MCP registry entries that cannot be materialized to TOML", async () => {
+    await withFixture(
+      createConfig({
+        mcps: {
+          github: {
+            env: {
+              TOKEN: null
+            }
+          }
+        }
+      }),
+      {},
+      async () => {
+        const error = await captureLoadConfigError();
+        expect(issuePaths(error)).toContain("mcps.github.env.TOKEN");
       }
     );
   });

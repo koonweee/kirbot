@@ -96,6 +96,20 @@ export function parseCodexProfilesConfig(
   const baseHomeDir = resolve(dirname(options.databasePath), "homes");
   const repoSkillsDir = resolve(dirname(options.configPath), "..", "skills");
 
+  for (const skillId of Object.keys(parsed.skills)) {
+    if (!isSafeSkillId(skillId)) {
+      issues.push({
+        code: "custom",
+        path: ["skills", skillId],
+        message: `declared skill id ${JSON.stringify(skillId)} must be a single path segment without path separators or traversal`
+      });
+    }
+  }
+
+  for (const [mcpId, mcpConfig] of Object.entries(parsed.mcps)) {
+    validateManagedTomlValue(mcpConfig, issues, ["mcps", mcpId]);
+  }
+
   for (const [routeName, profileId] of Object.entries(parsed.routes)) {
     if (!(profileId in parsed.profiles)) {
       issues.push({
@@ -145,6 +159,15 @@ export function parseCodexProfilesConfig(
     const profileMcps = profile.mcps ?? [];
 
     for (const [index, skillId] of profileSkills.entries()) {
+      if (!isSafeSkillId(skillId)) {
+        issues.push({
+          code: "custom",
+          path: ["profiles", profileId, "skills", index],
+          message: `profile ${profileId} references invalid skill id ${JSON.stringify(skillId)}; skill ids must be a single path segment without path separators or traversal`
+        });
+        continue;
+      }
+
       if (!(skillId in parsed.skills)) {
         issues.push({
           code: "custom",
@@ -181,6 +204,10 @@ export function parseCodexProfilesConfig(
     };
   }
 
+  if (issues.length > 0) {
+    throw new z.ZodError(issues);
+  }
+
   for (const skillId of Object.keys(parsed.skills)) {
     if (!skillUsage.has(skillId)) {
       console.warn(`Unused declared skill id ${skillId}`);
@@ -193,10 +220,6 @@ export function parseCodexProfilesConfig(
     if (!mcpUsage.has(mcpId)) {
       console.warn(`Unused MCP registry entry ${mcpId}`);
     }
-  }
-
-  if (issues.length > 0) {
-    throw new z.ZodError(issues);
   }
 
   return {
@@ -264,16 +287,48 @@ function warnAboutStraySkillsFolders(
   }
 }
 
+function validateManagedTomlValue(value: JsonValue, issues: z.ZodIssue[], path: Array<string | number>): void {
+  if (value === null) {
+    issues.push({
+      code: "custom",
+      path,
+      message: "managed MCP config does not support null TOML values"
+    });
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      validateManagedTomlValue(entry, issues, [...path, index]);
+    }
+    return;
+  }
+
+  if (typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      validateManagedTomlValue(entry!, issues, [...path, key]);
+    }
+  }
+}
+
 function homedir(): string {
   return process.env.HOME ?? process.env.USERPROFILE ?? "/";
 }
 
+function isSafeSkillId(skillId: string): boolean {
+  return isSafePathSegment(skillId);
+}
+
 function isSafeProfileId(profileId: string): boolean {
+  return isSafePathSegment(profileId);
+}
+
+function isSafePathSegment(value: string): boolean {
   return (
-    profileId.length > 0 &&
-    profileId !== "." &&
-    profileId !== ".." &&
-    !profileId.includes("/") &&
-    !profileId.includes("\\")
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\")
   );
 }

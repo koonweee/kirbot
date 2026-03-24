@@ -4,7 +4,9 @@
     "thread": "coding",
     "plan": "coding"
   },
-  "skills": {},
+  "skills": {
+    "kirbot-skill-install": {}
+  },
   "mcps": {},
   "profiles": {
     "general": {
@@ -18,7 +20,7 @@
       "model": "gpt-5-codex",
       "sandboxMode": "danger-full-access",
       "approvalPolicy": "never",
-      "skills": [],
+      "skills": ["kirbot-skill-install"],
       "mcps": []
     }
   }

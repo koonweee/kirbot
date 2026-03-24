@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const originalEnv = { ...process.env };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.resetModules();
   process.env = { ...originalEnv };
 });
@@ -18,6 +19,7 @@ describe("loadConfig", () => {
       TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
       TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app"
     };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const { loadConfig } = await import("../src/config");
     const config = loadConfig();
@@ -28,6 +30,8 @@ describe("loadConfig", () => {
     expect(config.codex.profilesConfigPath).toBe(resolve("config/codex-profiles.json"));
     expect(config.codex.profiles.general!.homePath).toBe(resolve("data/homes/general"));
     expect(config.codex.profiles.coding!.homePath).toBe(resolve("data/homes/coding"));
+    expect(config.codex.profiles.coding!.skills).toContain("kirbot-skill-install");
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("ignores a legacy base-instructions env var if present", async () => {
