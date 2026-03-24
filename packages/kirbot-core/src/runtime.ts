@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { CodexGateway, spawnCodexAppServer } from "@kirbot/codex-client";
-import { resolve as resolvePath } from "node:path";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
 import type { AppConfig } from "./config";
 import { prepareKirbotCodexHome, resolveKirbotCodexConfigPath } from "./codex-home";
@@ -130,53 +129,38 @@ async function initializeCodex(
     };
   }
 
-  const sharedProfileHomePath = resolveCodexProfileHomePath(config, config.codex.routing.general);
-  const isolatedProfileHomePath = resolveCodexProfileHomePath(config, config.codex.routing.thread);
-  if (normalizeHomePath(sharedProfileHomePath) === normalizeHomePath(isolatedProfileHomePath)) {
-    throw new Error("Temporary two-gateway mode must not resolve to the same home path for general and thread routing.");
-  }
-
-  prepareKirbotCodexHome({
-    targetHomePath: sharedProfileHomePath
-  });
-  prepareKirbotCodexHome({
-    targetHomePath: isolatedProfileHomePath
-  });
-
-  const shared = await initializeGateway(config, logger, sharedProfileHomePath);
-  let isolated: {
-    codex: CodexGateway;
-    rpcClient: CodexRpcClient;
-    spawnedAppServer: SpawnedAppServer;
-  } | undefined;
+  const gateways: Record<string, { codex: CodexGateway; rpcClient: CodexRpcClient; spawnedAppServer: SpawnedAppServer }> = {};
 
   try {
-    // The isolated config.toml is Kirbot's global Codex policy source.
-    // Code should only override it intentionally for thread-local settings or per-session cwd.
-    const shouldBootstrapIsolatedConfig =
-      !existsSync(resolveKirbotCodexConfigPath(isolatedProfileHomePath));
-    isolated = await initializeGateway(config, logger, isolatedProfileHomePath);
-    if (shouldBootstrapIsolatedConfig) {
-      await isolated.codex.bootstrapManagedGlobalConfig();
+    for (const [profileId, profile] of Object.entries(config.codex.profiles)) {
+      prepareKirbotCodexHome({
+        targetHomePath: profile.homePath
+      });
+
+      const shouldBootstrapManagedConfig = !existsSync(resolveKirbotCodexConfigPath(profile.homePath));
+      const gateway = await initializeGateway(config, logger, profile.homePath);
+      if (shouldBootstrapManagedConfig) {
+        await gateway.codex.bootstrapManagedGlobalConfig();
+      }
+
+      gateways[profileId] = gateway;
     }
   } catch (error) {
-    await cleanupGatewayResources(shared.rpcClient, shared.spawnedAppServer);
-    if (isolated) {
-      await cleanupGatewayResources(isolated.rpcClient, isolated.spawnedAppServer);
-    }
+    await Promise.all(
+      Object.values(gateways).map((gateway) =>
+        cleanupGatewayResources(gateway.rpcClient, gateway.spawnedAppServer)
+      )
+    );
     throw error;
   }
 
   return {
     codex: new RoutedCodexApi(
-      {
-        shared: shared.codex,
-        isolated: isolated.codex
-      },
+      Object.fromEntries(Object.entries(gateways).map(([profileId, gateway]) => [profileId, gateway.codex])),
       logger
     ),
-    rpcClients: [shared.rpcClient, isolated.rpcClient],
-    spawnedAppServers: [shared.spawnedAppServer, isolated.spawnedAppServer]
+    rpcClients: Object.values(gateways).map((gateway) => gateway.rpcClient),
+    spawnedAppServers: Object.values(gateways).map((gateway) => gateway.spawnedAppServer)
   };
 }
 
@@ -212,19 +196,6 @@ async function initializeGateway(
     await cleanupGatewayResources(rpcClient, spawnedAppServer);
     throw error;
   }
-}
-
-function resolveCodexProfileHomePath(config: AppConfig, profileId: string): string {
-  const profile = config.codex.profiles[profileId];
-  if (!profile) {
-    throw new Error(`Unknown Codex profile referenced by routing: ${profileId}`);
-  }
-
-  return profile.homePath;
-}
-
-function normalizeHomePath(homePath: string): string {
-  return resolvePath(homePath);
 }
 
 async function cleanupGatewayResources(

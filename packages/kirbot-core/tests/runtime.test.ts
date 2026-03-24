@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -127,12 +127,12 @@ import type { AppConfig } from "../src/config";
 import type { TelegramApi } from "../src/telegram-messenger";
 import { createKirbotRuntime } from "../src/runtime";
 
-describe("createKirbotRuntime temporary profile routing", () => {
+describe("createKirbotRuntime profile routing", () => {
   beforeEach(() => {
-    mocks.spawnCodexAppServer.mockImplementation(async () => {
+    mocks.spawnCodexAppServer.mockImplementation(async ({ homePath }: { homePath?: string }) => {
       const stop = vi.fn(async () => undefined);
       const server = {
-        process: {},
+        process: { homePath },
         stop
       };
       mocks.spawnedAppServers.push(server);
@@ -148,10 +148,11 @@ describe("createKirbotRuntime temporary profile routing", () => {
     mocks.codexGatewayInitializeErrors.length = 0;
   });
 
-  it("routes general traffic to the shared profile and thread traffic to the isolated profile", async () => {
-    const sharedHomePath = join(tmpdir(), `kirbot-runtime-shared-${randomUUID()}`);
-    const isolatedHomePath = join(tmpdir(), `kirbot-runtime-isolated-${randomUUID()}`);
-    const config = buildConfig(sharedHomePath, isolatedHomePath);
+  it("spawns one app-server per configured profile with the configured home path", async () => {
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const docsHomePath = join(tmpdir(), `kirbot-runtime-docs-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath, docsHomePath);
 
     await createKirbotRuntime({
       config,
@@ -159,46 +160,39 @@ describe("createKirbotRuntime temporary profile routing", () => {
     });
 
     expect(mocks.prepareKirbotCodexHome.mock.calls).toEqual([
-      [{ targetHomePath: sharedHomePath }],
-      [{ targetHomePath: isolatedHomePath }]
+      [{ targetHomePath: generalHomePath }],
+      [{ targetHomePath: codingHomePath }],
+      [{ targetHomePath: docsHomePath }]
     ]);
     expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.homePath)).toEqual([
-      sharedHomePath,
-      isolatedHomePath
+      generalHomePath,
+      codingHomePath,
+      docsHomePath
     ]);
+    expect(mocks.codexGatewayInstances).toHaveLength(3);
   });
 
-  it("bootstraps managed config only for the isolated gateway in the temporary two-gateway model", async () => {
-    const sharedHomePath = join(tmpdir(), `kirbot-runtime-shared-${randomUUID()}`);
-    const isolatedHomePath = join(tmpdir(), `kirbot-runtime-isolated-${randomUUID()}`);
-    const config = buildConfig(sharedHomePath, isolatedHomePath);
+  it("does not start a shared-home gateway", async () => {
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath, undefined, false);
 
     await createKirbotRuntime({
       config,
       telegramApi: {} as TelegramApi
     });
 
-    expect(mocks.codexGatewayInstances).toHaveLength(2);
-    expect(mocks.codexGatewayInstances[0]!.bootstrapManagedGlobalConfig).not.toHaveBeenCalled();
-    expect(mocks.codexGatewayInstances[1]!.bootstrapManagedGlobalConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.spawnCodexAppServer.mock.calls).toHaveLength(2);
+    expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.homePath)).toEqual([
+      generalHomePath,
+      codingHomePath
+    ]);
   });
 
-  it("rejects temporary mode when general and thread routing resolve to the same home path", async () => {
-    const homePath = join(tmpdir(), `kirbot-runtime-shared-${randomUUID()}`);
-    const config = buildConfig(homePath, homePath);
-
-    await expect(
-      createKirbotRuntime({
-        config,
-        telegramApi: {} as TelegramApi
-      })
-    ).rejects.toThrow("must not resolve to the same home path");
-  });
-
-  it("cleans up the first gateway if the second gateway initialization fails", async () => {
-    const sharedHomePath = join(tmpdir(), `kirbot-runtime-shared-${randomUUID()}`);
-    const isolatedHomePath = join(tmpdir(), `kirbot-runtime-isolated-${randomUUID()}`);
-    const config = buildConfig(sharedHomePath, isolatedHomePath);
+  it("cleans up the first gateway if a later profile initialization fails", async () => {
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath);
     mocks.codexGatewayInitializeErrors.push(undefined, new Error("second gateway failed"));
 
     await expect(
@@ -216,7 +210,12 @@ describe("createKirbotRuntime temporary profile routing", () => {
   });
 });
 
-function buildConfig(sharedHomePath: string, isolatedHomePath: string): AppConfig {
+function buildConfig(
+  generalHomePath: string,
+  codingHomePath: string,
+  docsHomePath = join(tmpdir(), `kirbot-runtime-docs-${randomUUID()}`),
+  includeDocs = true
+): AppConfig {
   return {
     telegram: {
       botToken: "token",
@@ -232,13 +231,14 @@ function buildConfig(sharedHomePath: string, isolatedHomePath: string): AppConfi
     codex: {
       defaultCwd: "/srv/kirbot",
       profiles: {
-        general: { homePath: sharedHomePath },
-        coding: { homePath: isolatedHomePath }
+        general: { homePath: generalHomePath },
+        coding: { homePath: codingHomePath },
+        ...(includeDocs ? { docs: { homePath: docsHomePath } } : {})
       },
       routing: {
         general: "general",
         thread: "coding",
-        plan: "coding"
+        plan: includeDocs ? "docs" : "coding"
       },
       model: undefined,
       modelProvider: undefined,

@@ -25,7 +25,16 @@ const DEFAULT_SETTINGS = {
 };
 
 class FakeCodexApi implements BridgeCodexApi {
-  readonly createThreadCalls: string[] = [];
+  readonly createThreadCalls: Array<{
+    profileId: string;
+    title: string;
+    options?: {
+      cwd?: string | null;
+      settings?: Record<string, unknown> | null;
+    };
+  }> = [];
+  readonly readProfileSettingsCalls: string[] = [];
+  readonly updateProfileSettingsCalls: Array<{ profileId: string; update: Record<string, unknown> }> = [];
   readonly ensureThreadLoadedCalls: string[] = [];
   readonly readThreadCalls: string[] = [];
   readonly sendTurnCalls: string[] = [];
@@ -39,12 +48,23 @@ class FakeCodexApi implements BridgeCodexApi {
   readonly missingThreadIds = new Set<string>();
 
   constructor(
-    readonly name: "shared" | "isolated"
+    readonly profileId: string
   ) {}
 
-  async createThread(): Promise<{ threadId: string; branch: string | null } & typeof DEFAULT_SETTINGS> {
-    const threadId = `${this.name}-thread-${this.createThreadCalls.length + 1}`;
-    this.createThreadCalls.push(threadId);
+  async createThread(
+    profileId: string,
+    title: string,
+    options?: {
+      cwd?: string | null;
+      settings?: Record<string, unknown> | null;
+    }
+  ): Promise<{ threadId: string; branch: string | null } & typeof DEFAULT_SETTINGS> {
+    const threadId = `${this.profileId}-thread-${this.createThreadCalls.length + 1}`;
+    this.createThreadCalls.push({
+      profileId,
+      title,
+      options
+    });
     this.threadIds.add(threadId);
     return {
       threadId,
@@ -53,11 +73,19 @@ class FakeCodexApi implements BridgeCodexApi {
     };
   }
 
-  async readGlobalSettings(): Promise<typeof DEFAULT_SETTINGS> {
+  async readProfileSettings(profileId: string): Promise<typeof DEFAULT_SETTINGS> {
+    this.readProfileSettingsCalls.push(profileId);
     return DEFAULT_SETTINGS;
   }
 
-  async updateGlobalSettings(): Promise<typeof DEFAULT_SETTINGS> {
+  async updateProfileSettings(
+    profileId: string,
+    update: Record<string, unknown>
+  ): Promise<typeof DEFAULT_SETTINGS> {
+    this.updateProfileSettingsCalls.push({
+      profileId,
+      update
+    });
     return DEFAULT_SETTINGS;
   }
 
@@ -156,72 +184,69 @@ class FakeCodexApi implements BridgeCodexApi {
 }
 
 describe("RoutedCodexApi", () => {
-  it("creates new threads on the isolated gateway and remembers their route", async () => {
-    const shared = new FakeCodexApi("shared");
-    const isolated = new FakeCodexApi("isolated");
-    const routed = new RoutedCodexApi({ shared, isolated });
+  it("creates new threads on the requested profile gateway", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
 
-    const thread = await routed.createThread("New session");
-    await routed.ensureThreadLoaded(thread.threadId);
+    const thread = await (routed as any).createThread("coding", "New session");
 
-    expect(thread.threadId).toBe("isolated-thread-1");
-    expect(isolated.createThreadCalls).toEqual(["isolated-thread-1"]);
-    expect(isolated.ensureThreadLoadedCalls).toEqual(["isolated-thread-1"]);
-    expect(shared.ensureThreadLoadedCalls).toEqual([]);
+    expect(thread.threadId).toBe("coding-thread-1");
+    expect(coding.createThreadCalls).toEqual([
+      {
+        profileId: "coding",
+        title: "New session",
+        options: undefined
+      }
+    ]);
+    expect(general.createThreadCalls).toEqual([]);
   });
 
-  it("falls back to the shared gateway for legacy thread ids and caches the result", async () => {
-    const shared = new FakeCodexApi("shared");
-    shared.threadIds.add("legacy-thread-1");
-    const isolated = new FakeCodexApi("isolated");
-    const routed = new RoutedCodexApi({ shared, isolated });
-
-    await routed.ensureThreadLoaded("legacy-thread-1");
-    await routed.sendTurn("legacy-thread-1", []);
-
-    expect(isolated.ensureThreadLoadedCalls).toEqual(["legacy-thread-1"]);
-    expect(shared.ensureThreadLoadedCalls).toEqual(["legacy-thread-1"]);
-    expect(shared.sendTurnCalls).toEqual(["legacy-thread-1"]);
-    expect(isolated.sendTurnCalls).toEqual([]);
-  });
-
-  it("routes thread metadata reads to the gateway that created the thread", async () => {
-    const shared = new FakeCodexApi("shared");
-    const isolated = new FakeCodexApi("isolated");
-    const routed = new RoutedCodexApi({ shared, isolated });
-
-    const thread = await routed.createThread("New session");
-    await routed.readThread(thread.threadId);
-
-    expect(isolated.readThreadCalls).toEqual([thread.threadId]);
-    expect(shared.readThreadCalls).toEqual([]);
-  });
-
-  it("routes approval responses back to the gateway that emitted the request", async () => {
-    const shared = new FakeCodexApi("shared");
-    const isolated = new FakeCodexApi("isolated");
-    isolated.events.push({
+  it("retains request and thread routing per profile", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+    const thread = await (routed as any).createThread("coding", "New session");
+    coding.events.push({
       kind: "serverRequest",
       request: {
         jsonrpc: "2.0",
         method: "item/commandExecution/requestApproval",
         id: 42,
         params: {
-          threadId: "isolated-thread-1"
+          threadId: thread.threadId
         }
       } as never
     });
 
-    const routed = new RoutedCodexApi({ shared, isolated });
     const event = await routed.nextEvent();
-
-    expect(event?.kind).toBe("serverRequest");
-
     await routed.respondToCommandApproval(42, {
       decision: "accept"
     });
 
-    expect(isolated.commandApprovalResponses).toEqual([42]);
-    expect(shared.commandApprovalResponses).toEqual([]);
+    routed.registerThreadProfile(thread.threadId, "coding");
+    await routed.ensureThreadLoaded(thread.threadId);
+    await routed.sendTurn(thread.threadId, []);
+
+    expect(event?.kind).toBe("serverRequest");
+    expect(coding.commandApprovalResponses).toEqual([42]);
+    expect(general.commandApprovalResponses).toEqual([]);
+    expect(coding.ensureThreadLoadedCalls).toEqual([thread.threadId]);
+    expect(general.ensureThreadLoadedCalls).toEqual([]);
+    expect(coding.sendTurnCalls).toEqual([thread.threadId]);
+    expect(general.sendTurnCalls).toEqual([]);
+  });
+
+  it("fails immediately for unknown thread ids without probing another gateway", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+
+    await expect(routed.ensureThreadLoaded("missing-thread")).rejects.toThrow(
+      "Unknown Codex thread route"
+    );
+
+    expect(general.ensureThreadLoadedCalls).toEqual([]);
+    expect(coding.ensureThreadLoadedCalls).toEqual([]);
   });
 });

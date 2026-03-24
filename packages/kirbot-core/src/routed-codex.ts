@@ -11,42 +11,46 @@ import type { LoggerLike } from "./logging";
 import type { BridgeCodexApi } from "./bridge";
 import type { CodexThreadSettingsOverride } from "./bridge/codex-thread-settings";
 
-type GatewayName = "shared" | "isolated";
-
 export class RoutedCodexApi implements BridgeCodexApi {
-  readonly #threadRoutes = new Map<string, GatewayName>();
-  readonly #requestRoutes = new Map<RequestId, GatewayName>();
+  readonly #threadRoutes = new Map<string, string>();
+  readonly #requestRoutes = new Map<RequestId, string>();
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
-  readonly #closedGateways = new Set<GatewayName>();
+  readonly #closedGateways = new Set<string>();
+  readonly #gatewayIds: string[];
   #eventPumpStarted = false;
 
   constructor(
-    private readonly gateways: {
-      shared: BridgeCodexApi;
-      isolated: BridgeCodexApi;
-    },
+    private readonly gateways: Record<string, BridgeCodexApi>,
     private readonly logger: LoggerLike = console
-  ) {}
+  ) {
+    this.#gatewayIds = Object.keys(gateways);
+  }
+
+  registerThreadProfile(threadId: string, profileId: string): void {
+    this.#threadRoutes.set(threadId, profileId);
+  }
 
   async createThread(
+    profileId: string,
     title: string,
     options?: {
       cwd?: string | null;
       settings?: CodexThreadSettingsOverride | null;
     }
   ) {
-    const thread = await this.gateways.isolated.createThread(title, options);
-    this.#threadRoutes.set(thread.threadId, "isolated");
+    const gateway = this.#getGateway(profileId);
+    const thread = await gateway.createThread(profileId, title, options);
+    this.#threadRoutes.set(thread.threadId, profileId);
     return thread;
   }
 
-  async readGlobalSettings() {
-    return this.gateways.isolated.readGlobalSettings();
+  async readProfileSettings(profileId: string) {
+    return this.#getGateway(profileId).readProfileSettings(profileId);
   }
 
-  async updateGlobalSettings(update: CodexThreadSettingsOverride) {
-    return this.gateways.isolated.updateGlobalSettings(update);
+  async updateProfileSettings(profileId: string, update: CodexThreadSettingsOverride) {
+    return this.#getGateway(profileId).updateProfileSettings(profileId, update);
   }
 
   async ensureThreadLoaded(threadId: string) {
@@ -89,7 +93,7 @@ export class RoutedCodexApi implements BridgeCodexApi {
   }
 
   async listModels() {
-    return this.gateways.isolated.listModels();
+    return this.#firstGateway().listModels();
   }
 
   async respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }) {
@@ -120,7 +124,7 @@ export class RoutedCodexApi implements BridgeCodexApi {
       return queued;
     }
 
-    if (this.#closedGateways.size === 2) {
+    if (this.#closedGateways.size === this.#gatewayIds.length) {
       return null;
     }
 
@@ -135,26 +139,27 @@ export class RoutedCodexApi implements BridgeCodexApi {
     }
 
     this.#eventPumpStarted = true;
-    void this.#pumpGateway("shared");
-    void this.#pumpGateway("isolated");
+    for (const profileId of this.#gatewayIds) {
+      void this.#pumpGateway(profileId);
+    }
   }
 
-  async #pumpGateway(name: GatewayName): Promise<void> {
+  async #pumpGateway(profileId: string): Promise<void> {
     try {
       while (true) {
-        const event = await this.gateways[name].nextEvent();
+        const event = await this.#getGateway(profileId).nextEvent();
         if (!event) {
           break;
         }
 
-        this.#rememberEventRoute(name, event);
+        this.#rememberEventRoute(profileId, event);
         this.#enqueueEvent(event);
       }
     } catch (error) {
-      this.logger.error(`Codex ${name} gateway event loop failed`, error);
+      this.logger.error(`Codex ${profileId} gateway event loop failed`, error);
     } finally {
-      this.#closedGateways.add(name);
-      if (this.#closedGateways.size === 2) {
+      this.#closedGateways.add(profileId);
+      if (this.#closedGateways.size === this.#gatewayIds.length) {
         this.#resolvePendingEventWaiters(null);
       }
     }
@@ -176,14 +181,14 @@ export class RoutedCodexApi implements BridgeCodexApi {
     }
   }
 
-  #rememberEventRoute(name: GatewayName, event: AppServerEvent): void {
+  #rememberEventRoute(profileId: string, event: AppServerEvent): void {
     const threadId = getEventThreadId(event);
     if (threadId) {
-      this.#threadRoutes.set(threadId, name);
+      this.#threadRoutes.set(threadId, profileId);
     }
 
     if (event.kind === "serverRequest") {
-      this.#requestRoutes.set(event.request.id, name);
+      this.#requestRoutes.set(event.request.id, profileId);
     }
   }
 
@@ -191,10 +196,13 @@ export class RoutedCodexApi implements BridgeCodexApi {
     id: RequestId,
     operation: (gateway: BridgeCodexApi) => Promise<T>
   ): Promise<T> {
-    const route = this.#requestRoutes.get(id) ?? "isolated";
+    const route = this.#requestRoutes.get(id);
+    if (!route) {
+      throw new Error(`Unknown Codex request route: ${String(id)}`);
+    }
 
     try {
-      return await operation(this.gateways[route]);
+      return await operation(this.#getGateway(route));
     } finally {
       this.#requestRoutes.delete(id);
     }
@@ -204,35 +212,29 @@ export class RoutedCodexApi implements BridgeCodexApi {
     threadId: string,
     operation: (gateway: BridgeCodexApi) => Promise<T>
   ): Promise<T> {
-    let lastError: unknown;
-
-    for (const route of this.#candidateThreadRoutes(threadId)) {
-      try {
-        const result = await operation(this.gateways[route]);
-        this.#threadRoutes.set(threadId, route);
-        return result;
-      } catch (error) {
-        lastError = error;
-        if (!isMissingThreadError(error)) {
-          throw error;
-        }
-      }
+    const route = this.#threadRoutes.get(threadId);
+    if (!route) {
+      throw new Error(`Unknown Codex thread route: ${threadId}`);
     }
 
-    throw lastError instanceof Error ? lastError : new Error(`Unable to resolve Codex gateway for thread ${threadId}`);
+    return operation(this.#getGateway(route));
   }
 
-  #candidateThreadRoutes(threadId: string): GatewayName[] {
-    const cached = this.#threadRoutes.get(threadId);
-    if (cached === "shared") {
-      return ["shared", "isolated"];
+  #getGateway(profileId: string): BridgeCodexApi {
+    const gateway = this.gateways[profileId];
+    if (!gateway) {
+      throw new Error(`Unknown Codex profile route: ${profileId}`);
     }
 
-    if (cached === "isolated") {
-      return ["isolated", "shared"];
+    return gateway;
+  }
+  #firstGateway(): BridgeCodexApi {
+    const firstGatewayId = this.#gatewayIds[0];
+    if (!firstGatewayId) {
+      throw new Error("No Codex gateways configured");
     }
 
-    return ["isolated", "shared"];
+    return this.gateways[firstGatewayId]!;
   }
 }
 
@@ -240,12 +242,4 @@ function getEventThreadId(event: AppServerEvent): string | null {
   const params = event.kind === "serverRequest" ? event.request.params : event.notification.params;
   const threadId = params && typeof params === "object" && "threadId" in params ? params.threadId : null;
   return typeof threadId === "string" ? threadId : null;
-}
-
-function isMissingThreadError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return error.message.toLowerCase().includes("thread not found");
 }

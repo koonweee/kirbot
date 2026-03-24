@@ -105,14 +105,20 @@ export type CallbackQueryEvent = {
 
 export interface BridgeCodexApi {
   createThread(
+    profileId: string,
     title: string,
     options?: {
       cwd?: string | null;
       settings?: CodexThreadSettingsOverride | null;
     }
   ): Promise<{ threadId: string; branch: string | null } & ThreadStartSettings>;
-  readGlobalSettings(): Promise<ThreadStartSettings>;
-  updateGlobalSettings(update: CodexThreadSettingsOverride): Promise<ThreadStartSettings>;
+  readProfileSettings?(profileId: string): Promise<ThreadStartSettings>;
+  updateProfileSettings?(
+    profileId: string,
+    update: CodexThreadSettingsOverride
+  ): Promise<ThreadStartSettings>;
+  readGlobalSettings?(): Promise<ThreadStartSettings>;
+  updateGlobalSettings?(update: CodexThreadSettingsOverride): Promise<ThreadStartSettings>;
   ensureThreadLoaded(threadId: string): Promise<ThreadStartSettings>;
   readThread(threadId: string): Promise<{ name: string | null; cwd: string }>;
   compactThread(threadId: string): Promise<void>;
@@ -1145,7 +1151,7 @@ export class TelegramCodexBridge {
       const loaded = await this.codex.ensureThreadLoaded(hydratedSession.codexThreadId!);
       const thread = await this.codex.readThread(hydratedSession.codexThreadId!);
       const title = thread.name ?? (isRootBridgeSession(hydratedSession) ? DEFAULT_ROOT_SESSION_TITLE : "Fresh Codex Thread");
-      const freshThread = await this.codex.createThread(title, {
+      const freshThread = await this.codex.createThread(hydratedSession.profileId, title, {
         cwd: loaded.cwd,
         settings: toCodexThreadSettingsOverride(hydratedSession.settings)
       });
@@ -1328,7 +1334,7 @@ export class TelegramCodexBridge {
 
     const nextEffective =
       target.scope === "global"
-        ? await this.codex.updateGlobalSettings({
+        ? await this.updateCodexProfileSettings("general", {
             serviceTier: nextTier
           })
         : await this.updateSessionSettingsForSurface(location.chatId, { kind: "topic", topicId: location.topicId! }, {
@@ -1810,7 +1816,7 @@ export class TelegramCodexBridge {
 
       try {
         const rootSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.root);
-        const thread = await this.codex.createThread(DEFAULT_ROOT_SESSION_TITLE, {
+        const thread = await this.codex.createThread("general", DEFAULT_ROOT_SESSION_TITLE, {
           settings: toCodexThreadSettingsOverride(rootSettings)
         });
         await this.database.activateSession(pending.id, thread.threadId);
@@ -1930,7 +1936,7 @@ export class TelegramCodexBridge {
 
       try {
         const spawnSettings = await this.getChatThreadSettingsDefaults(message.chatId).then((defaults) => defaults.spawn);
-        const thread = await this.codex.createThread(title, {
+        const thread = await this.codex.createThread("coding", title, {
           ...(options?.threadCwd ? { cwd: options.threadCwd } : {}),
           settings: toCodexThreadSettingsOverride(spawnSettings)
         });
@@ -2081,7 +2087,7 @@ export class TelegramCodexBridge {
     root: PersistedThreadSettings;
     spawn: PersistedThreadSettings;
   }> {
-    const globalSettings = toPersistedThreadSettings(await this.codex.readGlobalSettings());
+    const globalSettings = toPersistedThreadSettings(await this.readCodexProfileSettings("general"));
     const general = await this.ensureChatProfileSettingsDefaults(chatId, "general", globalSettings);
     const coding = await this.ensureChatProfileSettingsDefaults(chatId, "coding", globalSettings);
     return {
@@ -2116,6 +2122,33 @@ export class TelegramCodexBridge {
     }
 
     return this.database.upsertChatProfileDefaults(String(chatId), profileId, fallback);
+  }
+
+  private async readCodexProfileSettings(profileId: string): Promise<ThreadStartSettings> {
+    if (this.codex.readProfileSettings) {
+      return this.codex.readProfileSettings(profileId);
+    }
+
+    if (!this.codex.readGlobalSettings) {
+      throw new Error(`Codex client does not support reading profile settings for ${profileId}`);
+    }
+
+    return this.codex.readGlobalSettings();
+  }
+
+  private async updateCodexProfileSettings(
+    profileId: string,
+    update: CodexThreadSettingsOverride
+  ): Promise<ThreadStartSettings> {
+    if (this.codex.updateProfileSettings) {
+      return this.codex.updateProfileSettings(profileId, update);
+    }
+
+    if (!this.codex.updateGlobalSettings) {
+      throw new Error(`Codex client does not support updating profile settings for ${profileId}`);
+    }
+
+    return this.codex.updateGlobalSettings(update);
   }
 
   private async resolveThreadSettingsTarget(
@@ -2190,7 +2223,7 @@ export class TelegramCodexBridge {
     if (location.topicId === null) {
       return {
         scope: "global",
-        settings: await this.codex.readGlobalSettings()
+        settings: await this.readCodexProfileSettings("general")
       };
     }
 
