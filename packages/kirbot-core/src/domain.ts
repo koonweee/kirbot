@@ -20,17 +20,6 @@ export type PersistedThreadSettings = {
   sandboxPolicy: SandboxPolicy | null;
 };
 
-export type ChatProfileDefaults = {
-  telegramChatId: string;
-  profileId: string;
-} & PersistedThreadSettings;
-
-export type ChatThreadDefaults = {
-  telegramChatId: string;
-  root: PersistedThreadSettings;
-  spawn: PersistedThreadSettings;
-};
-
 export type UserTurnInput =
   | Extract<UserInput, { type: "text" }>
   | {
