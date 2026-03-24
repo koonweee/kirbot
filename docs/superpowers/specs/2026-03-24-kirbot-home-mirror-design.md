@@ -9,8 +9,7 @@ path for both `HOME` and `CODEX_HOME` when spawning the profile's Codex
 app-server.
 
 Each profile home will mirror most top-level entries from the real user home by
-symlink, while explicitly excluding codex-related entries such as `.codex` and
-`.agents`.
+symlink, while explicitly excluding `.codex`.
 
 This gives profile processes normal access to shared home-scoped user state,
 while keeping Codex-specific state isolated per profile.
@@ -26,7 +25,7 @@ while keeping Codex-specific state isolated per profile.
 
 ## Non-Goals
 
-- recursively inspect arbitrary mirrored directories for codex-related content
+- exclude any home-scoped directory other than `.codex`
 - recursively manage the contents of mirrored directories
 - add a manual resync command in v1
 - make profile homes fully disposable
@@ -85,14 +84,14 @@ top-level symlink is the unit of mirroring.
 
 ### Exclusion Rule
 
-Kirbot will always exclude codex-related top-level entries, including:
+Kirbot will always exclude:
 
-- `.agents`
 - `.codex`
 
+No other top-level home entry is excluded in v1.
+
 The purpose of this exclusion is to prevent Codex-specific state from leaking
-from the real user home into profile homes, including alternate discovery roots
-such as `$HOME/.agents/skills`.
+from the real user home into profile homes.
 
 ### Codex Boundary Inside Profile Homes
 
@@ -123,7 +122,7 @@ Kirbot owns:
 
 - the existence of the profile home
 - mirror reconciliation at the top level
-- exclusion of codex-related top-level entries
+- exclusion of `.codex`
 - managed Codex files and directories it already owns
 
 Kirbot does not own:
@@ -134,8 +133,7 @@ Kirbot does not own:
 If a top-level mirrored path would conflict with a Kirbot-owned path, the
 Kirbot-owned path wins.
 
-The main intentional conflicts are codex-related entries such as `.codex` and
-`.agents`, which are not mirrored.
+The main intentional conflict is `.codex`, which is not mirrored.
 
 ## Reconciliation Semantics
 
@@ -145,7 +143,7 @@ Expected startup behavior:
 
 1. ensure the profile home exists
 2. reconcile mirrored top-level home entries from the real home
-3. exclude codex-related top-level entries from that mirror
+3. exclude `.codex` from that mirror
 4. reconcile Kirbot-managed Codex files inside the profile home
 5. spawn the profile's Codex app-server with `HOME` and `CODEX_HOME` both set
    to that profile home
@@ -212,7 +210,7 @@ Unit coverage should verify:
 
 - normal top-level source-home entries are mirrored into a profile home by
   symlink
-- codex-related top-level entries such as `.codex` and `.agents` are excluded from mirroring
+- `.codex` is excluded from mirroring
 - stale mirrored top-level entries are removed on the next reconcile
 - existing Codex-managed files still reconcile correctly inside the mirrored
   profile home
@@ -223,8 +221,6 @@ Behavior verification should also confirm:
 
 - with the profile home used as both `HOME` and `CODEX_HOME`, `skills/list`
   does not expose skills from the real `~/.codex`
-- with a real-home `.agents/skills` entry that points back into `~/.codex`,
-  the mirrored profile home still does not expose those skills
 - managed Kirbot skills and system profile-home skills remain discoverable
 
 ## Operational Notes
@@ -242,6 +238,5 @@ That is acceptable in this design because the user wants broad shared-home
 behavior, with Codex-specific state isolated separately.
 
 If a future requirement needs stronger isolation for other home-scoped tools,
-the exclusion set can expand in a follow-up design. v1 excludes the known
-codex-related top-level entries required to keep Codex state isolated on this
-machine.
+the exclusion set can expand in a follow-up design. v1 intentionally excludes
+only `.codex`.

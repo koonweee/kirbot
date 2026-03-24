@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make each Kirbot Codex profile run with an isolated profile-local `HOME`/`CODEX_HOME` that mirrors most top-level entries from the real user home while excluding codex-related top-level entries such as `.codex` and `.agents`.
+**Goal:** Make each Kirbot Codex profile run with an isolated profile-local `HOME`/`CODEX_HOME` that mirrors most top-level entries from the real user home while excluding `.codex`.
 
-**Architecture:** Extend profile-home reconciliation in `packages/kirbot-core/src/codex-home.ts` so a real profile home is rebuilt as a top-level symlink mirror of the real home with a hard exclusion for codex-related top-level entries such as `.codex` and `.agents`, then layer the existing Kirbot-managed Codex boundary on top of that home. Update the Codex app-server spawn environment in `packages/codex-client/src/codex.ts` so the spawned process uses the profile home for both `HOME` and `CODEX_HOME`, which removes access to the real `~/.codex` while preserving shared access to other home-scoped state through live symlinks.
+**Architecture:** Extend profile-home reconciliation in `packages/kirbot-core/src/codex-home.ts` so a real profile home is rebuilt as a top-level symlink mirror of the real home with a hard exclusion for `.codex`, then layer the existing Kirbot-managed Codex boundary on top of that home. Update the Codex app-server spawn environment in `packages/codex-client/src/codex.ts` so the spawned process uses the profile home for both `HOME` and `CODEX_HOME`, which removes access to the real `~/.codex` while preserving shared access to other home-scoped state through live symlinks.
 
 **Tech Stack:** TypeScript, Node filesystem APIs, Vitest, Codex app-server RPC
 
@@ -24,11 +24,11 @@
 - `apps/bot/KIRBOT.md`
 
 **Responsibilities:**
-- `packages/kirbot-core/src/codex-home.ts`: reconcile top-level home mirroring, exclude codex-related top-level entries such as `.codex` and `.agents`, keep managed Codex boundary explicit, and seed profile-local `auth.json` from the real home’s `.codex/auth.json`
+- `packages/kirbot-core/src/codex-home.ts`: reconcile top-level home mirroring, exclude `.codex`, keep managed Codex boundary explicit, and seed profile-local `auth.json` from the real home’s `.codex/auth.json`
 - `packages/kirbot-core/tests/codex-home.test.ts`: pin mirror semantics, managed-boundary precedence, stale mirror cleanup, and auth seeding
 - `packages/codex-client/src/codex.ts`: set both `HOME` and `CODEX_HOME` for spawned Codex app-server processes
 - `packages/codex-client/tests/codex.test.ts`: pin spawn environment behavior for profile homes
-- `README.md` and `apps/bot/KIRBOT.md`: document mirror semantics, codex-related top-level exclusions, and restart-vs-live-reflection behavior
+- `README.md` and `apps/bot/KIRBOT.md`: document mirror semantics, `.codex` exclusion, and restart-vs-live-reflection behavior
 
 ### Task 1: Pin Mirror Reconciliation Semantics In Tests
 
@@ -40,13 +40,11 @@
 Add tests that describe the new profile-home contract:
 
 ```ts
-it("mirrors top-level home entries while excluding codex-related state", () => {
+it("mirrors top-level home entries while excluding .codex", () => {
   fs.mkdirSync(join(sourceHome, ".ssh"), { recursive: true });
   fs.writeFileSync(join(sourceHome, ".gitconfig"), "[user]\n\tname = Jeremy\n");
   fs.mkdirSync(join(sourceHome, ".codex"), { recursive: true });
   fs.writeFileSync(join(sourceHome, ".codex", "auth.json"), '{"token":"abc"}');
-  fs.mkdirSync(join(sourceHome, ".agents", "skills"), { recursive: true });
-  fs.symlinkSync(join(sourceHome, ".codex", "superpowers", "skills"), join(sourceHome, ".agents", "skills", "superpowers"), "dir");
 
   prepareKirbotCodexHome({
     sourceHomePath: sourceHome,
@@ -61,7 +59,6 @@ it("mirrors top-level home entries while excluding codex-related state", () => {
   expect(fs.lstatSync(join(targetHome, ".ssh")).isSymbolicLink()).toBe(true);
   expect(fs.lstatSync(join(targetHome, ".gitconfig")).isSymbolicLink()).toBe(true);
   expect(fs.existsSync(join(targetHome, ".codex"))).toBe(false);
-  expect(fs.existsSync(join(targetHome, ".agents"))).toBe(false);
   expect(fs.readFileSync(join(targetHome, "auth.json"), "utf8")).toBe('{"token":"abc"}');
 });
 ```
@@ -86,7 +83,7 @@ expect(fs.readFileSync(join(targetHome, "skills", "kirbot-skill-install", "SKILL
 
 Run: `npm test -- packages/kirbot-core/tests/codex-home.test.ts`
 
-Expected: FAIL because `prepareKirbotCodexHome()` currently treats `sourceHomePath` as a Codex home root, does not mirror top-level home entries, does not remove stale mirrored entries, and does not exclude codex-related top-level entries.
+Expected: FAIL because `prepareKirbotCodexHome()` currently treats `sourceHomePath` as a Codex home root, does not mirror top-level home entries, does not remove stale mirrored entries, and does not exclude `.codex`.
 
 - [ ] **Step 3: Commit the red test slice**
 
@@ -95,7 +92,7 @@ git add packages/kirbot-core/tests/codex-home.test.ts
 git commit -m "test: cover kirbot profile home mirroring"
 ```
 
-### Task 2: Implement Top-Level Home Mirroring And Codex-Related Exclusions
+### Task 2: Implement Top-Level Home Mirroring And `.codex` Exclusion
 
 **Files:**
 - Modify: `packages/kirbot-core/src/codex-home.ts`
@@ -108,7 +105,7 @@ Refactor `prepareKirbotCodexHome()` so `sourceHomePath` means the real home root
 Add helper structure like:
 
 ```ts
-const MIRROR_EXCLUDED_TOP_LEVEL_NAMES = new Set([".agents", ".codex"]);
+const MIRROR_EXCLUDED_TOP_LEVEL_NAMES = new Set([".codex"]);
 const MANAGED_LOCAL_TOP_LEVEL_NAMES = new Set([
   "auth.json",
   "config.toml",
@@ -137,7 +134,7 @@ Update auth seeding so the source becomes:
 seedAuthJsonIfMissing(join(sourceHomePath, ".codex"), targetHomePath);
 ```
 
-That preserves current Codex auth bootstrap behavior while keeping codex-related top-level state out of the mirror.
+That preserves current Codex auth bootstrap behavior while keeping `.codex` itself out of the mirror.
 
 - [ ] **Step 3: Keep the managed Codex boundary layered on top**
 
@@ -149,8 +146,7 @@ After mirror reconcile:
 Add or update comments so the ownership boundary is explicit:
 
 ```ts
-// Kirbot mirrors most top-level home entries by symlink, but codex-related
-// homes such as `.codex` and `.agents` are excluded.
+// Kirbot mirrors most top-level home entries by symlink, but `.codex` is excluded.
 // Inside the profile home, `config.toml` and `skills/` are Kirbot-managed,
 // while `sessions/`, `shell_snapshots/`, `tmp/`, `rules/`, and `superpowers/`
 // remain runtime-owned.
@@ -237,7 +233,7 @@ git commit -m "feat: isolate codex app-server home"
 
 Update docs to state:
 - profile homes mirror most top-level real-home entries by symlink
-- codex-related top-level entries such as `.codex` and `.agents` are excluded and remain profile-local
+- `.codex` is excluded and remains profile-local
 - changes inside already-mirrored paths reflect immediately
 - new or removed top-level real-home entries require Kirbot restart/reconcile
 
@@ -245,7 +241,7 @@ Use wording along these lines:
 
 ```md
 - Kirbot profile homes mirror most top-level entries from the runtime user's home by symlink.
-- codex-related top-level entries such as `~/.codex` and `~/.agents` are excluded from that mirror and remain isolated per profile.
+- `~/.codex` is excluded from that mirror and remains isolated per profile.
 - Changes inside already-mirrored paths are visible immediately through the symlink.
 - New or removed top-level home entries are picked up on Kirbot restart.
 ```
@@ -294,7 +290,6 @@ EOF
 
 Expected:
 - no `/home/dev/.codex/superpowers/...` paths in the output
-- no skill discovery through `/home/dev/.agents/skills/...` when that tree points back into `~/.codex`
 - profile-managed/system skills still present
 
 - [ ] **Step 3: Commit docs and verification-ready state**
