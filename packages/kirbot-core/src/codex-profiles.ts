@@ -25,6 +25,16 @@ export type CodexProfilesConfig = {
 };
 
 const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema)
+  ])
+);
 
 const approvalPolicySchema = z.union([
   z.enum(["untrusted", "on-failure", "on-request", "never"]),
@@ -62,8 +72,8 @@ const codexProfilesSourceSchema = z
         plan: z.string().min(1)
       })
       .catchall(z.string().min(1)),
-    skills: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
-    mcps: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
+    skills: z.record(z.string(), z.record(z.string(), jsonValueSchema)).default({}),
+    mcps: z.record(z.string(), z.record(z.string(), jsonValueSchema)).default({}),
     profiles: z.record(z.string(), codexProfileSourceSchema)
   })
   .strict();

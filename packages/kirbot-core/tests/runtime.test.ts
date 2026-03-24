@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 const mocks = vi.hoisted(() => {
   const existsSync = vi.fn();
+  const loadConfig = vi.fn();
   const spawnCodexAppServer = vi.fn();
   const prepareKirbotCodexHome = vi.fn();
   const initializeTelegramCommandSyncFailOpen = vi.fn();
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     existsSync,
+    loadConfig,
     spawnCodexAppServer,
     prepareKirbotCodexHome,
     initializeTelegramCommandSyncFailOpen,
@@ -35,6 +37,14 @@ vi.mock("node:fs", async () => {
   return {
     ...actual,
     existsSync: mocks.existsSync
+  };
+});
+
+vi.mock("../src/config", async () => {
+  const actual = await vi.importActual<typeof import("../src/config")>("../src/config");
+  return {
+    ...actual,
+    loadConfig: mocks.loadConfig
   };
 });
 
@@ -147,6 +157,7 @@ import { createKirbotRuntime } from "../src/runtime";
 describe("createKirbotRuntime profile routing", () => {
   beforeEach(() => {
     mocks.existsSync.mockReset();
+    mocks.loadConfig.mockReset();
     mocks.spawnCodexAppServer.mockImplementation(async ({ homePath }: { homePath?: string }) => {
       const stop = vi.fn(async () => undefined);
       const server = {
@@ -161,6 +172,7 @@ describe("createKirbotRuntime profile routing", () => {
   afterEach(() => {
     vi.clearAllMocks();
     mocks.existsSync.mockReset();
+    mocks.loadConfig.mockReset();
     mocks.codexGatewayInstances.length = 0;
     mocks.spawnedAppServers.length = 0;
     mocks.rpcClients.length = 0;
@@ -179,11 +191,39 @@ describe("createKirbotRuntime profile routing", () => {
       telegramApi: {} as TelegramApi
     });
 
-    expect(mocks.prepareKirbotCodexHome.mock.calls).toEqual([
-      [{ targetHomePath: generalHomePath }],
-      [{ targetHomePath: codingHomePath }],
-      [{ targetHomePath: docsHomePath }]
-    ]);
+    expect(mocks.prepareKirbotCodexHome.mock.calls[0]?.[0]).toEqual({
+      targetHomePath: generalHomePath,
+      managed: {
+        managedConfigToml: 'model = "gpt-5"\nsandbox_mode = "workspace-write"\napproval_policy = "on-request"\n',
+        managedSkillIds: [],
+        managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
+      }
+    });
+    expect(mocks.prepareKirbotCodexHome.mock.calls[1]?.[0]).toEqual({
+      targetHomePath: codingHomePath,
+      managed: {
+        managedConfigToml: [
+          'model = "gpt-5-codex"',
+          'sandbox_mode = "danger-full-access"',
+          'approval_policy = "never"',
+          "",
+          "[mcp_servers.github]",
+          'command = ["github-mcp", "serve"]',
+          'type = "stdio"',
+          ""
+        ].join("\n"),
+        managedSkillIds: ["brainstorming"],
+        managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
+      }
+    });
+    expect(mocks.prepareKirbotCodexHome.mock.calls[2]?.[0]).toEqual({
+      targetHomePath: docsHomePath,
+      managed: {
+        managedConfigToml: 'model = "gpt-5"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\n',
+        managedSkillIds: [],
+        managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
+      }
+    });
     expect(mocks.spawnCodexAppServer.mock.calls.map(([options]) => options?.homePath)).toEqual([
       generalHomePath,
       codingHomePath,
@@ -229,27 +269,125 @@ describe("createKirbotRuntime profile routing", () => {
     expect(mocks.rpcClients[1]!.close).toHaveBeenCalledTimes(1);
   });
 
-  it("cleans up the current gateway if managed config bootstrap fails before registration", async () => {
-    mocks.existsSync.mockReturnValue(false);
+  it("does not start any gateway if managed home reconciliation fails before spawn", async () => {
     const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
     const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
     const config = buildConfig(generalHomePath, codingHomePath, undefined, false);
-    mocks.codexGatewayBootstrapErrors.push(new Error("bootstrap failed"));
+    mocks.prepareKirbotCodexHome.mockImplementationOnce(() => {
+      throw new Error("home reconcile failed");
+    });
 
     await expect(
       createKirbotRuntime({
         config,
         telegramApi: {} as TelegramApi
       })
-    ).rejects.toThrow("bootstrap failed");
+    ).rejects.toThrow("home reconcile failed");
 
-    expect(mocks.spawnedAppServers).toHaveLength(1);
-    expect(mocks.spawnedAppServers[0]!.stop).toHaveBeenCalledTimes(1);
-    expect(mocks.rpcClients[0]!.close).toHaveBeenCalledTimes(1);
+    expect(mocks.spawnedAppServers).toHaveLength(0);
+    expect(mocks.spawnCodexAppServer).not.toHaveBeenCalled();
   });
 
-  it("bootstraps managed global config when config.toml is missing", async () => {
-    mocks.existsSync.mockReturnValue(false);
+  it("does not start any gateway when loadConfig validation fails before runtime initialization", async () => {
+    mocks.loadConfig.mockImplementation(() => {
+      throw new Error("invalid profile config");
+    });
+
+    await expect(
+      createKirbotRuntime({
+        telegramApi: {} as TelegramApi
+      })
+    ).rejects.toThrow("invalid profile config");
+
+    expect(mocks.spawnCodexAppServer).not.toHaveBeenCalled();
+    expect(mocks.prepareKirbotCodexHome).not.toHaveBeenCalled();
+  });
+
+  it("continues startup when loadConfig emits unused-asset warnings", async () => {
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.loadConfig.mockImplementation(() => {
+      console.warn("Unused declared skill id foo");
+      console.warn("Unused MCP registry entry bar");
+      return config;
+    });
+
+    await createKirbotRuntime({
+      telegramApi: {} as TelegramApi
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith("Unused declared skill id foo");
+    expect(warnSpy).toHaveBeenCalledWith("Unused MCP registry entry bar");
+    expect(mocks.spawnCodexAppServer).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows a profile whose managed config.toml is otherwise empty", async () => {
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath);
+    config.codex.profiles.general = {
+      homePath: generalHomePath,
+      model: undefined,
+      sandboxMode: undefined,
+      approvalPolicy: undefined,
+      skills: [],
+      mcps: []
+    };
+
+    await createKirbotRuntime({
+      config,
+      telegramApi: {} as TelegramApi
+    });
+
+    expect(mocks.prepareKirbotCodexHome.mock.calls[0]?.[0]).toEqual({
+      targetHomePath: generalHomePath,
+      managed: {
+        managedConfigToml: "",
+        managedSkillIds: [],
+        managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
+      }
+    });
+  });
+
+  it("quotes MCP table keys that are not bare TOML identifiers", async () => {
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath);
+    config.codex.profiles.coding!.mcps = ["github.com"];
+    config.codex.mcps = {
+      "github.com": {
+        type: "stdio",
+        command: ["github-mcp", "serve"]
+      }
+    };
+
+    await createKirbotRuntime({
+      config,
+      telegramApi: {} as TelegramApi
+    });
+
+    expect(mocks.prepareKirbotCodexHome.mock.calls[1]?.[0]).toEqual({
+      targetHomePath: codingHomePath,
+      managed: {
+        managedConfigToml: [
+          'model = "gpt-5-codex"',
+          'sandbox_mode = "danger-full-access"',
+          'approval_policy = "never"',
+          "",
+          '[mcp_servers."github.com"]',
+          'command = ["github-mcp", "serve"]',
+          'type = "stdio"',
+          ""
+        ].join("\n"),
+        managedSkillIds: ["brainstorming"],
+        managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
+      }
+    });
+  });
+
+  it("never bootstraps managed global config after handing runtime-owned config.toml to home reconciliation", async () => {
     const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
     const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
     const config = buildConfig(generalHomePath, codingHomePath);
@@ -259,22 +397,6 @@ describe("createKirbotRuntime profile routing", () => {
       telegramApi: {} as TelegramApi
     });
 
-    expect(mocks.existsSync).toHaveBeenCalledTimes(3);
-    expect(mocks.codexGatewayInstances.every((instance) => instance.bootstrapManagedGlobalConfig.mock.calls.length === 1)).toBe(true);
-  });
-
-  it("skips managed global config bootstrap when config.toml already exists", async () => {
-    mocks.existsSync.mockReturnValue(true);
-    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
-    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
-    const config = buildConfig(generalHomePath, codingHomePath);
-
-    await createKirbotRuntime({
-      config,
-      telegramApi: {} as TelegramApi
-    });
-
-    expect(mocks.existsSync).toHaveBeenCalledTimes(3);
     expect(mocks.codexGatewayInstances).toHaveLength(3);
     expect(mocks.codexGatewayInstances.every((instance) => instance.bootstrapManagedGlobalConfig.mock.calls.length === 0)).toBe(true);
   });
@@ -300,15 +422,47 @@ function buildConfig(
     },
     codex: {
       defaultCwd: "/srv/kirbot",
+      profilesConfigPath: "/workspace/config/codex-profiles.json",
       profiles: {
-        general: { homePath: generalHomePath },
-        coding: { homePath: codingHomePath },
-        ...(includeDocs ? { docs: { homePath: docsHomePath } } : {})
+        general: {
+          homePath: generalHomePath,
+          model: "gpt-5",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "on-request",
+          skills: [],
+          mcps: []
+        },
+        coding: {
+          homePath: codingHomePath,
+          model: "gpt-5-codex",
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "never",
+          skills: ["brainstorming"],
+          mcps: ["github"]
+        },
+        ...(includeDocs
+          ? {
+              docs: {
+                homePath: docsHomePath,
+                model: "gpt-5",
+                sandboxMode: "read-only",
+                approvalPolicy: "on-request",
+                skills: [],
+                mcps: []
+              }
+            }
+          : {})
       },
       routing: {
         general: "general",
         thread: "coding",
         plan: includeDocs ? "docs" : "coding"
+      },
+      mcps: {
+        github: {
+          type: "stdio",
+          command: ["github-mcp", "serve"]
+        }
       },
       model: undefined,
       modelProvider: undefined,

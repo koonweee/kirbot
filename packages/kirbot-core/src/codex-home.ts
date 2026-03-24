@@ -80,7 +80,6 @@ function seedLegacyCodexHome(options: {
 function validateManagedCodexHome(managed: ManagedKirbotCodexHome): void {
   if (
     typeof managed.managedConfigToml !== "string" ||
-    managed.managedConfigToml.length === 0 ||
     !Array.isArray(managed.managedSkillIds) ||
     managed.managedSkillIds.some((skillId) => typeof skillId !== "string") ||
     typeof managed.managedProfilesConfigPath !== "string" ||

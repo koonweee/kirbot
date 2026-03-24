@@ -1023,15 +1023,31 @@ describe("TelegramCodexBridge", () => {
       },
       codex: {
         defaultCwd: "/workspace",
+        profilesConfigPath: "/workspace/config/codex-profiles.json",
         profiles: {
-          general: { homePath: "/srv/kirbot/codex-home-general" },
-          coding: { homePath: "/srv/kirbot/codex-home-coding" }
+          general: {
+            homePath: "/srv/kirbot/codex-home-general",
+            model: "gpt-5",
+            sandboxMode: "workspace-write",
+            approvalPolicy: "on-request",
+            skills: [],
+            mcps: []
+          },
+          coding: {
+            homePath: "/srv/kirbot/codex-home-coding",
+            model: "gpt-5-codex",
+            sandboxMode: "danger-full-access",
+            approvalPolicy: "never",
+            skills: [],
+            mcps: []
+          }
         },
         routing: {
           general: "general",
           thread: "coding",
           plan: "coding"
         },
+        mcps: {},
         model: undefined,
         modelProvider: undefined,
         sandbox: undefined,

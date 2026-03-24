@@ -1149,15 +1149,31 @@ function createConfig(tempDir: string): AppConfig {
     },
     codex: {
       defaultCwd: "/workspace",
+      profilesConfigPath: "/workspace/config/codex-profiles.json",
       profiles: {
-        general: { homePath: join(tempDir, "codex-general") },
-        coding: { homePath: join(tempDir, "codex-coding") }
+        general: {
+          homePath: join(tempDir, "codex-general"),
+          model: "gpt-5",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "on-request",
+          skills: [],
+          mcps: []
+        },
+        coding: {
+          homePath: join(tempDir, "codex-coding"),
+          model: "gpt-5-codex",
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "never",
+          skills: [],
+          mcps: []
+        }
       },
       routing: {
         general: "general",
         thread: "coding",
         plan: "coding"
       },
+      mcps: {},
       model: undefined,
       modelProvider: undefined,
       sandbox: undefined,

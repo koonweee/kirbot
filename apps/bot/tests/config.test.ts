@@ -26,8 +26,8 @@ describe("loadConfig", () => {
     expect(config.codex.baseInstructions).toBeUndefined();
     expect(config.codex.developerInstructions).toBe(readFileSync("apps/bot/KIRBOT.md", "utf8"));
     expect(config.codex.profilesConfigPath).toBe(resolve("config/codex-profiles.json"));
-    expect(config.codex.profiles.general.homePath).toBe(resolve("data/homes/general"));
-    expect(config.codex.profiles.coding.homePath).toBe(resolve("data/homes/coding"));
+    expect(config.codex.profiles.general!.homePath).toBe(resolve("data/homes/general"));
+    expect(config.codex.profiles.coding!.homePath).toBe(resolve("data/homes/coding"));
   });
 
   it("ignores a legacy base-instructions env var if present", async () => {

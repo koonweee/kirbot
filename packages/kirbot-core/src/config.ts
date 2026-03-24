@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { CodexProfilesConfig } from "./codex-profiles";
 import { expandHomePath, parseCodexProfilesConfig } from "./codex-profiles";
+import type { DatabaseProfileRouting } from "./db";
 import { resolveCodexProfilesConfigPath } from "./repo-paths";
 
 loadKirbotDotenv();
@@ -80,7 +81,8 @@ export type AppConfig = {
     defaultCwd: string;
     profilesConfigPath: string;
     profiles: CodexProfilesConfig["profiles"];
-    routing: CodexProfilesConfig["routes"];
+    routing: DatabaseProfileRouting;
+    mcps: CodexProfilesConfig["mcps"];
     model: undefined;
     modelProvider: undefined;
     sandbox: undefined;
@@ -119,7 +121,8 @@ export function loadConfig(): AppConfig {
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
       profilesConfigPath: codexProfilesConfigPath,
       profiles: codexProfiles.profiles,
-      routing: codexProfiles.routes,
+      routing: codexProfiles.routes as DatabaseProfileRouting,
+      mcps: codexProfiles.mcps,
       model: undefined,
       modelProvider: undefined,
       sandbox: undefined,

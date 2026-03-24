@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
 import { CodexGateway, spawnCodexAppServer } from "@kirbot/codex-client";
+import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 import { TelegramCodexBridge, type BridgeCodexApi } from "./bridge";
 import type { AppConfig } from "./config";
-import { prepareKirbotCodexHome, resolveKirbotCodexConfigPath } from "./codex-home";
+import { prepareKirbotCodexHome } from "./codex-home";
 import { BridgeDatabase } from "./db";
 import { createConsoleLogTarget, createSourceLogger, type AppLogTarget, type LoggerLike } from "./logging";
 import { TemporaryImageStore } from "./media-store";
@@ -134,16 +134,16 @@ async function initializeCodex(
   try {
     for (const [profileId, profile] of Object.entries(config.codex.profiles)) {
       prepareKirbotCodexHome({
-        targetHomePath: profile.homePath
+        targetHomePath: profile.homePath,
+        managed: {
+          managedConfigToml: renderManagedConfigToml(profile, config.codex.mcps),
+          managedSkillIds: profile.skills,
+          managedProfilesConfigPath: config.codex.profilesConfigPath
+        }
       });
 
-      const shouldBootstrapManagedConfig = !existsSync(resolveKirbotCodexConfigPath(profile.homePath));
       const gateway = await initializeGateway(config, logger, profile.homePath);
       gateways[profileId] = gateway;
-      if (shouldBootstrapManagedConfig) {
-        await gateway.codex.bootstrapManagedGlobalConfig();
-      }
-
     }
   } catch (error) {
     await Promise.all(
@@ -203,6 +203,77 @@ async function cleanupGatewayResources(
   spawnedAppServer: SpawnedAppServer | undefined
 ): Promise<void> {
   await Promise.allSettled([rpcClient?.close(), spawnedAppServer?.stop()]);
+}
+
+function renderManagedConfigToml(
+  profile: AppConfig["codex"]["profiles"][string],
+  mcpRegistry: AppConfig["codex"]["mcps"]
+): string {
+  const lines: string[] = [];
+
+  if (profile.model) {
+    lines.push(`model = ${renderTomlValue(profile.model)}`);
+  }
+  if (profile.sandboxMode) {
+    lines.push(`sandbox_mode = ${renderTomlValue(profile.sandboxMode)}`);
+  }
+  if (profile.approvalPolicy !== undefined) {
+    lines.push(`approval_policy = ${renderTomlValue(profile.approvalPolicy as JsonValue)}`);
+  }
+
+  for (const mcpId of profile.mcps) {
+    const mcpConfig = mcpRegistry[mcpId];
+    if (!mcpConfig) {
+      throw new Error(`Profile references missing MCP registry entry ${JSON.stringify(mcpId)}`);
+    }
+
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(`[mcp_servers.${renderTomlKey(mcpId)}]`);
+    for (const [key, value] of Object.entries(mcpConfig).sort(([left], [right]) => left.localeCompare(right))) {
+      if (value === undefined) {
+        continue;
+      }
+
+      lines.push(`${renderTomlKey(key)} = ${renderTomlValue(value)}`);
+    }
+  }
+
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+}
+
+function renderTomlValue(value: JsonValue): string {
+  if (value === null) {
+    throw new Error("Managed Codex config does not support null TOML values");
+  }
+
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new Error(`Managed Codex config only supports finite numeric TOML values, got ${value}`);
+      }
+      return `${value}`;
+    case "string":
+      return JSON.stringify(value);
+    case "object":
+      if (Array.isArray(value)) {
+      return `[${value.map((entry) => renderTomlValue(entry)).join(", ")}]`;
+      }
+
+      return `{ ${Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => `${renderTomlKey(key)} = ${renderTomlValue(entry!)}`)
+        .join(", ")} }`;
+    default:
+      throw new Error(`Unsupported TOML value type: ${typeof value}`);
+  }
+}
+
+function renderTomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

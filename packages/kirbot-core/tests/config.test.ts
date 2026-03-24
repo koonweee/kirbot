@@ -62,8 +62,8 @@ describe("core config module", () => {
           thread: "coding",
           plan: "coding"
         });
-        expect(config.codex.profiles.general.homePath).toBe("/var/lib/kirbot/homes/general");
-        expect(config.codex.profiles.coding.homePath).toBe("/var/lib/kirbot/homes/coding");
+        expect(config.codex.profiles.general!.homePath).toBe("/var/lib/kirbot/homes/general");
+        expect(config.codex.profiles.coding!.homePath).toBe("/var/lib/kirbot/homes/coding");
       }
     );
   });
@@ -77,8 +77,8 @@ describe("core config module", () => {
         const config = loadConfig();
 
         expect(config.database.path).toBe(resolve(homedir(), "kirbot/telegram-codex-bridge.sqlite"));
-        expect(config.codex.profiles.general.homePath).toBe(resolve(homedir(), "kirbot/homes/general"));
-        expect(config.codex.profiles.coding.homePath).toBe(resolve(homedir(), "kirbot/homes/coding"));
+        expect(config.codex.profiles.general!.homePath).toBe(resolve(homedir(), "kirbot/homes/general"));
+        expect(config.codex.profiles.coding!.homePath).toBe(resolve(homedir(), "kirbot/homes/coding"));
       }
     );
   });
