@@ -149,6 +149,30 @@ describe("core config module", () => {
     });
   });
 
+  it("rejects bare home roots for profile homePath values", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "~" },
+          coding: { homePath: "/srv/kirbot/codex-home-coding" }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("must not be the user home root");
+  });
+
   it("rejects routing targets that reference an undeclared profile", async () => {
     process.env = {
       ...baseEnv,

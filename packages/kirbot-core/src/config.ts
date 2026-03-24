@@ -1,6 +1,5 @@
 import { config as loadDotenv } from "dotenv";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { z } from "zod";
 
@@ -8,7 +7,7 @@ import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/Ask
 import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
 import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 import type { CodexProfilesConfig } from "./codex-profiles";
-import { parseCodexProfilesConfig } from "./codex-profiles";
+import { expandHomePath, parseCodexProfilesConfig } from "./codex-profiles";
 
 loadKirbotDotenv();
 
@@ -145,18 +144,6 @@ export function loadConfig(): AppConfig {
       config: parseJsonConfig(parsed.CODEX_CONFIG_JSON)
     }
   };
-}
-
-function expandHomePath(value: string): string {
-  if (value === "~") {
-    return homedir();
-  }
-
-  if (value.startsWith("~/")) {
-    return `${homedir()}${value.slice(1)}`;
-  }
-
-  return value;
 }
 
 function parseJsonConfig(

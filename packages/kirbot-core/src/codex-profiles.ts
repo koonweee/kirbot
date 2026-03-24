@@ -49,14 +49,17 @@ export function parseCodexProfilesConfig(value: string): CodexProfilesConfig {
       Object.entries(parsed.profiles).map(([profileId, profile]) => [
         profileId,
         {
-          homePath: expandHomePath(profile.homePath)
+          homePath:
+            profile.homePath === "~"
+              ? failBareHomeRoot(profileId)
+              : expandHomePath(profile.homePath)
         }
       ])
     )
   };
 }
 
-function expandHomePath(value: string): string {
+export function expandHomePath(value: string): string {
   if (value === "~") {
     return homedir();
   }
@@ -66,4 +69,8 @@ function expandHomePath(value: string): string {
   }
 
   return value;
+}
+
+function failBareHomeRoot(profileId: string): never {
+  throw new Error(`Codex profile ${profileId} homePath must not be the user home root`);
 }
