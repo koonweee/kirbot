@@ -319,8 +319,17 @@ class FakeCodex implements BridgeCodexApi {
 
   readonly #eventQueue: AppServerEvent[] = [];
   readonly #eventWaiters: Array<(event: AppServerEvent | null) => void> = [];
+  readonly registerThreadProfileCalls: Array<{ threadId: string; profileId: string }> = [];
+  readonly registeredThreadProfiles = new Set<string>();
+  enforceThreadRouteRegistration = false;
 
-  registerThreadProfile(_threadId: string, _profileId: string): void {}
+  registerThreadProfile(threadId: string, profileId: string): void {
+    this.registerThreadProfileCalls.push({
+      threadId,
+      profileId
+    });
+    this.registeredThreadProfiles.add(threadId);
+  }
 
   async createThread(profileId: string, optionsTitle: string, options?: {
     cwd?: string | null;
@@ -379,6 +388,7 @@ class FakeCodex implements BridgeCodexApi {
     name: string | null;
     cwd: string;
   }> {
+    this.#assertThreadRouteRegistered(threadId);
     this.readThreadCalls.push(threadId);
     return {
       name: this.threadName ?? null,
@@ -448,6 +458,7 @@ class FakeCodex implements BridgeCodexApi {
     approvalPolicy: AskForApproval;
     sandboxPolicy: SandboxPolicy;
   }> {
+    this.#assertThreadRouteRegistered(threadId);
     this.ensuredThreads.push(threadId);
     return {
       model: this.threadModel ?? this.model,
@@ -460,6 +471,7 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async compactThread(threadId: string): Promise<void> {
+    this.#assertThreadRouteRegistered(threadId);
     this.compactThreadCalls.push({ threadId });
   }
 
@@ -477,6 +489,7 @@ class FakeCodex implements BridgeCodexApi {
       } | null;
     }
   ): Promise<{ id: string }> {
+    this.#assertThreadRouteRegistered(threadId);
     if (this.nextSendTurnError) {
       const error = this.nextSendTurnError;
       this.nextSendTurnError = null;
@@ -529,6 +542,7 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<{ turnId: string }> {
+    this.#assertThreadRouteRegistered(threadId);
     const steerCall = { threadId, expectedTurnId, text: flattenTextInput(input) } as {
       threadId: string;
       expectedTurnId: string;
@@ -552,6 +566,7 @@ class FakeCodex implements BridgeCodexApi {
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    this.#assertThreadRouteRegistered(threadId);
     this.interruptCalls.push({ threadId, turnId });
     if (this.nextInterruptError) {
       const error = this.nextInterruptError;
@@ -560,9 +575,12 @@ class FakeCodex implements BridgeCodexApi {
     }
   }
 
-  async archiveThread(): Promise<void> {}
+  async archiveThread(threadId: string): Promise<void> {
+    this.#assertThreadRouteRegistered(threadId);
+  }
 
-  async readTurnSnapshot(): Promise<ResolvedTurnSnapshot> {
+  async readTurnSnapshot(threadId: string): Promise<ResolvedTurnSnapshot> {
+    this.#assertThreadRouteRegistered(threadId);
     return {
       text: this.readTurnMessagesResult,
       assistantText: this.readTurnMessagesResult,
@@ -643,6 +661,16 @@ class FakeCodex implements BridgeCodexApi {
     }
 
     this.#eventQueue.push(event);
+  }
+
+  #assertThreadRouteRegistered(threadId: string): void {
+    if (!this.enforceThreadRouteRegistration) {
+      return;
+    }
+
+    if (!this.registeredThreadProfiles.has(threadId)) {
+      throw new Error(`Thread route not registered before use: ${threadId}`);
+    }
   }
 }
 
@@ -995,6 +1023,55 @@ describe("TelegramCodexBridge", () => {
     expect(session?.codexThreadId).toBe("thread-1");
     expect(session?.surface).toEqual({ kind: "general" });
     expect(session?.profileId).toBe("general");
+  });
+
+  it("re-registers a persisted root session route before using its thread after restart", async () => {
+    codex.enforceThreadRouteRegistration = true;
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-resumed");
+    await database.updateRootSessionSettings(-1001, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 11,
+      updateId: 21,
+      userId: 42,
+      text: "Resume the thread"
+    });
+
+    expect(codex.registerThreadProfileCalls).toEqual([
+      {
+        threadId: "thread-resumed",
+        profileId: "general"
+      }
+    ]);
+    expect(codex.turns).toEqual([
+      {
+        threadId: "thread-resumed",
+        text: "Resume the thread",
+        turnId: "turn-1"
+      }
+    ]);
   });
 
   it("treats General as the shared root slash-command scope", () => {

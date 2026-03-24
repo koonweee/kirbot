@@ -2883,7 +2883,13 @@ export class TelegramCodexBridge {
   }
 
   private async ensurePersistedSessionSettings<T extends TopicSession | BridgeSession>(session: T): Promise<T> {
-    if (persistedThreadSettingsAreComplete(session.settings) || !session.codexThreadId) {
+    if (!session.codexThreadId) {
+      return session;
+    }
+
+    this.codex.registerThreadProfile(session.codexThreadId, session.profileId);
+
+    if (persistedThreadSettingsAreComplete(session.settings)) {
       return session;
     }
 
