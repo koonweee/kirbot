@@ -186,6 +186,30 @@ describe("core config module", () => {
     expect(() => loadConfig()).toThrow("must not share the same homePath");
   });
 
+  it("rejects duplicate profile home paths after path canonicalization", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "/srv/kirbot/codex-home-shared" },
+          coding: { homePath: "/srv/kirbot/./codex-home-shared/" }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("must not share the same homePath");
+  });
+
   it("rejects bare home roots for profile homePath values", async () => {
     process.env = {
       ...baseEnv,
@@ -231,6 +255,30 @@ describe("core config module", () => {
     const { loadConfig } = await import("../src/config");
 
     expect(() => loadConfig()).toThrow("undeclared profile");
+  });
+
+  it("rejects configs where General shares a routed profile with non-general entrypoints", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: "/srv/kirbot/codex-home-general" },
+          shared: { homePath: "/srv/kirbot/codex-home-shared" }
+        },
+        routing: {
+          general: "shared",
+          thread: "shared",
+          plan: "shared"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("routing.general");
   });
 
   it("rejects a profile without a homePath", async () => {

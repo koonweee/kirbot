@@ -45,6 +45,7 @@ class FakeCodexApi implements BridgeCodexApi {
   readonly userInputResponses: RequestId[] = [];
   readonly unsupportedResponses: RequestId[] = [];
   nextCommandApprovalError: Error | null = null;
+  nextCreatedThreadId: string | null = null;
   readonly events: AppServerEvent[] = [];
   readonly threadIds = new Set<string>();
   readonly missingThreadIds = new Set<string>();
@@ -65,7 +66,8 @@ class FakeCodexApi implements BridgeCodexApi {
       settings?: Record<string, unknown> | null;
     }
   ): Promise<{ threadId: string; branch: string | null } & typeof DEFAULT_SETTINGS> {
-    const threadId = `${this.profileId}-thread-${this.createThreadCalls.length + 1}`;
+    const threadId = this.nextCreatedThreadId ?? `${this.profileId}-thread-${this.createThreadCalls.length + 1}`;
+    this.nextCreatedThreadId = null;
     this.createThreadCalls.push({
       profileId,
       title,
@@ -203,7 +205,8 @@ describe("RoutedCodexApi", () => {
 
     const thread = await routed.createThread("coding", "New session");
 
-    expect(thread.threadId).toBe("coding-thread-1");
+    expect(thread.threadId).not.toBe("coding-thread-1");
+    expect(coding.threadIds.has("coding-thread-1")).toBe(true);
     expect(coding.createThreadCalls).toEqual([
       {
         profileId: "coding",
@@ -231,6 +234,7 @@ describe("RoutedCodexApi", () => {
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
     const thread = await routed.createThread("coding", "New session");
+    const upstreamThreadId = Array.from(coding.threadIds)[0]!;
     coding.events.push({
       kind: "serverRequest",
       request: {
@@ -238,13 +242,17 @@ describe("RoutedCodexApi", () => {
         method: "item/commandExecution/requestApproval",
         id: 42,
         params: {
-          threadId: thread.threadId
+          threadId: upstreamThreadId
         }
       } as never
     });
 
     const event = await routed.nextEvent();
-    await routed.respondToCommandApproval(42, {
+    expect(event?.kind).toBe("serverRequest");
+    if (!event || event.kind !== "serverRequest") {
+      throw new Error("Expected serverRequest event");
+    }
+    await routed.respondToCommandApproval(event!.request.id, {
       decision: "accept"
     });
 
@@ -252,13 +260,177 @@ describe("RoutedCodexApi", () => {
     await routed.ensureThreadLoaded(thread.threadId);
     await routed.sendTurn(thread.threadId, []);
 
-    expect(event?.kind).toBe("serverRequest");
     expect(coding.commandApprovalResponses).toEqual([42]);
     expect(general.commandApprovalResponses).toEqual([]);
-    expect(coding.ensureThreadLoadedCalls).toEqual([thread.threadId]);
+    expect(coding.ensureThreadLoadedCalls).toEqual([upstreamThreadId]);
     expect(general.ensureThreadLoadedCalls).toEqual([]);
-    expect(coding.sendTurnCalls).toEqual([thread.threadId]);
+    expect(coding.sendTurnCalls).toEqual([upstreamThreadId]);
     expect(general.sendTurnCalls).toEqual([]);
+  });
+
+  it("namespaces new thread and request ids so identical upstream ids from different gateways do not collide", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    general.nextCreatedThreadId = "shared-thread";
+    coding.nextCreatedThreadId = "shared-thread";
+    const routed = new RoutedCodexApi({ general, coding });
+
+    const generalThread = await routed.createThread("general", "General session");
+    const codingThread = await routed.createThread("coding", "Coding session");
+
+    expect(generalThread.threadId).not.toBe("shared-thread");
+    expect(codingThread.threadId).not.toBe("shared-thread");
+    expect(generalThread.threadId).not.toBe(codingThread.threadId);
+
+    general.events.push({
+      kind: "serverRequest",
+      request: {
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        id: 7,
+        params: {
+          threadId: "shared-thread"
+        }
+      } as never
+    });
+    coding.events.push({
+      kind: "serverRequest",
+      request: {
+        jsonrpc: "2.0",
+        method: "item/commandExecution/requestApproval",
+        id: 7,
+        params: {
+          threadId: "shared-thread"
+        }
+      } as never
+    });
+
+    const events = [await routed.nextEvent(), await routed.nextEvent()];
+    const requestIds = events.map((event) => event?.kind === "serverRequest" ? event.request.id : null);
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "serverRequest",
+          request: expect.objectContaining({
+            params: expect.objectContaining({
+              threadId: generalThread.threadId
+            })
+          })
+        },
+        {
+          kind: "serverRequest",
+          request: expect.objectContaining({
+            params: expect.objectContaining({
+              threadId: codingThread.threadId
+            })
+          })
+        }
+      ])
+    );
+    expect(requestIds).not.toContain(7);
+    expect(new Set(requestIds).size).toBe(2);
+
+    await routed.respondToCommandApproval(requestIds[0]!, {
+      decision: "accept"
+    });
+    await routed.respondToCommandApproval(requestIds[1]!, {
+      decision: "accept"
+    });
+    await routed.ensureThreadLoaded(generalThread.threadId);
+    await routed.ensureThreadLoaded(codingThread.threadId);
+    await routed.sendTurn(generalThread.threadId, []);
+    await routed.sendTurn(codingThread.threadId, []);
+
+    expect(general.commandApprovalResponses).toEqual([7]);
+    expect(coding.commandApprovalResponses).toEqual([7]);
+    expect(general.ensureThreadLoadedCalls).toEqual(["shared-thread"]);
+    expect(coding.ensureThreadLoadedCalls).toEqual(["shared-thread"]);
+    expect(general.sendTurnCalls).toEqual(["shared-thread"]);
+    expect(coding.sendTurnCalls).toEqual(["shared-thread"]);
+  });
+
+  it("keeps legacy raw thread ids routable while isolating them from new namespaced sessions", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    coding.nextCreatedThreadId = "legacy-thread";
+    general.threadIds.add("legacy-thread");
+    const routed = new RoutedCodexApi({ general, coding });
+
+    routed.registerThreadProfile("legacy-thread", "general");
+    await routed.ensureThreadLoaded("legacy-thread");
+
+    const codingThread = await routed.createThread("coding", "Coding session");
+    coding.events.push({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "legacy-thread",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: []
+          }
+        }
+      } as never
+    });
+    general.events.push({
+      kind: "notification",
+      notification: {
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "legacy-thread",
+          turn: {
+            id: "turn-2",
+            status: "completed",
+            items: []
+          }
+        }
+      } as never
+    });
+
+    const events = [await routed.nextEvent(), await routed.nextEvent()];
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "notification",
+          notification: {
+            jsonrpc: "2.0",
+            method: "turn/completed",
+            params: {
+              threadId: codingThread.threadId,
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: []
+              }
+            }
+          } as never
+        },
+        {
+          kind: "notification",
+          notification: {
+            jsonrpc: "2.0",
+            method: "turn/completed",
+            params: {
+              threadId: "legacy-thread",
+              turn: {
+                id: "turn-2",
+                status: "completed",
+                items: []
+              }
+            }
+          } as never
+        }
+      ])
+    );
+
+    expect(general.ensureThreadLoadedCalls).toEqual(["legacy-thread"]);
+    expect(coding.ensureThreadLoadedCalls).toEqual([]);
   });
 
   it("fails immediately for unknown thread ids without probing another gateway", async () => {
@@ -293,6 +465,7 @@ describe("RoutedCodexApi", () => {
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
     const thread = await routed.createThread("coding", "New session");
+    const upstreamThreadId = Array.from(coding.threadIds)[0]!;
     coding.events.push(
       {
         kind: "notification",
@@ -300,7 +473,7 @@ describe("RoutedCodexApi", () => {
           jsonrpc: "2.0",
           method: "turn/completed",
           params: {
-            threadId: thread.threadId,
+            threadId: upstreamThreadId,
             turn: {
               id: "turn-1",
               status: "completed",
@@ -315,7 +488,7 @@ describe("RoutedCodexApi", () => {
           jsonrpc: "2.0",
           method: "thread/closed",
           params: {
-            threadId: thread.threadId
+            threadId: upstreamThreadId
           }
         } as never
       }
@@ -372,13 +545,14 @@ describe("RoutedCodexApi", () => {
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
     const thread = await routed.createThread("coding", "New session");
+    const upstreamThreadId = Array.from(coding.threadIds)[0]!;
     coding.events.push({
       kind: "notification",
       notification: {
         jsonrpc: "2.0",
         method,
         params: {
-          threadId: thread.threadId
+          threadId: upstreamThreadId
         }
       } as never
     });
@@ -419,7 +593,8 @@ describe("RoutedCodexApi", () => {
     const general = new FakeCodexApi("general");
     const coding = new FakeCodexApi("coding");
     const routed = new RoutedCodexApi({ general, coding });
-    const thread = await routed.createThread("coding", "New session");
+    await routed.createThread("coding", "New session");
+    const upstreamThreadId = Array.from(coding.threadIds)[0]!;
     coding.events.push({
       kind: "serverRequest",
       request: {
@@ -427,22 +602,26 @@ describe("RoutedCodexApi", () => {
         method: "item/commandExecution/requestApproval",
         id: 99,
         params: {
-          threadId: thread.threadId
+          threadId: upstreamThreadId
         }
       } as never
     });
 
-    await routed.nextEvent();
+    const event = await routed.nextEvent();
+    expect(event?.kind).toBe("serverRequest");
+    if (!event || event.kind !== "serverRequest") {
+      throw new Error("Expected serverRequest event");
+    }
     coding.nextCommandApprovalError = new Error("transient approval failure");
 
     await expect(
-      routed.respondToCommandApproval(99, {
+      routed.respondToCommandApproval(event.request.id, {
         decision: "accept"
       })
     ).rejects.toThrow("transient approval failure");
 
     await expect(
-      routed.respondToCommandApproval(99, {
+      routed.respondToCommandApproval(event.request.id, {
         decision: "accept"
       })
     ).resolves.toBeUndefined();

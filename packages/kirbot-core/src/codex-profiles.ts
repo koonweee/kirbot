@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { homedir } from "node:os";
+import { resolve } from "node:path";
 
 const codexProfileSchema = z.object({
   homePath: z.string().min(1)
@@ -26,6 +27,18 @@ const codexProfilesConfigSchema = z
         });
       }
     }
+
+    for (const [entrypoint, profileId] of Object.entries(value.routing)) {
+      if (entrypoint === "general" || profileId !== value.routing.general) {
+        continue;
+      }
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["routing", "general"],
+        message: `routing.general must use a dedicated profile and cannot share ${JSON.stringify(profileId)} with routing.${entrypoint}`
+      });
+    }
   });
 
 export type CodexProfileId = string;
@@ -49,7 +62,7 @@ export function parseCodexProfilesConfig(value: string): CodexProfilesConfig {
     const homePath =
       profile.homePath === "~"
         ? failBareHomeRoot(profileId)
-        : expandHomePath(profile.homePath);
+        : canonicalizeHomePath(profile.homePath);
     const existingProfileId = seenHomePaths.get(homePath);
     if (existingProfileId) {
       throw new Error(
@@ -77,6 +90,10 @@ export function expandHomePath(value: string): string {
   }
 
   return value;
+}
+
+function canonicalizeHomePath(value: string): string {
+  return resolve(expandHomePath(value));
 }
 
 function failBareHomeRoot(profileId: string): never {
