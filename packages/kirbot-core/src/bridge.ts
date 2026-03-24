@@ -195,6 +195,7 @@ const COMMANDS_KEYBOARD_TEXT = "Commands";
 const DEFAULT_ROOT_SESSION_TITLE = "Root Chat";
 const DEFAULT_NEW_PLAN_SESSION_TITLE = "New Plan Session";
 const LEGACY_CODEX_HOME_REMOVED_TEXT = "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic.";
+const LEGACY_CODEX_HOME_REMOVED_CALLBACK_TEXT = "Session belongs to a removed legacy Codex home";
 const STAGED_TURN_EVENT_TIMEOUT_MS = 10_000;
 const MODEL_PAGE_SIZE = 6;
 const CUSTOM_COMMAND_CONFIRMATION_STALE_TEXT = "This confirmation is no longer pending";
@@ -383,6 +384,9 @@ export class TelegramCodexBridge {
       });
     } catch (error) {
       if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        await this.answerCallbackQuery(event.callbackQueryId, {
+          text: LEGACY_CODEX_HOME_REMOVED_CALLBACK_TEXT
+        });
         return;
       }
 

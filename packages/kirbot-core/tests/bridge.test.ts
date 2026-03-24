@@ -3072,6 +3072,50 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("acks slash callbacks when a persisted topic session belongs to a removed legacy Codex home", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 781 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy-callback");
+    await database.updateTopicSessionSettings(-1001, 781, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy-callback");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-legacy-model",
+      data: "slash:model:pick:0",
+      chatId: -1001,
+      topicId: 781,
+      userId: 42
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic."
+    );
+    expect(telegram.callbackAnswers.at(-1)).toEqual({
+      callbackQueryId: "callback-legacy-model",
+      options: {
+        text: "Session belongs to a removed legacy Codex home"
+      }
+    });
+  });
+
   it.each([
     {
       title: "General",
