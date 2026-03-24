@@ -384,6 +384,9 @@ export class TelegramCodexBridge {
       });
     } catch (error) {
       if (this.isLegacyRemovedCodexHomeSessionError(error)) {
+        if (event.data === TOPIC_IMPLEMENT_CALLBACK_DATA) {
+          return;
+        }
         await this.answerCallbackQuery(event.callbackQueryId, {
           text: LEGACY_CODEX_HOME_REMOVED_CALLBACK_TEXT
         });

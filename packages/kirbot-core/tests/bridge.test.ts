@@ -3116,6 +3116,45 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("does not double-ack implement callbacks when a persisted topic session belongs to a removed legacy Codex home", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 782 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy-implement-callback");
+    await database.updateTopicSessionSettings(-1001, 782, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy-implement-callback");
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "callback-legacy-implement",
+      data: TOPIC_IMPLEMENT_CALLBACK_DATA,
+      chatId: -1001,
+      topicId: 782,
+      userId: 42
+    });
+
+    expect(telegram.sentMessages.some((message) =>
+      message.text === "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic."
+    )).toBe(true);
+    expect(telegram.callbackAnswers).toEqual([{ callbackQueryId: "callback-legacy-implement" }]);
+  });
+
   it.each([
     {
       title: "General",
