@@ -25,6 +25,8 @@ type CodexProfilesFile = {
     string,
     {
       model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
       sandboxMode?: string | { [key: string]: unknown };
       approvalPolicy?: unknown;
       skills?: string[];
@@ -302,6 +304,102 @@ describe("core config module", () => {
     );
   });
 
+  it("rejects invalid reasoning effort values", async () => {
+    await withFixture(
+      createConfig({
+        profiles: {
+          general: createProfile({ reasoningEffort: "maximum" })
+        }
+      }),
+      {},
+      async () => {
+        const error = await captureLoadConfigError();
+        expect(issuePaths(error)).toContain("profiles.general.reasoningEffort");
+      }
+    );
+  });
+
+  it("rejects invalid service tier values", async () => {
+    await withFixture(
+      createConfig({
+        profiles: {
+          general: createProfile({ serviceTier: "turbo" })
+        }
+      }),
+      {},
+      async () => {
+        const error = await captureLoadConfigError();
+        expect(issuePaths(error)).toContain("profiles.general.serviceTier");
+      }
+    );
+  });
+
+  it("rejects profiles that omit reasoningEffort", async () => {
+    await withFixtureText(
+      JSON.stringify({
+        routes: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        },
+        skills: {},
+        mcps: {},
+        profiles: {
+          general: {
+            model: "gpt-5",
+            serviceTier: "flex",
+            sandboxMode: "workspace-write",
+            approvalPolicy: "on-request",
+            skills: [],
+            mcps: []
+          },
+          coding: createProfile({
+            sandboxMode: "danger-full-access",
+            approvalPolicy: "never"
+          })
+        }
+      }),
+      {},
+      async () => {
+        const error = await captureLoadConfigError();
+        expect(issuePaths(error)).toContain("profiles.general.reasoningEffort");
+      }
+    );
+  });
+
+  it("rejects profiles that omit serviceTier", async () => {
+    await withFixtureText(
+      JSON.stringify({
+        routes: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        },
+        skills: {},
+        mcps: {},
+        profiles: {
+          general: {
+            model: "gpt-5",
+            reasoningEffort: "medium",
+            sandboxMode: "workspace-write",
+            approvalPolicy: "on-request",
+            skills: [],
+            mcps: []
+          },
+          coding: createProfile({
+            sandboxMode: "danger-full-access",
+            approvalPolicy: "never"
+          })
+        }
+      }),
+      {},
+      async () => {
+        const error = await captureLoadConfigError();
+        expect(issuePaths(error)).toContain("profiles.general.serviceTier");
+      }
+    );
+  });
+
   it("rejects profiles that reference undeclared skill ids", async () => {
     await withFixture(
       createConfig({
@@ -473,6 +571,8 @@ describe("core config module", () => {
 function createProfile(overrides: Partial<CodexProfilesFile["profiles"][string]> = {}) {
   return {
     model: "gpt-5",
+    reasoningEffort: "medium",
+    serviceTier: "flex",
     sandboxMode: "workspace-write",
     approvalPolicy: "on-request",
     skills: [],

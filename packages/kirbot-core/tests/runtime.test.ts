@@ -194,7 +194,14 @@ describe("createKirbotRuntime profile routing", () => {
     expect(mocks.prepareKirbotCodexHome.mock.calls[0]?.[0]).toEqual({
       targetHomePath: generalHomePath,
       managed: {
-        managedConfigToml: 'model = "gpt-5"\nsandbox_mode = "workspace-write"\napproval_policy = "on-request"\n',
+        managedConfigToml: [
+          'model = "gpt-5"',
+          'model_reasoning_effort = "medium"',
+          'service_tier = "flex"',
+          'sandbox_mode = "workspace-write"',
+          'approval_policy = "on-request"',
+          ""
+        ].join("\n"),
         managedSkillIds: [],
         managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
       }
@@ -204,6 +211,8 @@ describe("createKirbotRuntime profile routing", () => {
       managed: {
         managedConfigToml: [
           'model = "gpt-5-codex"',
+          'model_reasoning_effort = "high"',
+          'service_tier = "fast"',
           'sandbox_mode = "danger-full-access"',
           'approval_policy = "never"',
           "",
@@ -219,7 +228,14 @@ describe("createKirbotRuntime profile routing", () => {
     expect(mocks.prepareKirbotCodexHome.mock.calls[2]?.[0]).toEqual({
       targetHomePath: docsHomePath,
       managed: {
-        managedConfigToml: 'model = "gpt-5"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\n',
+        managedConfigToml: [
+          'model = "gpt-5"',
+          'model_reasoning_effort = "medium"',
+          'service_tier = "flex"',
+          'sandbox_mode = "read-only"',
+          'approval_policy = "on-request"',
+          ""
+        ].join("\n"),
         managedSkillIds: [],
         managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
       }
@@ -330,6 +346,8 @@ describe("createKirbotRuntime profile routing", () => {
     config.codex.profiles.general = {
       homePath: generalHomePath,
       model: undefined,
+      reasoningEffort: "medium",
+      serviceTier: "flex",
       sandboxMode: undefined,
       approvalPolicy: undefined,
       skills: [],
@@ -344,7 +362,11 @@ describe("createKirbotRuntime profile routing", () => {
     expect(mocks.prepareKirbotCodexHome.mock.calls[0]?.[0]).toEqual({
       targetHomePath: generalHomePath,
       managed: {
-        managedConfigToml: "",
+        managedConfigToml: [
+          'model_reasoning_effort = "medium"',
+          'service_tier = "flex"',
+          ""
+        ].join("\n"),
         managedSkillIds: [],
         managedProfilesConfigPath: "/workspace/config/codex-profiles.json"
       }
@@ -373,6 +395,8 @@ describe("createKirbotRuntime profile routing", () => {
       managed: {
         managedConfigToml: [
           'model = "gpt-5-codex"',
+          'model_reasoning_effort = "high"',
+          'service_tier = "fast"',
           'sandbox_mode = "danger-full-access"',
           'approval_policy = "never"',
           "",
@@ -427,6 +451,8 @@ function buildConfig(
         general: {
           homePath: generalHomePath,
           model: "gpt-5",
+          reasoningEffort: "medium",
+          serviceTier: "flex",
           sandboxMode: "workspace-write",
           approvalPolicy: "on-request",
           skills: [],
@@ -435,6 +461,8 @@ function buildConfig(
         coding: {
           homePath: codingHomePath,
           model: "gpt-5-codex",
+          reasoningEffort: "high",
+          serviceTier: "fast",
           sandboxMode: "danger-full-access",
           approvalPolicy: "never",
           skills: ["brainstorming"],
@@ -445,6 +473,8 @@ function buildConfig(
               docs: {
                 homePath: docsHomePath,
                 model: "gpt-5",
+                reasoningEffort: "medium",
+                serviceTier: "flex",
                 sandboxMode: "read-only",
                 approvalPolicy: "on-request",
                 skills: [],

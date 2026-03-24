@@ -11,6 +11,8 @@
   "profiles": {
     "general": {
       "model": "gpt-5",
+      "reasoningEffort": "medium",
+      "serviceTier": "flex",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",
       "skills": [],
@@ -18,6 +20,8 @@
     },
     "coding": {
       "model": "gpt-5-codex",
+      "reasoningEffort": "high",
+      "serviceTier": "fast",
       "sandboxMode": "danger-full-access",
       "approvalPolicy": "never",
       "skills": ["kirbot-skill-install"],

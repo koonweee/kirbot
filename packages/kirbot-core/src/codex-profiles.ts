@@ -3,7 +3,9 @@ import { dirname, resolve } from "node:path";
 import { z } from "zod";
 
 import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/AskForApproval";
+import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import type { SandboxMode } from "@kirbot/codex-client/generated/codex/v2/SandboxMode";
+import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
 import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/JsonValue";
 
 export type CodexProfileId = string;
@@ -11,6 +13,8 @@ export type CodexProfileId = string;
 export type CodexProfileConfig = {
   homePath: string;
   model: string | undefined;
+  reasoningEffort: ReasoningEffort;
+  serviceTier: ServiceTier;
   sandboxMode: SandboxMode | undefined;
   approvalPolicy: AskForApproval | undefined;
   skills: string[];
@@ -25,6 +29,8 @@ export type CodexProfilesConfig = {
 };
 
 const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+const reasoningEffortSchema = z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]);
+const serviceTierSchema = z.enum(["fast", "flex"]);
 const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
@@ -56,6 +62,8 @@ const approvalPolicySchema = z.union([
 const codexProfileSourceSchema = z
   .object({
     model: z.string().trim().min(1).optional(),
+    reasoningEffort: reasoningEffortSchema,
+    serviceTier: serviceTierSchema,
     sandboxMode: sandboxModeSchema.optional(),
     approvalPolicy: approvalPolicySchema.optional(),
     skills: z.array(z.string().min(1)).optional(),
@@ -197,6 +205,8 @@ export function parseCodexProfilesConfig(
     profiles[profileId] = {
       homePath,
       model: profile.model,
+      reasoningEffort: profile.reasoningEffort,
+      serviceTier: profile.serviceTier,
       sandboxMode: profile.sandboxMode,
       approvalPolicy: profile.approvalPolicy,
       skills: profileSkills,

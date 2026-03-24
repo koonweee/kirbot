@@ -214,6 +214,8 @@ function renderManagedConfigToml(
   if (profile.model) {
     lines.push(`model = ${renderTomlValue(profile.model)}`);
   }
+  lines.push(`model_reasoning_effort = ${renderTomlValue(profile.reasoningEffort)}`);
+  lines.push(`service_tier = ${renderTomlValue(profile.serviceTier)}`);
   if (profile.sandboxMode) {
     lines.push(`sandbox_mode = ${renderTomlValue(profile.sandboxMode)}`);
   }
