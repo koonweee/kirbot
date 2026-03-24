@@ -3038,14 +3038,21 @@ export class TelegramCodexBridge {
       throw new Error("Cannot operate on a persisted session without a Codex thread id");
     }
 
-    if (session?.codexThreadId) {
-      this.codex.registerThreadProfile(session.codexThreadId, session.profileId);
-    }
-
     try {
+      if (session?.codexThreadId) {
+        if (!Object.hasOwn(this.config.codex.profiles, session.profileId)) {
+          throw new LegacyRemovedCodexHomeSessionError();
+        }
+
+        this.codex.registerThreadProfile(session.codexThreadId, session.profileId);
+      }
+
       return await operation(threadId);
     } catch (error) {
-      if (session && this.isRemovedLegacyCodexHomeThreadError(error)) {
+      if (
+        session &&
+        (this.isRemovedLegacyCodexHomeThreadError(error) || this.isLegacyRemovedCodexHomeSessionError(error))
+      ) {
         if (isRootBridgeSession(session)) {
           await this.database.archiveSessionBySurface(session.telegramChatId, { kind: "general" });
         }

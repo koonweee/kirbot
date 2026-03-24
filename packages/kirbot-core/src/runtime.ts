@@ -139,11 +139,11 @@ async function initializeCodex(
 
       const shouldBootstrapManagedConfig = !existsSync(resolveKirbotCodexConfigPath(profile.homePath));
       const gateway = await initializeGateway(config, logger, profile.homePath);
+      gateways[profileId] = gateway;
       if (shouldBootstrapManagedConfig) {
         await gateway.codex.bootstrapManagedGlobalConfig();
       }
 
-      gateways[profileId] = gateway;
     }
   } catch (error) {
     await Promise.all(

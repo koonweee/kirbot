@@ -162,6 +162,30 @@ describe("core config module", () => {
     });
   });
 
+  it("rejects duplicate profile home paths after home expansion", async () => {
+    process.env = {
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_PROFILES_JSON: JSON.stringify({
+        profiles: {
+          general: { homePath: `${homedir()}/kirbot/codex-home-shared` },
+          coding: { homePath: "~/kirbot/codex-home-shared" }
+        },
+        routing: {
+          general: "general",
+          thread: "coding",
+          plan: "coding"
+        }
+      })
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("must not share the same homePath");
+  });
+
   it("rejects bare home roots for profile homePath values", async () => {
     process.env = {
       ...baseEnv,

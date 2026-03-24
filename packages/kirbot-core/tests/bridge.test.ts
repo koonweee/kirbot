@@ -1326,6 +1326,48 @@ describe("TelegramCodexBridge", () => {
     expect(codex.turns).toEqual([]);
   });
 
+  it("surfaces the removed-legacy-home message when a persisted session profile is no longer configured", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 7790 },
+      profileId: "shared"
+    });
+    await database.activateSession(pending.id, "thread-legacy-missing-profile");
+    await database.updateTopicSessionSettings(-1001, 7790, {
+      model: "gpt-5-codex",
+      reasoningEffort: null,
+      serviceTier: null,
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    codex.missingThreadIds.add("thread-legacy-missing-profile");
+
+    await expect(
+      bridge.handleUserTextMessage({
+        chatId: -1001,
+        topicId: 7790,
+        messageId: 140,
+        updateId: 240,
+        userId: 42,
+        text: "Resume the session with a removed profile"
+      })
+    ).resolves.toBeUndefined();
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This session belonged to a removed legacy Codex home. Restart it in a new thread or topic."
+    );
+    expect(codex.turns).toEqual([]);
+  });
+
   it("provisions a fresh root session after a removed legacy home failure archives the dead General session", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",

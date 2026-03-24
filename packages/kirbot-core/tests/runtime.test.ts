@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     bootstrapManagedGlobalConfig: ReturnType<typeof vi.fn>;
   }> = [];
   const codexGatewayInitializeErrors: Array<Error | undefined> = [];
+  const codexGatewayBootstrapErrors: Array<Error | undefined> = [];
 
   return {
     existsSync,
@@ -24,7 +25,8 @@ const mocks = vi.hoisted(() => {
     spawnedAppServers,
     rpcClients,
     codexGatewayInstances,
-    codexGatewayInitializeErrors
+    codexGatewayInitializeErrors,
+    codexGatewayBootstrapErrors
   };
 });
 
@@ -44,7 +46,12 @@ vi.mock("@kirbot/codex-client", () => {
         throw error;
       }
     });
-    readonly bootstrapManagedGlobalConfig = vi.fn(async () => undefined);
+    readonly bootstrapManagedGlobalConfig = vi.fn(async () => {
+      const error = mocks.codexGatewayBootstrapErrors.shift();
+      if (error) {
+        throw error;
+      }
+    });
 
     constructor(
       readonly rpcClient: unknown,
@@ -158,6 +165,7 @@ describe("createKirbotRuntime profile routing", () => {
     mocks.spawnedAppServers.length = 0;
     mocks.rpcClients.length = 0;
     mocks.codexGatewayInitializeErrors.length = 0;
+    mocks.codexGatewayBootstrapErrors.length = 0;
   });
 
   it("spawns one app-server per configured profile with the configured home path", async () => {
@@ -219,6 +227,25 @@ describe("createKirbotRuntime profile routing", () => {
     expect(mocks.spawnedAppServers[1]!.stop).toHaveBeenCalledTimes(1);
     expect(mocks.rpcClients[0]!.close).toHaveBeenCalledTimes(1);
     expect(mocks.rpcClients[1]!.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up the current gateway if managed config bootstrap fails before registration", async () => {
+    mocks.existsSync.mockReturnValue(false);
+    const generalHomePath = join(tmpdir(), `kirbot-runtime-general-${randomUUID()}`);
+    const codingHomePath = join(tmpdir(), `kirbot-runtime-coding-${randomUUID()}`);
+    const config = buildConfig(generalHomePath, codingHomePath, undefined, false);
+    mocks.codexGatewayBootstrapErrors.push(new Error("bootstrap failed"));
+
+    await expect(
+      createKirbotRuntime({
+        config,
+        telegramApi: {} as TelegramApi
+      })
+    ).rejects.toThrow("bootstrap failed");
+
+    expect(mocks.spawnedAppServers).toHaveLength(1);
+    expect(mocks.spawnedAppServers[0]!.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.rpcClients[0]!.close).toHaveBeenCalledTimes(1);
   });
 
   it("bootstraps managed global config when config.toml is missing", async () => {

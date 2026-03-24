@@ -42,20 +42,28 @@ export type CodexProfilesConfig = {
 
 export function parseCodexProfilesConfig(value: string): CodexProfilesConfig {
   const parsed = codexProfilesConfigSchema.parse(JSON.parse(value)) as CodexProfilesConfig;
+  const profiles: CodexProfilesConfig["profiles"] = {};
+  const seenHomePaths = new Map<string, string>();
+
+  for (const [profileId, profile] of Object.entries(parsed.profiles)) {
+    const homePath =
+      profile.homePath === "~"
+        ? failBareHomeRoot(profileId)
+        : expandHomePath(profile.homePath);
+    const existingProfileId = seenHomePaths.get(homePath);
+    if (existingProfileId) {
+      throw new Error(
+        `Codex profiles ${existingProfileId} and ${profileId} must not share the same homePath`
+      );
+    }
+
+    seenHomePaths.set(homePath, profileId);
+    profiles[profileId] = { homePath };
+  }
 
   return {
     ...parsed,
-    profiles: Object.fromEntries(
-      Object.entries(parsed.profiles).map(([profileId, profile]) => [
-        profileId,
-        {
-          homePath:
-            profile.homePath === "~"
-              ? failBareHomeRoot(profileId)
-              : expandHomePath(profile.homePath)
-        }
-      ])
-    )
+    profiles
   };
 }
 
