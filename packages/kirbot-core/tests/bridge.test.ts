@@ -1333,6 +1333,7 @@ describe("TelegramCodexBridge", () => {
       profileId: "coding"
     });
     await database.activateSession(pending.id, "thread-legacy-topic");
+    await database.updateSessionPreferredMode(-1001, 7791, "plan");
     codex.missingThreadIds.add("thread-legacy-topic");
 
     await bridge.handleUserTextMessage({
@@ -1364,7 +1365,8 @@ describe("TelegramCodexBridge", () => {
     expect(await database.getSessionByTopic(-1001, 7791)).toMatchObject({
       status: "active",
       codexThreadId: "thread-1",
-      profileId: "coding"
+      profileId: "coding",
+      preferredMode: "default"
     });
   });
 

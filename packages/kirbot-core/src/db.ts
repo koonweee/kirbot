@@ -378,6 +378,7 @@ export class BridgeDatabase {
             profile_id: input.profileId,
             codex_thread_id: null,
             status: "provisioning",
+            preferred_mode: "default",
             model: null,
             reasoning_effort: null,
             service_tier: null,

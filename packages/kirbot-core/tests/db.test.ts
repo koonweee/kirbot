@@ -243,6 +243,28 @@ describe("BridgeDatabase", () => {
     expect(retried.codexThreadId).toBeNull();
   });
 
+  it("resets reclaimed archived topic sessions back to default mode", async () => {
+    const first = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 44 },
+      profileId: "coding"
+    });
+    await database.activateSession(first.id, "thread-44");
+    await database.updateSessionPreferredMode(-1001, 44, "plan");
+    await database.archiveSessionByTopic(-1001, 44);
+
+    const retried = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 44 },
+      profileId: "coding"
+    });
+
+    expect(retried.id).toBe(first.id);
+    expect(retried.status).toBe("provisioning");
+    expect(retried.codexThreadId).toBeNull();
+    expect(retried.preferredMode).toBe("default");
+  });
+
   it("rejects malformed topic rows on write", async () => {
     await expect(
       database.kysely
