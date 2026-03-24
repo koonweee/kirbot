@@ -122,6 +122,19 @@ describe("core config module", () => {
     });
   });
 
+  it("requires CODEX_PROFILES_JSON even if CODEX_HOME_PATH is set", async () => {
+    process.env = {
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_WORKSPACE_CHAT_ID: "-100123",
+      TELEGRAM_MINI_APP_PUBLIC_URL: "https://example.com/mini-app",
+      CODEX_HOME_PATH: "/srv/kirbot/codex-home"
+    };
+
+    const { loadConfig } = await import("../src/config");
+
+    expect(() => loadConfig()).toThrow("CODEX_PROFILES_JSON");
+  });
+
   it("expands homePath values in profile config", async () => {
     process.env = {
       ...baseEnv,

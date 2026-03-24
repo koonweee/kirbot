@@ -213,6 +213,19 @@ describe("RoutedCodexApi", () => {
     expect(general.createThreadCalls).toEqual([]);
   });
 
+  it("rejects unknown profile ids instead of falling back to a configured gateway", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+
+    await expect(routed.readProfileSettings("shared")).rejects.toThrow(
+      "Unknown Codex profile route: shared"
+    );
+
+    expect(general.readProfileSettingsCalls).toEqual([]);
+    expect(coding.readProfileSettingsCalls).toEqual([]);
+  });
+
   it("retains request and thread routing per profile", async () => {
     const general = new FakeCodexApi("general");
     const coding = new FakeCodexApi("coding");

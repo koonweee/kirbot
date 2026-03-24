@@ -27,11 +27,11 @@ kirbot sits between Telegram and a pinned local Codex app server:
 - `packages/kirbot-core/src/telegram-messenger.ts` and `packages/telegram-format/src/*` own Telegram delivery and formatting.
 - `apps/plan-mini-app` is a separate SvelteKit frontend for rendering completed plans from typed URL payloads.
 
-The bridge uses one persistent `General` root session plus topic sessions:
+The bridge routes Telegram surfaces to Codex profiles:
 
-- plain `General` messages continue the same workspace Codex thread
-- `/thread <prompt>` and root `/plan [prompt]` from `General` create topic-backed Codex sessions
-- later messages inside a topic continue that topic's shared Codex thread
+- plain `General` messages use the `general` profile
+- `/thread <prompt>` and root `/plan [prompt]` use the `coding` profile
+- later messages inside a topic stay on that topic's persisted profile
 - pending approvals and user-input requests route back to the surface that owns the session
 
 ## Quick Start
@@ -57,22 +57,48 @@ Required settings:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WORKSPACE_CHAT_ID`
 - `TELEGRAM_MINI_APP_PUBLIC_URL`
+- `CODEX_PROFILES_JSON`
 
 Commonly adjusted settings:
 
 - `DATABASE_PATH`
 - `CODEX_DEFAULT_CWD`
-- `CODEX_HOME_PATH`
 - `CODEX_MODEL`
 - `CODEX_MODEL_PROVIDER`
 - `CODEX_SANDBOX_MODE`
 - `CODEX_APPROVAL_POLICY`
 - `CODEX_CONFIG_JSON`
 
+Codex profile setup:
+
+```json
+{
+  "profiles": {
+    "general": {
+      "homePath": "~/kirbot/codex-home-general"
+    },
+    "coding": {
+      "homePath": "~/kirbot/codex-home-coding"
+    }
+  },
+  "routing": {
+    "general": "general",
+    "thread": "coding",
+    "plan": "coding"
+  }
+}
+```
+
+- `CODEX_PROFILES_JSON` declares the profile homes and how surfaces route to them.
+- `general` owns the forum `General` surface.
+- `coding` owns `/thread` and `/plan`.
+- each profile gets its own isolated Codex home directory.
+
 Bootstrap note:
 
-- `CODEX_MODEL`, `CODEX_MODEL_PROVIDER`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_CONFIG_JSON` only seed a brand new isolated `CODEX_HOME/config.toml`.
-- After that file exists, treat the isolated `config.toml` as Kirbot's global Codex source of truth.
+- `CODEX_MODEL`, `CODEX_MODEL_PROVIDER`, `CODEX_SANDBOX_MODE`, `CODEX_APPROVAL_POLICY`, and `CODEX_CONFIG_JSON` only seed a brand new profile `config.toml`.
+- After a profile home exists, treat that `config.toml` as Kirbot's Codex source of truth for that profile.
+- The cutover is hard: old sessions from the previous single-home setup are not migrated and will fail when first resumed. Start a new thread or topic instead.
 
 Telegram BotFather requirements:
 
@@ -137,10 +163,10 @@ npm run verify:codex-upgrade
 Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
-- kirbot prepares a dedicated Codex home for newly created sessions by default. Set `CODEX_HOME_PATH` if you need that isolated state somewhere other than beside `DATABASE_PATH`.
-- kirbot keeps a shared-home Codex app-server available for legacy thread ids, so existing topics can still resume while future topics are isolated from other Codex clients on the same machine.
-- Intentional override points over the isolated global `config.toml` are:
-- global `/model`, `/fast`, and `/permissions` changes, which rewrite the isolated Codex config
+- `CODEX_PROFILES_JSON` controls the profile homes and routing; each profile gets its own isolated Codex home.
+
+Intentional override points per profile `config.toml` are:
+- global `/model`, `/fast`, and `/permissions` changes, which rewrite that profile's Codex config
 - topic-local `/model`, `/fast`, and `/permissions` changes, which apply thread-local overrides instead of rewriting global defaults
 - new-session `cwd` selection, including `/start <path>`, which stays per thread because it is session-specific
 - `apps/bot/KIRBOT.md` is sent as Codex developer instructions.
