@@ -1326,6 +1326,48 @@ describe("TelegramCodexBridge", () => {
     expect(codex.turns).toEqual([]);
   });
 
+  it("archives a removed legacy topic session so the next resume provisions a fresh topic session", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 7791 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-legacy-topic");
+    codex.missingThreadIds.add("thread-legacy-topic");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 7791,
+      messageId: 141,
+      updateId: 241,
+      userId: 42,
+      text: "Resume the removed topic session"
+    });
+
+    expect(await database.getSessionByTopic(-1001, 7791)).toBeUndefined();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 7791,
+      messageId: 142,
+      updateId: 242,
+      userId: 42,
+      text: "Start the topic session again"
+    });
+
+    expect(codex.createdThreads).toEqual(["Start the topic session again"]);
+    expect(codex.turns).toContainEqual({
+      threadId: "thread-1",
+      text: "Start the topic session again",
+      turnId: "turn-1"
+    });
+    expect(await database.getSessionByTopic(-1001, 7791)).toMatchObject({
+      status: "active",
+      codexThreadId: "thread-1",
+      profileId: "coding"
+    });
+  });
+
   it("surfaces the removed-legacy-home message when a persisted session profile is no longer configured", async () => {
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
@@ -3214,6 +3256,66 @@ describe("TelegramCodexBridge", () => {
         reasoningEffort: "high"
       })
     });
+  });
+
+  it("uses the live General session settings in root selection UIs when they drift from chat defaults", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-root-settings");
+    await database.updateRootSessionSettings("-1001", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+      serviceTier: "fast",
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        readOnlyAccess: {
+          type: "fullAccess"
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      }
+    });
+    await database.upsertChatProfileDefaults("-1001", "general", {
+      model: "gpt-5-codex",
+      reasoningEffort: "high",
+      serviceTier: null,
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      }
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 12,
+      updateId: 31,
+      userId: 42,
+      text: "/model"
+    });
+
+    await bridge.handleCallbackQuery({
+      callbackQueryId: "scope-root-model-drift",
+      data: "slash:scope:model:root",
+      chatId: -1001,
+      topicId: null,
+      userId: 42
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      [
+        "Choose the model for the General thread",
+        "Current: gpt-5.4-mini",
+        "Then choose a reasoning effort"
+      ].join("\n")
+    );
+    expect(codex.listModelsCalls).toEqual(["general"]);
   });
 
   it("acks slash callbacks when a persisted topic session belongs to a removed legacy Codex home", async () => {

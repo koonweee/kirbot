@@ -2303,10 +2303,12 @@ export class TelegramCodexBridge {
         return null;
       }
 
+      const hydratedSession = session ? await this.ensurePersistedSessionSettings(session) : null;
+
       return {
         scope: "root",
-        session: session ?? null,
-        settings: defaults.root
+        session: hydratedSession,
+        settings: hydratedSession?.settings ?? defaults.root
       };
     }
 
@@ -3053,9 +3055,12 @@ export class TelegramCodexBridge {
         session &&
         (this.isRemovedLegacyCodexHomeThreadError(error) || this.isLegacyRemovedCodexHomeSessionError(error))
       ) {
-        if (isRootBridgeSession(session)) {
-          await this.database.archiveSessionBySurface(session.telegramChatId, { kind: "general" });
-        }
+        await this.database.archiveSessionBySurface(
+          session.telegramChatId,
+          isRootBridgeSession(session)
+            ? { kind: "general" }
+            : { kind: "topic", topicId: getSessionTopicId(session) }
+        );
         await this.sendLegacyRemovedCodexHomeMessage(session);
         throw new LegacyRemovedCodexHomeSessionError();
       }
