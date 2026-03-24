@@ -178,12 +178,12 @@ npm run verify:codex-upgrade
 Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
-- `config/codex-profiles.json` controls profile routing, MCP selection, and the generated per-profile Codex homes.
+- `config/codex-profiles.json` controls profile routing, MCP selection, the generated per-profile Codex homes, and the default Codex settings for each profile.
 - Shared skills are authored under `skills/` and synced into each managed home on startup.
 
-Intentional override points per profile `config.toml` are:
-- global `/model`, `/fast`, and `/permissions` changes, which rewrite that profile's Codex config
-- topic-local `/model`, `/fast`, and `/permissions` changes, which apply thread-local overrides instead of rewriting global defaults
+Intentional override points beyond `config/codex-profiles.json` are:
+- `/model`, `/fast`, and `/permissions` in `General`, which override only the active General session
+- `/model`, `/fast`, and `/permissions` inside a topic, which override only that topic session
 - new-session `cwd` selection, including `/start <path>`, which stays per thread because it is session-specific
 - `apps/bot/KIRBOT.md` is sent as Codex developer instructions.
 - Codex base instructions are intentionally left unset.
