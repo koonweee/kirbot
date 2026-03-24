@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { CodexProfilesConfig } from "./codex-profiles";
 import { expandHomePath, parseCodexProfilesConfig } from "./codex-profiles";
+import { resolveCodexProfilesConfigPath } from "./repo-paths";
 
 loadKirbotDotenv();
 
@@ -77,6 +78,7 @@ export type AppConfig = {
   };
   codex: {
     defaultCwd: string;
+    profilesConfigPath: string;
     profiles: CodexProfilesConfig["profiles"];
     routing: CodexProfilesConfig["routes"];
     model: undefined;
@@ -115,6 +117,7 @@ export function loadConfig(): AppConfig {
     },
     codex: {
       defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
+      profilesConfigPath: codexProfilesConfigPath,
       profiles: codexProfiles.profiles,
       routing: codexProfiles.routes,
       model: undefined,
@@ -170,24 +173,6 @@ function resolveKirbotPromptPath(): string {
   }
 
   throw new Error("Could not locate apps/bot/KIRBOT.md");
-}
-
-function resolveCodexProfilesConfigPath(): string {
-  const candidates = [
-    resolve(process.cwd(), "config", "codex-profiles.json"),
-    resolve(process.cwd(), "..", "config", "codex-profiles.json"),
-    resolve(process.cwd(), "..", "..", "config", "codex-profiles.json"),
-    resolve(__dirname, "..", "..", "..", "config", "codex-profiles.json"),
-    resolve(__dirname, "..", "..", "..", "..", "config", "codex-profiles.json")
-  ];
-
-  for (const path of candidates) {
-    if (existsSync(path)) {
-      return path;
-    }
-  }
-
-  throw new Error("Could not locate config/codex-profiles.json");
 }
 
 function defaultTelegramMediaTempDir(): string {
