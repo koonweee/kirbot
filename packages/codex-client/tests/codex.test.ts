@@ -43,16 +43,16 @@ class FakeTransport implements RpcTransport {
 }
 
 describe("CodexGateway", () => {
-  it("adds CODEX_HOME to the app-server environment when requested", () => {
+  it("sets HOME and CODEX_HOME to the profile home when requested", () => {
     const env = buildAppServerSpawnEnv({
       HOME: "/home/dev",
       PATH: "/usr/bin"
-    }, "/srv/kirbot/data/codex-home");
+    }, "/srv/kirbot/data/homes/coding");
 
     expect(env).toMatchObject({
-      HOME: "/home/dev",
+      HOME: "/srv/kirbot/data/homes/coding",
       PATH: "/usr/bin",
-      CODEX_HOME: "/srv/kirbot/data/codex-home"
+      CODEX_HOME: "/srv/kirbot/data/homes/coding"
     });
   });
 

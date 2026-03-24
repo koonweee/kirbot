@@ -63,7 +63,7 @@ export function buildAppServerSpawnEnv(
 ): NodeJS.ProcessEnv {
   return {
     ...env,
-    ...(homePath ? { CODEX_HOME: homePath } : {})
+    ...(homePath ? { HOME: homePath, CODEX_HOME: homePath } : {})
   };
 }
 
