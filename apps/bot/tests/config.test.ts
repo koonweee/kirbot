@@ -28,9 +28,11 @@ describe("loadConfig", () => {
     expect(config.codex.developerInstructions).toBe(readFileSync("apps/bot/KIRBOT.md", "utf8"));
     expect(config.codex.profilesConfigPath).toBe(resolve("config/codex-profiles.json"));
     expect(config.codex.profiles.general!.homePath).toBe(resolve("data/homes/general"));
-    expect(config.codex.profiles.general!.reasoningEffort).toBe("medium");
-    expect(config.codex.profiles.general!.serviceTier).toBe("flex");
+    expect(config.codex.profiles.general!.defaultCwd).toBe("/home/dev/general");
+    expect(config.codex.profiles.general!.reasoningEffort).toBe("xhigh");
+    expect(config.codex.profiles.general!.serviceTier).toBe("fast");
     expect(config.codex.profiles.coding!.homePath).toBe(resolve("data/homes/coding"));
+    expect(config.codex.profiles.coding!.defaultCwd).toBe("/home/dev/coding");
     expect(config.codex.profiles.coding!.reasoningEffort).toBe("high");
     expect(config.codex.profiles.coding!.serviceTier).toBe("fast");
     expect(config.codex.profiles.coding!.skills).toContain("kirbot-skill-install");

@@ -132,8 +132,8 @@ describe("codex home helpers", () => {
         skills: { brainstorming: {} },
         mcps: {},
         profiles: {
-          general: { reasoningEffort: "medium", serviceTier: "flex", skills: [], mcps: [] },
-          coding: { reasoningEffort: "high", serviceTier: "fast", skills: ["brainstorming"], mcps: [] }
+          general: { defaultCwd: "/home/dev/general", reasoningEffort: "medium", serviceTier: "flex", skills: [], mcps: [] },
+          coding: { defaultCwd: "/home/dev/coding", reasoningEffort: "high", serviceTier: "fast", skills: ["brainstorming"], mcps: [] }
         }
       })
     );
