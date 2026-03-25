@@ -5,7 +5,8 @@
     "plan": "coding"
   },
   "skills": {
-    "kirbot-skill-install": {}
+    "kirbot-skill-install": {},
+    "superpowers": {}
   },
   "mcps": {},
   "profiles": {
@@ -16,7 +17,9 @@
       "serviceTier": "fast",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",
-      "skills": ["kirbot-skill-install"],
+      "skills": [
+        "kirbot-skill-install"
+      ],
       "mcps": []
     },
     "coding": {
@@ -26,7 +29,10 @@
       "serviceTier": "fast",
       "sandboxMode": "danger-full-access",
       "approvalPolicy": "never",
-      "skills": ["kirbot-skill-install"],
+      "skills": [
+        "kirbot-skill-install",
+        "superpowers"
+      ],
       "mcps": []
     }
   }
