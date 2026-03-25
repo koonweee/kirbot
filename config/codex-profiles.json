@@ -16,7 +16,7 @@
       "serviceTier": "fast",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",
-      "skills": [],
+      "skills": ["kirbot-skill-install"],
       "mcps": []
     },
     "coding": {
