@@ -32,11 +32,13 @@ describe("loadConfig", () => {
     expect(config.codex.profiles.general!.reasoningEffort).toBe("xhigh");
     expect(config.codex.profiles.general!.serviceTier).toBe("fast");
     expect(config.codex.profiles.general!.skills).toContain("kirbot-skill-install");
+    expect(config.codex.profiles.general!.skills).not.toContain("superpowers");
     expect(config.codex.profiles.coding!.homePath).toBe(resolve("data/homes/coding"));
     expect(config.codex.profiles.coding!.defaultCwd).toBe("/home/dev/coding");
     expect(config.codex.profiles.coding!.reasoningEffort).toBe("high");
     expect(config.codex.profiles.coding!.serviceTier).toBe("fast");
     expect(config.codex.profiles.coding!.skills).toContain("kirbot-skill-install");
+    expect(config.codex.profiles.coding!.skills).toContain("superpowers");
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });
