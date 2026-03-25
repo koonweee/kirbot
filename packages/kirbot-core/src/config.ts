@@ -61,7 +61,6 @@ const envSchema = z.object({
       message: "TELEGRAM_MINI_APP_PUBLIC_URL must use https"
     }),
   DATABASE_PATH: z.string().default("data/telegram-codex-bridge.sqlite"),
-  CODEX_DEFAULT_CWD: z.string().default("~/kirbot"),
   CODEX_SERVICE_NAME: z.string().default("telegram-codex-bridge"),
 });
 
@@ -78,7 +77,6 @@ export type AppConfig = {
     path: string;
   };
   codex: {
-    defaultCwd: string;
     profilesConfigPath: string;
     profiles: CodexProfilesConfig["profiles"];
     routing: DatabaseProfileRouting;
@@ -117,7 +115,6 @@ export function loadConfig(): AppConfig {
       path: databasePath
     },
     codex: {
-      defaultCwd: expandHomePath(parsed.CODEX_DEFAULT_CWD),
       profilesConfigPath: codexProfilesConfigPath,
       profiles: codexProfiles.profiles,
       routing: codexProfiles.routes as DatabaseProfileRouting,

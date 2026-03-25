@@ -47,7 +47,7 @@ Default behavior:
 - the harness creates isolated state under a temp directory instead of reusing
   the normal app database
 - the harness creates an isolated empty Codex workspace under that temp
-  directory instead of reusing the normal `CODEX_DEFAULT_CWD`
+  directory instead of reusing the normal profile default cwd
 - the harness uses its own stdio-managed Codex app-server child instead of
   sharing any live kirbot transport state
 - Codex runs for real unless the caller injects a test double through the
@@ -102,7 +102,7 @@ Primary API:
 Optional creation overrides:
 
 - `workspaceMode: "empty" | "inherit"`: choose between the default isolated
-  empty workspace and the configured `CODEX_DEFAULT_CWD`
+  empty workspace and the configured inherited profile cwd
 - `workspaceDir`: use an explicit workspace path instead of the default harness
   workspace
 

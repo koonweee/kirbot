@@ -10,6 +10,7 @@
   "mcps": {},
   "profiles": {
     "general": {
+      "defaultCwd": "/home/dev/general",
       "model": "gpt-5.4-mini",
       "reasoningEffort": "xhigh",
       "serviceTier": "fast",
@@ -19,6 +20,7 @@
       "mcps": []
     },
     "coding": {
+      "defaultCwd": "/home/dev/coding",
       "model": "gpt-5.4",
       "reasoningEffort": "high",
       "serviceTier": "fast",

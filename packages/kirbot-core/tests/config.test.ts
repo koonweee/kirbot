@@ -24,6 +24,7 @@ type CodexProfilesFile = {
   profiles: Record<
     string,
     {
+      defaultCwd?: string;
       model?: string;
       reasoningEffort?: string;
       serviceTier?: string;
@@ -64,6 +65,8 @@ describe("core config module", () => {
           thread: "coding",
           plan: "coding"
         });
+        expect(config.codex.profiles.general!.defaultCwd).toBe("/home/dev/general");
+        expect(config.codex.profiles.coding!.defaultCwd).toBe("/home/dev/coding");
         expect(config.codex.profiles.general!.homePath).toBe("/var/lib/kirbot/homes/general");
         expect(config.codex.profiles.coding!.homePath).toBe("/var/lib/kirbot/homes/coding");
       }
@@ -346,6 +349,7 @@ describe("core config module", () => {
         mcps: {},
         profiles: {
           general: {
+            defaultCwd: "/workspace",
             model: "gpt-5",
             serviceTier: "flex",
             sandboxMode: "workspace-write",
@@ -379,6 +383,7 @@ describe("core config module", () => {
         mcps: {},
         profiles: {
           general: {
+            defaultCwd: "/workspace",
             model: "gpt-5",
             reasoningEffort: "medium",
             sandboxMode: "workspace-write",
@@ -570,6 +575,7 @@ describe("core config module", () => {
 
 function createProfile(overrides: Partial<CodexProfilesFile["profiles"][string]> = {}) {
   return {
+    defaultCwd: "/home/dev/general",
     model: "gpt-5",
     reasoningEffort: "medium",
     serviceTier: "flex",
@@ -598,6 +604,7 @@ function createConfig(overrides: Partial<CodexProfilesFile> = {}): CodexProfiles
     profiles: {
       general: createProfile(overrides.profiles?.general),
       coding: createProfile({
+        defaultCwd: "/home/dev/coding",
         sandboxMode: "danger-full-access",
         approvalPolicy: "never",
         ...(overrides.profiles?.coding ?? {})

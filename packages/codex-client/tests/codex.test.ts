@@ -43,14 +43,14 @@ class FakeTransport implements RpcTransport {
 }
 
 describe("CodexGateway", () => {
-  it("sets HOME and CODEX_HOME to the profile home when requested", () => {
+  it("sets only CODEX_HOME to the profile home when requested", () => {
     const env = buildAppServerSpawnEnv({
       HOME: "/home/dev",
       PATH: "/usr/bin"
     }, "/srv/kirbot/data/homes/coding");
 
     expect(env).toMatchObject({
-      HOME: "/srv/kirbot/data/homes/coding",
+      HOME: "/home/dev",
       PATH: "/usr/bin",
       CODEX_HOME: "/srv/kirbot/data/homes/coding"
     });
@@ -60,7 +60,6 @@ describe("CodexGateway", () => {
     expect(
       buildManagedGlobalConfigEdits({
         defaultCwd: "/workspace",
-        homePath: "/srv/kirbot/data/codex-home",
         model: "gpt-5-codex",
         modelProvider: "openai",
         sandbox: "danger-full-access",
@@ -684,7 +683,6 @@ describe("CodexGateway", () => {
     const client = new CodexRpcClient(transport);
     const gateway = new CodexGateway(client, {
       defaultCwd: "/workspace",
-      homePath: "/srv/kirbot/data/codex-home",
       model: "gpt-5-codex",
       modelProvider: "openai",
       sandbox: "danger-full-access",

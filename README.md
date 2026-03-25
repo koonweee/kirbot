@@ -62,7 +62,7 @@ Required settings:
 Commonly adjusted settings:
 
 - `DATABASE_PATH`
-- `CODEX_DEFAULT_CWD`
+- `CODEX_SERVICE_NAME`
 
 Codex profile setup:
 
@@ -85,6 +85,7 @@ Codex profile setup:
   },
   "profiles": {
     "general": {
+      "defaultCwd": "/home/dev/general",
       "model": "gpt-5",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",
@@ -92,6 +93,7 @@ Codex profile setup:
       "mcps": []
     },
     "coding": {
+      "defaultCwd": "/home/dev/coding",
       "model": "gpt-5-codex",
       "sandboxMode": "danger-full-access",
       "approvalPolicy": "never",

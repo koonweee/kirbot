@@ -973,10 +973,10 @@ describe("TelegramCodexBridge", () => {
         path: join(tempDir, "bridge.sqlite")
       },
       codex: {
-        defaultCwd: "/workspace",
         profilesConfigPath: "/workspace/config/codex-profiles.json",
         profiles: {
           general: {
+            defaultCwd: "/home/dev/general",
             homePath: "/srv/kirbot/codex-home-general",
             model: "gpt-5",
             reasoningEffort: "medium",
@@ -987,6 +987,7 @@ describe("TelegramCodexBridge", () => {
             mcps: []
           },
           coding: {
+            defaultCwd: "/home/dev/coding",
             homePath: "/srv/kirbot/codex-home-coding",
             model: "gpt-5-codex",
             reasoningEffort: "high",

@@ -11,6 +11,7 @@ import type { JsonValue } from "@kirbot/codex-client/generated/codex/serde_json/
 export type CodexProfileId = string;
 
 export type CodexProfileConfig = {
+  defaultCwd: string;
   homePath: string;
   model: string | undefined;
   reasoningEffort: ReasoningEffort;
@@ -61,6 +62,7 @@ const approvalPolicySchema = z.union([
 
 const codexProfileSourceSchema = z
   .object({
+    defaultCwd: z.string().trim().min(1),
     model: z.string().trim().min(1).optional(),
     reasoningEffort: reasoningEffortSchema,
     serviceTier: serviceTierSchema,
@@ -203,6 +205,7 @@ export function parseCodexProfilesConfig(
     }
 
     profiles[profileId] = {
+      defaultCwd: expandHomePath(profile.defaultCwd),
       homePath,
       model: profile.model,
       reasoningEffort: profile.reasoningEffort,

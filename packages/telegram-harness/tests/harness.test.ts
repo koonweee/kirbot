@@ -1114,10 +1114,10 @@ function createConfig(tempDir: string): AppConfig {
       path: join(tempDir, "bridge.sqlite")
     },
     codex: {
-      defaultCwd: "/workspace",
       profilesConfigPath: "/workspace/config/codex-profiles.json",
       profiles: {
         general: {
+          defaultCwd: "/workspace",
           homePath: join(tempDir, "codex-general"),
           model: "gpt-5",
           reasoningEffort: "medium",
@@ -1128,6 +1128,7 @@ function createConfig(tempDir: string): AppConfig {
           mcps: []
         },
         coding: {
+          defaultCwd: "/workspace",
           homePath: join(tempDir, "codex-coding"),
           model: "gpt-5-codex",
           reasoningEffort: "high",
