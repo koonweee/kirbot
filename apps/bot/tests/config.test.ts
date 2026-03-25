@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     expect(config.codex.profiles.general!.defaultCwd).toBe("/home/dev/general");
     expect(config.codex.profiles.general!.reasoningEffort).toBe("xhigh");
     expect(config.codex.profiles.general!.serviceTier).toBe("fast");
+    expect(config.codex.profiles.general!.skills).toContain("kirbot-skill-install");
     expect(config.codex.profiles.coding!.homePath).toBe(resolve("data/homes/coding"));
     expect(config.codex.profiles.coding!.defaultCwd).toBe("/home/dev/coding");
     expect(config.codex.profiles.coding!.reasoningEffort).toBe("high");
