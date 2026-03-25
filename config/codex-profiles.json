@@ -7,7 +7,8 @@
   "skills": {
     "agent-browser": {},
     "kirbot-skill-install": {},
-    "superpowers": {}
+    "superpowers": {},
+    "telegram-workspace-send": {}
   },
   "mcps": {},
   "profiles": {
@@ -20,7 +21,8 @@
       "approvalPolicy": "on-request",
       "skills": [
         "agent-browser",
-        "kirbot-skill-install"
+        "kirbot-skill-install",
+        "telegram-workspace-send"
       ],
       "mcps": []
     },
@@ -34,7 +36,8 @@
       "skills": [
         "agent-browser",
         "kirbot-skill-install",
-        "superpowers"
+        "superpowers",
+        "telegram-workspace-send"
       ],
       "mcps": []
     }
