@@ -9,5 +9,6 @@ node_modules
 .tmp
 data/
 .worktrees/
+docs/superpowers/
 apps/plan-mini-app/.svelte-kit
 apps/plan-mini-app/build
