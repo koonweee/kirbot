@@ -1752,10 +1752,7 @@ describe("TelegramCodexBridge", () => {
         url: "https://docs.example.test/mcp"
       }
     };
-    config.codex.profiles.coding = {
-      ...config.codex.profiles.coding,
-      mcps: ["docs"]
-    };
+    config.codex.profiles.coding!.mcps = ["docs"];
     const pending = await database.createProvisioningSession({
       telegramChatId: "-1001",
       surface: { kind: "topic", topicId: 783 },

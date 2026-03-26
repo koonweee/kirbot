@@ -2589,12 +2589,37 @@ export class TelegramCodexBridge {
       topicId: number | null;
     }
   ): Promise<ThreadSettingsTarget | null> {
-    const session = await this.getSessionByLocation(location.chatId, location.topicId);
+    if (location.topicId === null) {
+      const session = await this.database.getRootSessionByChat(location.chatId);
+      if (!session) {
+        await this.sendScopedBridgeMessage({
+          chatId: location.chatId,
+          text: COMPACT_COMMAND_REQUIRES_SESSION_TEXT
+        });
+        return null;
+      }
+
+      if (!session.codexThreadId) {
+        await this.sendScopedBridgeMessage({
+          chatId: location.chatId,
+          text: ROOT_SESSION_PROVISIONING_TEXT
+        });
+        return null;
+      }
+
+      return {
+        scope: "root",
+        session,
+        settings: await this.resolveEffectiveThreadStartSettings(session)
+      };
+    }
+
+    const session = await this.database.getSessionByTopic(location.chatId, location.topicId);
     if (!session) {
       await this.sendScopedBridgeMessage({
         chatId: location.chatId,
-        ...(location.topicId !== null ? { topicId: location.topicId } : {}),
-        text: location.topicId === null ? COMPACT_COMMAND_REQUIRES_SESSION_TEXT : MODE_COMMAND_REQUIRES_SESSION_TEXT
+        topicId: location.topicId,
+        text: MODE_COMMAND_REQUIRES_SESSION_TEXT
       });
       return null;
     }
@@ -2602,14 +2627,14 @@ export class TelegramCodexBridge {
     if (!session.codexThreadId) {
       await this.sendScopedBridgeMessage({
         chatId: location.chatId,
-        ...(location.topicId !== null ? { topicId: location.topicId } : {}),
-        text: location.topicId === null ? ROOT_SESSION_PROVISIONING_TEXT : "This topic is still provisioning a Codex session. Try again in a moment"
+        topicId: location.topicId,
+        text: "This topic is still provisioning a Codex session. Try again in a moment"
       });
       return null;
     }
 
     return {
-      scope: location.topicId === null ? "root" : "thread",
+      scope: "thread",
       session,
       settings: await this.resolveEffectiveThreadStartSettings(session)
     };
