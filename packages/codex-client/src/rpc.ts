@@ -23,6 +23,10 @@ import type { ThreadStartParams } from "./generated/codex/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "./generated/codex/v2/ThreadStartResponse";
 import type { ModelListParams } from "./generated/codex/v2/ModelListParams";
 import type { ModelListResponse } from "./generated/codex/v2/ModelListResponse";
+import type { SkillsListParams } from "./generated/codex/v2/SkillsListParams";
+import type { SkillsListResponse } from "./generated/codex/v2/SkillsListResponse";
+import type { ListMcpServerStatusParams } from "./generated/codex/v2/ListMcpServerStatusParams";
+import type { ListMcpServerStatusResponse } from "./generated/codex/v2/ListMcpServerStatusResponse";
 import type { ConfigBatchWriteParams } from "./generated/codex/v2/ConfigBatchWriteParams";
 import type { ConfigReadParams } from "./generated/codex/v2/ConfigReadParams";
 import type { ConfigReadResponse } from "./generated/codex/v2/ConfigReadResponse";
@@ -86,6 +90,14 @@ type SupportedMethodMap = {
   "model/list": {
     params: ModelListParams;
     result: ModelListResponse;
+  };
+  "skills/list": {
+    params: SkillsListParams;
+    result: SkillsListResponse;
+  };
+  "mcpServerStatus/list": {
+    params: ListMcpServerStatusParams;
+    result: ListMcpServerStatusResponse;
   };
   "config/read": {
     params: ConfigReadParams;
@@ -392,6 +404,14 @@ export class CodexRpcClient extends EventEmitter {
 
   async listModels(params: ModelListParams): Promise<ModelListResponse> {
     return this.call("model/list", params);
+  }
+
+  async listSkills(params: SkillsListParams): Promise<SkillsListResponse> {
+    return this.call("skills/list", params);
+  }
+
+  async listMcpServerStatus(params: ListMcpServerStatusParams): Promise<ListMcpServerStatusResponse> {
+    return this.call("mcpServerStatus/list", params);
   }
 
   async readConfig(params: ConfigReadParams): Promise<ConfigReadResponse> {

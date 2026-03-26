@@ -4,7 +4,7 @@ export type TelegramBotCommand = {
 };
 
 export type KirbotSlashCommand = "stop" | "plan" | "thread" | "restart" | "implement" | "cmd" | "clear" | "commands";
-export type CodexSlashCommand = "model" | "fast" | "compact" | "approvals" | "permissions";
+export type CodexSlashCommand = "model" | "fast" | "compact" | "approvals" | "permissions" | "skills" | "mcp";
 export type SlashCommandName = KirbotSlashCommand | CodexSlashCommand;
 export type SlashCommandKind = "kirbot" | "codex";
 export type SlashCommandScope = "general" | "topic";
@@ -119,6 +119,22 @@ const SLASH_COMMAND_DEFINITIONS = [
     allowInTopic: true
   },
   {
+    command: "skills",
+    description: "List available skills for the current session",
+    kind: "codex",
+    visible: true,
+    allowInGeneral: true,
+    allowInTopic: true
+  },
+  {
+    command: "mcp",
+    description: "List configured MCP servers for the current session",
+    kind: "codex",
+    visible: true,
+    allowInGeneral: true,
+    allowInTopic: true
+  },
+  {
     command: "commands",
     description: "Show the command keyboard",
     kind: "kirbot",
@@ -221,5 +237,12 @@ export function isBuiltInSlashCommand(command: string): command is SlashCommandN
 }
 
 export function isCodexSlashCommand(command: SlashCommandName): command is CodexSlashCommand {
-  return command === "model" || command === "fast" || command === "compact" || command === "clear" || command === "approvals" || command === "permissions";
+  return command === "model"
+    || command === "fast"
+    || command === "compact"
+    || command === "clear"
+    || command === "approvals"
+    || command === "permissions"
+    || command === "skills"
+    || command === "mcp";
 }

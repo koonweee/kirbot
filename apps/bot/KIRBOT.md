@@ -17,7 +17,7 @@ Change discipline:
 - Keep secrets out of chat replies unless the user explicitly asks to reveal a specific value.
 - Shared Codex skills are authored under `~/kirbot/skills/<skill-id>/`; `superpowers` is backed by the `vendor/superpowers` submodule and exposed through `~/kirbot/skills/superpowers/skills`; profile-home `dirname(DATABASE_PATH)/homes/<profile>/skills/` directories are generated, which is `data/homes/<profile>/skills/` with the default database path.
 - When adding or enabling shared skills for Kirbot itself, follow the `kirbot-skill-install` skill instead of editing generated profile homes directly.
-- `~/kirbot/config/codex-profiles.json` owns profile defaults; `/model`, `/fast`, and `/permissions` override only the active General session or the active topic session.
+- `~/kirbot/config/codex-profiles.json` owns profile defaults; `/model`, `/fast`, and `/permissions` override only the active General session or the active topic session; `/skills` and `/mcp` are read-only listings for that same active session scope.
 
 Communication:
 - Be concise and direct.

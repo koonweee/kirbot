@@ -26,6 +26,8 @@ import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/gene
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
+import type { SkillsListEntry } from "@kirbot/codex-client/generated/codex/v2/SkillsListEntry";
+import type { McpServerStatus } from "@kirbot/codex-client/generated/codex/v2/McpServerStatus";
 import {
   classifyInterruptError,
   classifySteerError,
@@ -73,6 +75,8 @@ import {
 } from "./bridge/slash-commands";
 import {
   buildTopicCommandKeyboard,
+  buildRenderedMcpListing,
+  buildRenderedSkillsListing,
   buildRenderedThreadStartFooter,
   buildRenderedInitialPromptMessage,
   buildQueuePreviewKeyboard,
@@ -130,6 +134,8 @@ export interface BridgeCodexApi {
   archiveThread(threadId: string): Promise<void>;
   readTurnSnapshot(threadId: string, turnId: string): Promise<ResolvedTurnSnapshot>;
   listModels(profileId: string): Promise<Model[]>;
+  listSkills(profileId: string, cwd: string): Promise<SkillsListEntry | null>;
+  listMcpServers(profileId: string): Promise<McpServerStatus[]>;
   respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }): Promise<void>;
   respondToFileChangeApproval(id: RequestId, response: { decision: FileChangeApprovalDecision }): Promise<void>;
   respondToPermissionsApproval(id: RequestId, response: PermissionsRequestApprovalResponse): Promise<void>;
@@ -708,6 +714,16 @@ export class TelegramCodexBridge {
       return;
     }
 
+    if (command.command === "skills") {
+      await this.showSkillsListing(message, "root");
+      return;
+    }
+
+    if (command.command === "mcp") {
+      await this.showMcpListing(message, "root");
+      return;
+    }
+
     await this.sendInvalidSlashCommandMessage(message);
   }
 
@@ -743,6 +759,16 @@ export class TelegramCodexBridge {
         chatId: message.chatId,
         topicId: message.topicId
       });
+      return;
+    }
+
+    if (command.command === "skills") {
+      await this.showSkillsListing(message, "thread");
+      return;
+    }
+
+    if (command.command === "mcp") {
+      await this.showMcpListing(message, "thread");
       return;
     }
 
@@ -2499,6 +2525,49 @@ export class TelegramCodexBridge {
     });
   }
 
+  private async showSkillsListing(message: UserTurnMessage, scope: "root" | "thread"): Promise<void> {
+    const target = await this.resolveListingCommandTarget({
+      chatId: message.chatId,
+      topicId: scope === "root" ? null : message.topicId
+    });
+    if (!target) {
+      return;
+    }
+
+    const skillsEntry = await this.codex.listSkills(target.session.profileId, target.settings.cwd);
+    await this.sendScopedBridgeMessage({
+      chatId: message.chatId,
+      ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+      text: buildRenderedSkillsListing(
+        skillsEntry ?? {
+          cwd: target.settings.cwd,
+          skills: [],
+          errors: []
+        }
+      ).text
+    });
+  }
+
+  private async showMcpListing(message: UserTurnMessage, scope: "root" | "thread"): Promise<void> {
+    const target = await this.resolveListingCommandTarget({
+      chatId: message.chatId,
+      topicId: scope === "root" ? null : message.topicId
+    });
+    if (!target) {
+      return;
+    }
+
+    const statuses = await this.codex.listMcpServers(target.session.profileId);
+    await this.sendScopedBridgeMessage({
+      chatId: message.chatId,
+      ...(message.topicId !== null ? { topicId: message.topicId } : {}),
+      text: buildRenderedMcpListing({
+        statuses,
+        transportSummaries: this.buildMcpTransportSummaries(target.session.profileId)
+      }).text
+    });
+  }
+
   private async sendScopedBridgeMessage(input: {
     chatId: number;
     topicId?: number | null;
@@ -2512,6 +2581,52 @@ export class TelegramCodexBridge {
       ...input,
       ...(input.replyMarkup ? { replyMarkup: input.replyMarkup } : {})
     });
+  }
+
+  private async resolveListingCommandTarget(
+    location: {
+      chatId: number;
+      topicId: number | null;
+    }
+  ): Promise<ThreadSettingsTarget | null> {
+    const session = await this.getSessionByLocation(location.chatId, location.topicId);
+    if (!session) {
+      await this.sendScopedBridgeMessage({
+        chatId: location.chatId,
+        ...(location.topicId !== null ? { topicId: location.topicId } : {}),
+        text: location.topicId === null ? COMPACT_COMMAND_REQUIRES_SESSION_TEXT : MODE_COMMAND_REQUIRES_SESSION_TEXT
+      });
+      return null;
+    }
+
+    if (!session.codexThreadId) {
+      await this.sendScopedBridgeMessage({
+        chatId: location.chatId,
+        ...(location.topicId !== null ? { topicId: location.topicId } : {}),
+        text: location.topicId === null ? ROOT_SESSION_PROVISIONING_TEXT : "This topic is still provisioning a Codex session. Try again in a moment"
+      });
+      return null;
+    }
+
+    return {
+      scope: location.topicId === null ? "root" : "thread",
+      session,
+      settings: await this.resolveEffectiveThreadStartSettings(session)
+    };
+  }
+
+  private buildMcpTransportSummaries(profileId: string): Record<string, string> {
+    const profile = this.config.codex.profiles[profileId];
+    if (!profile) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      profile.mcps.flatMap((mcpId) => {
+        const summary = summarizeManagedMcpConfig(this.config.codex.mcps[mcpId]);
+        return summary ? [[mcpId, summary]] : [];
+      })
+    );
   }
 
   private async answerCallbackQuery(callbackQueryId: string, options?: { text?: string }): Promise<true> {
@@ -2883,6 +2998,43 @@ export class TelegramCodexBridge {
     return error instanceof UnavailableCodexSessionError;
   }
 
+}
+
+function summarizeManagedMcpConfig(config: AppConfig["codex"]["mcps"][string] | undefined): string | null {
+  if (!config) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  const url = typeof config.url === "string" ? config.url.trim() : "";
+  if (url) {
+    parts.push(`URL: ${url}`);
+  }
+
+  const command = summarizeManagedMcpCommand(config.command);
+  if (command) {
+    parts.push(`Command: ${command}`);
+  }
+
+  const cwd = typeof config.cwd === "string" ? config.cwd.trim() : "";
+  if (cwd) {
+    parts.push(`Cwd: ${cwd}`);
+  }
+
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
+function summarizeManagedMcpCommand(command: unknown): string | null {
+  if (typeof command === "string") {
+    return command.trim() || null;
+  }
+
+  if (Array.isArray(command) && command.every((part) => typeof part === "string")) {
+    const joined = command.map((part) => part.trim()).filter((part) => part.length > 0).join(" ");
+    return joined || null;
+  }
+
+  return null;
 }
 
 function buildTelegramTopicUrl(chatId: number, topicId: number): string | null {

@@ -132,6 +132,14 @@ describe("TelegramCommandSync", () => {
             description: "Set permissions for the current session"
           },
           {
+            command: "skills",
+            description: "List available skills for the current session"
+          },
+          {
+            command: "mcp",
+            description: "List configured MCP servers for the current session"
+          },
+          {
             command: "commands",
             description: "Show the command keyboard"
           }
