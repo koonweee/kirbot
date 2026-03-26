@@ -10,7 +10,12 @@
     "superpowers": {},
     "telegram-workspace-send": {}
   },
-  "mcps": {},
+  "mcps": {
+    "homeassistant": {
+      "url": "https://home.sf.kw0.dev/api/mcp",
+      "bearer_token_env_var": "HOMEASSISTANT_TOKEN"
+    }
+  },
   "profiles": {
     "general": {
       "defaultCwd": "/home/dev/general",
@@ -24,7 +29,9 @@
         "kirbot-skill-install",
         "telegram-workspace-send"
       ],
-      "mcps": []
+      "mcps": [
+        "homeassistant"
+      ]
     },
     "coding": {
       "defaultCwd": "/home/dev/coding",
