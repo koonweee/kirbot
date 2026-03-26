@@ -24,6 +24,8 @@ import type { ServerRequest } from "@kirbot/codex-client/generated/codex/ServerR
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
 import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
+import type { SkillsListEntry } from "@kirbot/codex-client/generated/codex/v2/SkillsListEntry";
+import type { McpServerStatus } from "@kirbot/codex-client/generated/codex/v2/McpServerStatus";
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { SandboxPolicy } from "@kirbot/codex-client/generated/codex/v2/SandboxPolicy";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
@@ -49,7 +51,7 @@ import {
   TOPIC_IMPLEMENT_CALLBACK_DATA
 } from "../src/bridge/presentation";
 import { TurnLifecycleCoordinator } from "../src/bridge/turn-lifecycle";
-import { isAllowedSlashCommandInScope } from "../src/bridge/slash-commands";
+import { isAllowedSlashCommandInScope, isCodexSlashCommand } from "../src/bridge/slash-commands";
 import { createInitialUserInputState, stringifyUserInputState } from "../src/bridge/requests";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
@@ -247,6 +249,8 @@ class FakeCodex implements BridgeCodexApi {
     } | null;
   }> = [];
   listModelsCalls: string[] = [];
+  listSkillsCalls: Array<{ profileId: string; cwd: string }> = [];
+  listMcpServersCalls: string[] = [];
   ensuredThreads: string[] = [];
   compactThreadCalls: Array<{ threadId: string }> = [];
   archiveThreadCalls: Array<{ threadId: string }> = [];
@@ -319,6 +323,8 @@ class FakeCodex implements BridgeCodexApi {
       isDefault: true
     }
   ];
+  skillsEntry: SkillsListEntry | null = null;
+  mcpServers: McpServerStatus[] = [];
   nextSendTurnError: Error | null = null;
   nextSteerError: Error | null = null;
   nextInterruptError: Error | null = null;
@@ -629,6 +635,20 @@ class FakeCodex implements BridgeCodexApi {
   async listModels(profileId: string): Promise<Model[]> {
     this.listModelsCalls.push(profileId);
     return this.models;
+  }
+
+  async listSkills(profileId: string, cwd: string): Promise<SkillsListEntry | null> {
+    this.listSkillsCalls.push({ profileId, cwd });
+    return this.skillsEntry ?? {
+      cwd,
+      skills: [],
+      errors: []
+    };
+  }
+
+  async listMcpServers(profileId: string): Promise<McpServerStatus[]> {
+    this.listMcpServersCalls.push(profileId);
+    return this.mcpServers;
   }
 
   private emitEvent(event: AppServerEvent): void {
@@ -1461,6 +1481,11 @@ describe("TelegramCodexBridge", () => {
     expect(isAllowedSlashCommandInScope("implement", "general")).toBe(false);
   });
 
+  it("classifies skills and mcp as codex slash commands", () => {
+    expect(isCodexSlashCommand("skills")).toBe(true);
+    expect(isCodexSlashCommand("mcp")).toBe(true);
+  });
+
   it("creates a General session from the routed profile settings and persists no overrides", async () => {
     codex.profileSettings.general = {
       ...codex.profileSettings.general,
@@ -1616,7 +1641,8 @@ describe("TelegramCodexBridge", () => {
         ["/restart", "/cmd"],
         ["/model", "/fast"],
         ["/compact", "/clear"],
-        ["/permissions", "/commands"],
+        ["/permissions", "/skills"],
+        ["/mcp", "/commands"],
         ["/standup"]
       ]
     },
@@ -1628,6 +1654,7 @@ describe("TelegramCodexBridge", () => {
         ["/implement", "/model"],
         ["/fast", "/compact"],
         ["/clear", "/permissions"],
+        ["/skills", "/mcp"],
         ["/commands", "/standup"]
       ]
     }
@@ -1652,6 +1679,144 @@ describe("TelegramCodexBridge", () => {
       text: "Commands"
     });
     expect(getReplyKeyboardRows(telegram.sentMessages.at(-1))).toEqual(expectedRows);
+  });
+
+  it("lists skills for the active General session", async () => {
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+    await database.activateSession(pending.id, "thread-root-skills");
+    codex.skillsEntry = {
+      cwd: "/workspace",
+      skills: [
+        {
+          name: "brainstorming",
+          description: "Explore intent before implementation",
+          shortDescription: "Explore intent before implementation",
+          path: "/home/dev/kirbot/skills/brainstorming/SKILL.md",
+          scope: "user",
+          enabled: true
+        }
+      ],
+      errors: []
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 16,
+      updateId: 26,
+      userId: 42,
+      text: "/skills"
+    });
+
+    expect(codex.listSkillsCalls).toEqual([
+      { profileId: "general", cwd: "/workspace" }
+    ]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      [
+        "/skills",
+        "",
+        "CWD: /workspace",
+        "",
+        "• brainstorming [enabled]",
+        "  Explore intent before implementation"
+      ].join("\n")
+    );
+  });
+
+  it("reuses the root provisioning message for /skills while the General session is provisioning", async () => {
+    await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "general" },
+      profileId: "general"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/skills"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("The General Codex session is still provisioning. Try again in a moment");
+  });
+
+  it("lists mcp servers for the active topic session", async () => {
+    config.codex.mcps = {
+      docs: {
+        url: "https://docs.example.test/mcp"
+      }
+    };
+    config.codex.profiles.coding!.mcps = ["docs"];
+    const pending = await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 783 },
+      profileId: "coding"
+    });
+    await database.activateSession(pending.id, "thread-topic-mcp");
+    codex.mcpServers = [
+      {
+        name: "docs",
+        tools: {
+          search: {
+            name: "search",
+            inputSchema: { type: "object" }
+          }
+        },
+        resources: [],
+        resourceTemplates: [],
+        authStatus: "unsupported"
+      }
+    ];
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 783,
+      messageId: 17,
+      updateId: 27,
+      userId: 42,
+      text: "/mcp"
+    });
+
+    expect(codex.listMcpServersCalls).toEqual(["coding"]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      [
+        "/mcp",
+        "",
+        "• docs",
+        "  Auth: unsupported",
+        "  URL: https://docs.example.test/mcp",
+        "  Tools: search",
+        "  Resources: (none)",
+        "  Resource templates: (none)"
+      ].join("\n")
+    );
+  });
+
+  it("reuses the topic provisioning message for /mcp while a topic session is provisioning", async () => {
+    await database.createProvisioningSession({
+      telegramChatId: "-1001",
+      surface: { kind: "topic", topicId: 784 },
+      profileId: "coding"
+    });
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 784,
+      messageId: 19,
+      updateId: 29,
+      userId: 42,
+      text: "/mcp"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe(
+      "This topic is still provisioning a Codex session. Try again in a moment"
+    );
   });
 
   it.each([

@@ -15,6 +15,8 @@ import type { AskForApproval } from "@kirbot/codex-client/generated/codex/v2/Ask
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
 import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
+import type { SkillsListEntry } from "@kirbot/codex-client/generated/codex/v2/SkillsListEntry";
+import type { McpServerStatus } from "@kirbot/codex-client/generated/codex/v2/McpServerStatus";
 import type { PermissionsRequestApprovalResponse } from "@kirbot/codex-client/generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { SandboxPolicy } from "@kirbot/codex-client/generated/codex/v2/SandboxPolicy";
 import type { ToolRequestUserInputResponse } from "@kirbot/codex-client/generated/codex/v2/ToolRequestUserInputResponse";
@@ -393,6 +395,18 @@ class ScriptedCodex implements BridgeCodexApi {
         isDefault: true
       }
     ];
+  }
+
+  async listSkills(_profileId: string, cwd: string): Promise<SkillsListEntry | null> {
+    return {
+      cwd,
+      skills: [],
+      errors: []
+    };
+  }
+
+  async listMcpServers(_profileId: string): Promise<McpServerStatus[]> {
+    return [];
   }
 
   async nextEvent(): Promise<AppServerEvent | null> {

@@ -130,9 +130,13 @@ User experience:
 
 - `config/codex-profiles.json` owns the defaults for `General`, `/thread`, and `/plan`.
 - `/model`, `/fast`, and `/permissions` in `General` update only the active General session.
+- `/skills` in `General` lists the skills visible to the active General session and current working directory.
+- `/mcp` in `General` lists the MCP servers configured for the active General session profile.
 - `/restart` in `General` reports each deployment step in Telegram, then checks out `master`, fetches `origin`, hard-resets to `origin/master`, rebuilds kirbot, and restarts the detached production tmux session.
 - The same commands inside a topic update only that topic's existing Codex session.
+- The same `/skills` and `/mcp` commands inside a topic read from only that topic session.
 - Settings commands require an existing General or topic session and are rejected while a turn is still active.
+- `/skills` and `/mcp` also require an existing General or topic session, but they are read-only and do not wait for the active turn to finish.
 - Existing root and topic sessions persist only their own explicit overrides in Kirbot, and every real turn start resolves `profile config + session override`.
 - `thread/resume` is no longer treated as the write path for thread settings; it is used only to reattach a persisted thread to a cold app-server process.
 - `/approvals` remains an alias for `/permissions`.
@@ -148,6 +152,7 @@ Verified by:
 
 - General-session and topic-session settings command tests in [`packages/kirbot-core/tests/bridge.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/bridge.test.ts)
 - command-menu tests in [`packages/kirbot-core/tests/telegram-command-sync.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/telegram-command-sync.test.ts)
+- listing presentation tests in [`packages/kirbot-core/tests/presentation.test.ts`](/home/jtkw/kirbot/packages/kirbot-core/tests/presentation.test.ts)
 
 ## 7. Manage Shared Custom Commands
 

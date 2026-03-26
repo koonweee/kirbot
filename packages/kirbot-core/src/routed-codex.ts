@@ -131,6 +131,14 @@ export class RoutedCodexApi implements BridgeCodexApi {
     return this.#getGateway(profileId).listModels(profileId);
   }
 
+  async listSkills(profileId: string, cwd: string) {
+    return this.#getGateway(profileId).listSkills(profileId, cwd);
+  }
+
+  async listMcpServers(profileId: string) {
+    return this.#getGateway(profileId).listMcpServers(profileId);
+  }
+
   async respondToCommandApproval(id: RequestId, response: { decision: CommandExecutionApprovalDecision }) {
     return this.#runRequestOperation(id, (gateway, upstreamRequestId) =>
       gateway.respondToCommandApproval(upstreamRequestId, response)

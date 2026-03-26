@@ -1769,6 +1769,325 @@ describe("CodexGateway", () => {
       }
     ]);
   });
+
+  it("sends typed skills/list requests", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+
+    const listPromise = client.listSkills({
+      cwds: ["/home/dev/coding"],
+      forceReload: true
+    });
+    await Promise.resolve();
+
+    expect(transport.sent).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "skills/list",
+        id: 1,
+        params: {
+          cwds: ["/home/dev/coding"],
+          forceReload: true
+        }
+      }
+    ]);
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        data: [
+          {
+            cwd: "/home/dev/coding",
+            skills: [],
+            errors: []
+          }
+        ]
+      }
+    });
+
+    await expect(listPromise).resolves.toEqual({
+      data: [
+        {
+          cwd: "/home/dev/coding",
+          skills: [],
+          errors: []
+        }
+      ]
+    });
+  });
+
+  it("lists skills for a specific cwd through the gateway", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const listPromise = gateway.listSkills("coding", "/home/dev/coding");
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "skills/list",
+      id: 2,
+      params: {
+        cwds: ["/home/dev/coding"],
+        forceReload: true
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        data: [
+          {
+            cwd: "/home/dev/coding",
+            skills: [
+              {
+                name: "brainstorming",
+                description: "Explore intent before implementation",
+                shortDescription: "Explore intent before implementation",
+                path: "/home/dev/kirbot/skills/brainstorming/SKILL.md",
+                scope: "user",
+                enabled: true
+              }
+            ],
+            errors: []
+          }
+        ]
+      }
+    });
+
+    await expect(listPromise).resolves.toEqual({
+      cwd: "/home/dev/coding",
+      skills: [
+        {
+          name: "brainstorming",
+          description: "Explore intent before implementation",
+          shortDescription: "Explore intent before implementation",
+          path: "/home/dev/kirbot/skills/brainstorming/SKILL.md",
+          scope: "user",
+          enabled: true
+        }
+      ],
+      errors: []
+    });
+  });
+
+  it("lists MCP servers across paginated mcpServerStatus/list responses", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const listPromise = gateway.listMcpServers("coding");
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "mcpServerStatus/list",
+      id: 2,
+      params: {
+        limit: 100
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        data: [
+          {
+            name: "docs",
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported"
+          }
+        ],
+        nextCursor: "cursor-2"
+      }
+    });
+    await waitFor(() =>
+      transport.sent.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "method" in message &&
+          message.method === "mcpServerStatus/list" &&
+          "params" in message &&
+          typeof message.params === "object" &&
+          message.params !== null &&
+          "cursor" in message.params &&
+          message.params.cursor === "cursor-2"
+      )
+    );
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "mcpServerStatus/list",
+      id: 3,
+      params: {
+        limit: 100,
+        cursor: "cursor-2"
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        data: [
+          {
+            name: "github",
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "oAuth"
+          }
+        ],
+        nextCursor: null
+      }
+    });
+
+    await expect(listPromise).resolves.toEqual([
+      {
+        name: "docs",
+        tools: {},
+        resources: [],
+        resourceTemplates: [],
+        authStatus: "unsupported"
+      },
+      {
+        name: "github",
+        tools: {},
+        resources: [],
+        resourceTemplates: [],
+        authStatus: "oAuth"
+      }
+    ]);
+  });
+
+  it("treats mcp pagination cursors as opaque strings", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexRpcClient(transport);
+    const gateway = new CodexGateway(client, {
+      defaultCwd: "/workspace",
+      model: undefined,
+      modelProvider: undefined,
+      sandbox: undefined,
+      approvalPolicy: undefined,
+      serviceName: "telegram-codex-bridge",
+      developerInstructions: undefined,
+      config: undefined
+    });
+
+    const initializePromise = gateway.initialize();
+    await Promise.resolve();
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        userAgent: "codex-test"
+      }
+    });
+    await initializePromise;
+
+    const listPromise = gateway.listMcpServers("coding");
+    await Promise.resolve();
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "mcpServerStatus/list",
+      id: 2,
+      params: {
+        limit: 100
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        data: [],
+        nextCursor: ""
+      }
+    });
+    await waitFor(() =>
+      transport.sent.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "method" in message &&
+          message.method === "mcpServerStatus/list" &&
+          "params" in message &&
+          typeof message.params === "object" &&
+          message.params !== null &&
+          "cursor" in message.params &&
+          message.params.cursor === ""
+      )
+    );
+
+    expect(transport.sent.at(-1)).toEqual({
+      jsonrpc: "2.0",
+      method: "mcpServerStatus/list",
+      id: 3,
+      params: {
+        limit: 100,
+        cursor: ""
+      }
+    });
+
+    transport.emitMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        data: [],
+        nextCursor: null
+      }
+    });
+
+    await expect(listPromise).resolves.toEqual([]);
+  });
 });
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
