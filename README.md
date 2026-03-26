@@ -188,6 +188,7 @@ Notes:
 Intentional override points beyond `config/codex-profiles.json` are:
 - `/model`, `/fast`, and `/permissions` in `General`, which override only the active General session
 - `/model`, `/fast`, and `/permissions` inside a topic, which override only that topic session
+- `/skills` and `/mcp`, which list the active General or topic session inventory without changing session settings
 - new-session `cwd` selection, including `/start <path>`, which stays per thread because it is session-specific
 - `apps/bot/KIRBOT.md` is sent as Codex developer instructions.
 - Codex base instructions are intentionally left unset.

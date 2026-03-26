@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { AppServerEvent, ResolvedTurnSnapshot } from "@kirbot/codex-client";
 import type { CollaborationMode } from "@kirbot/codex-client/generated/codex/CollaborationMode";
 import type { Model } from "@kirbot/codex-client/generated/codex/v2/Model";
+import type { SkillsListEntry } from "@kirbot/codex-client/generated/codex/v2/SkillsListEntry";
+import type { McpServerStatus } from "@kirbot/codex-client/generated/codex/v2/McpServerStatus";
 import type { RequestId } from "@kirbot/codex-client/generated/codex/RequestId";
 import type { CommandExecutionApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/CommandExecutionApprovalDecision";
 import type { FileChangeApprovalDecision } from "@kirbot/codex-client/generated/codex/v2/FileChangeApprovalDecision";
@@ -38,6 +40,8 @@ class FakeCodexApi implements BridgeCodexApi {
   readonly ensureThreadLoadedCalls: string[] = [];
   readonly readThreadCalls: string[] = [];
   readonly sendTurnCalls: string[] = [];
+  readonly listSkillsCalls: Array<{ profileId: string; cwd: string }> = [];
+  readonly listMcpServersCalls: string[] = [];
   readonly commandApprovalResponses: RequestId[] = [];
   readonly fileChangeApprovalResponses: RequestId[] = [];
   readonly permissionsApprovalResponses: RequestId[] = [];
@@ -149,6 +153,20 @@ class FakeCodexApi implements BridgeCodexApi {
     return [];
   }
 
+  async listSkills(profileId: string, cwd: string): Promise<SkillsListEntry | null> {
+    this.listSkillsCalls.push({ profileId, cwd });
+    return {
+      cwd,
+      skills: [],
+      errors: []
+    };
+  }
+
+  async listMcpServers(profileId: string): Promise<McpServerStatus[]> {
+    this.listMcpServersCalls.push(profileId);
+    return [];
+  }
+
   async respondToCommandApproval(id: RequestId, _response: { decision: CommandExecutionApprovalDecision }): Promise<void> {
     if (this.nextCommandApprovalError) {
       const error = this.nextCommandApprovalError;
@@ -254,6 +272,22 @@ describe("RoutedCodexApi", () => {
     expect(general.ensureThreadLoadedCalls).toEqual([]);
     expect(coding.sendTurnCalls).toEqual([upstreamThreadId]);
     expect(general.sendTurnCalls).toEqual([]);
+  });
+
+  it("routes skills and mcp listing reads to the requested profile gateway", async () => {
+    const general = new FakeCodexApi("general");
+    const coding = new FakeCodexApi("coding");
+    const routed = new RoutedCodexApi({ general, coding });
+
+    await routed.listSkills("coding", "/home/dev/coding");
+    await routed.listMcpServers("coding");
+
+    expect(coding.listSkillsCalls).toEqual([
+      { profileId: "coding", cwd: "/home/dev/coding" }
+    ]);
+    expect(coding.listMcpServersCalls).toEqual(["coding"]);
+    expect(general.listSkillsCalls).toEqual([]);
+    expect(general.listMcpServersCalls).toEqual([]);
   });
 
   it("namespaces new thread and request ids so identical upstream ids from different gateways do not collide", async () => {

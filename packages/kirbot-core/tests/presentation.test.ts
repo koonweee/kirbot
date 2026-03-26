@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommentaryArtifactButton,
   buildCommentaryArtifactPublication,
+  buildRenderedMcpListing,
+  buildRenderedSkillsListing,
   buildPlanArtifactMessage,
   buildPlanArtifactMessages,
   buildRenderedAssistantMessage,
@@ -416,6 +418,214 @@ describe("topic command keyboard presentation", () => {
       one_time_keyboard: false,
       input_field_placeholder: "Commands"
     });
+  });
+});
+
+describe("skills and mcp listing presentation", () => {
+  it("renders a compact skills listing", () => {
+    expect(
+      buildRenderedSkillsListing({
+        cwd: "/home/dev/coding",
+        skills: [
+          {
+            name: "brainstorming",
+            description: "Explore intent before implementation",
+            shortDescription: "Explore intent before implementation",
+            path: "/home/dev/kirbot/skills/brainstorming/SKILL.md",
+            scope: "user",
+            enabled: true
+          }
+        ],
+        errors: []
+      })
+    ).toEqual({
+      text: [
+        "/skills",
+        "",
+        "CWD: /home/dev/coding",
+        "",
+        "• brainstorming [enabled]",
+        "  Explore intent before implementation"
+      ].join("\n")
+    });
+  });
+
+  it("renders a compact skills warning block when scan errors are present", () => {
+    expect(
+      buildRenderedSkillsListing({
+        cwd: "/home/dev/coding",
+        skills: [],
+        errors: [
+          {
+            path: "/home/dev/kirbot/skills/bad/SKILL.md",
+            message: "invalid frontmatter"
+          }
+        ]
+      })
+    ).toEqual({
+      text: [
+        "/skills",
+        "",
+        "CWD: /home/dev/coding",
+        "",
+        "No skills available for /home/dev/coding",
+        "",
+        "Warnings:",
+        "- /home/dev/kirbot/skills/bad/SKILL.md: invalid frontmatter"
+      ].join("\n")
+    });
+  });
+
+  it("sorts skills alphabetically and caps warning output", () => {
+    expect(
+      buildRenderedSkillsListing({
+        cwd: "/home/dev/coding",
+        skills: [
+          {
+            name: "zeta",
+            description: "last",
+            path: "/tmp/zeta/SKILL.md",
+            scope: "user",
+            enabled: false
+          },
+          {
+            name: "alpha",
+            description: "first",
+            path: "/tmp/alpha/SKILL.md",
+            scope: "user",
+            enabled: true
+          }
+        ],
+        errors: [
+          { path: "/tmp/1", message: "one" },
+          { path: "/tmp/2", message: "two" },
+          { path: "/tmp/3", message: "three" },
+          { path: "/tmp/4", message: "four" }
+        ]
+      })
+    ).toEqual({
+      text: [
+        "/skills",
+        "",
+        "CWD: /home/dev/coding",
+        "",
+        "• alpha [enabled]",
+        "  first",
+        "• zeta [disabled]",
+        "  last",
+        "",
+        "Warnings:",
+        "- /tmp/1: one",
+        "- /tmp/2: two",
+        "- /tmp/3: three",
+        "...and 1 more"
+      ].join("\n")
+    });
+  });
+
+  it("renders a compact mcp listing with auth and transport summary", () => {
+    expect(
+      buildRenderedMcpListing({
+        statuses: [
+          {
+            name: "openaiDeveloperDocs",
+            authStatus: "oAuth",
+            tools: {
+              search: {
+                name: "search",
+                inputSchema: { type: "object" }
+              }
+            },
+            resources: [],
+            resourceTemplates: []
+          }
+        ],
+        transportSummaries: {
+          openaiDeveloperDocs: "URL: https://developers.openai.com/mcp"
+        }
+      })
+    ).toEqual({
+      text: [
+        "/mcp",
+        "",
+        "• openaiDeveloperDocs",
+        "  Auth: oauth",
+        "  URL: https://developers.openai.com/mcp",
+        "  Tools: search",
+        "  Resources: (none)",
+        "  Resource templates: (none)"
+      ].join("\n")
+    });
+  });
+
+  it("sorts mcp servers alphabetically and caps verbose inventory sections", () => {
+    expect(
+      buildRenderedMcpListing({
+        statuses: [
+          {
+            name: "zeta",
+            authStatus: "unsupported",
+            tools: {
+              delta: { name: "delta", inputSchema: { type: "object" } },
+              beta: { name: "beta", inputSchema: { type: "object" } },
+              gamma: { name: "gamma", inputSchema: { type: "object" } },
+              alpha: { name: "alpha", inputSchema: { type: "object" } }
+            },
+            resources: [
+              { name: "res-d", uri: "file://d" },
+              { name: "res-b", uri: "file://b" },
+              { name: "res-c", uri: "file://c" },
+              { name: "res-a", uri: "file://a" }
+            ],
+            resourceTemplates: [
+              { name: "tpl-d", uriTemplate: "file://d/{id}" },
+              { name: "tpl-b", uriTemplate: "file://b/{id}" },
+              { name: "tpl-c", uriTemplate: "file://c/{id}" },
+              { name: "tpl-a", uriTemplate: "file://a/{id}" }
+            ]
+          },
+          {
+            name: "alpha",
+            authStatus: "notLoggedIn",
+            tools: {},
+            resources: [],
+            resourceTemplates: []
+          }
+        ]
+      })
+    ).toEqual({
+      text: [
+        "/mcp",
+        "",
+        "• alpha",
+        "  Auth: notLoggedIn",
+        "  Tools: (none)",
+        "  Resources: (none)",
+        "  Resource templates: (none)",
+        "",
+        "• zeta",
+        "  Auth: unsupported",
+        "  Tools: alpha, beta, delta, ...and 1 more",
+        "  Resources: res-a, res-b, res-c, ...and 1 more",
+        "  Resource templates: tpl-a, tpl-b, tpl-c, ...and 1 more"
+      ].join("\n")
+    });
+  });
+
+  it("caps oversized listing messages to Telegram-safe text lengths", () => {
+    const rendered = buildRenderedSkillsListing({
+      cwd: "/home/dev/coding",
+      skills: Array.from({ length: 300 }, (_, index) => ({
+        name: `skill-${index.toString().padStart(3, "0")}`,
+        description: `Description ${"token ".repeat(10)}`.trim(),
+        path: `/tmp/skill-${index}/SKILL.md`,
+        scope: "user",
+        enabled: index % 2 === 0
+      })),
+      errors: []
+    });
+
+    expect(rendered.text.length).toBeLessThanOrEqual(4000);
   });
 });
 

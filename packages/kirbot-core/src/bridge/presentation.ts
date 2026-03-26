@@ -4,6 +4,8 @@ import type { PermissionsRequestApprovalParams } from "@kirbot/codex-client/gene
 import type { ThreadItem } from "@kirbot/codex-client/generated/codex/v2/ThreadItem";
 import type { ReasoningEffort } from "@kirbot/codex-client/generated/codex/ReasoningEffort";
 import type { ServiceTier } from "@kirbot/codex-client/generated/codex/ServiceTier";
+import type { McpServerStatus } from "@kirbot/codex-client/generated/codex/v2/McpServerStatus";
+import type { SkillsListEntry } from "@kirbot/codex-client/generated/codex/v2/SkillsListEntry";
 import type { SessionMode } from "../domain";
 import {
   renderCodeText,
@@ -34,6 +36,8 @@ import { isImageGenerationSuccess } from "./generated-image-publication";
 const TELEGRAM_MESSAGE_CHAR_LIMIT = 4000;
 const COMMAND_FAILURE_OUTPUT_CHAR_LIMIT = 1200;
 const FILE_CHANGE_PATH_PREVIEW_LIMIT = 8;
+const LISTING_SECTION_ITEM_LIMIT = 3;
+const LISTING_TRUNCATED_SUFFIX = "\n...output truncated";
 const RESPONSE_TRUNCATED_VIEW_SUFFIX = "\n\n[response truncated, continue in View]";
 const RESPONSE_TRUNCATED_SUFFIX = "\n\n[response truncated]";
 const COMMENTARY_LOGS_LABEL = "Logs";
@@ -286,6 +290,64 @@ export function buildTopicCommandKeyboard(
     one_time_keyboard: false,
     input_field_placeholder: "Commands"
   };
+}
+
+export function buildRenderedSkillsListing(entry: SkillsListEntry): TelegramRenderedMessage {
+  const lines = ["/skills", "", `CWD: ${entry.cwd}`];
+
+  const sortedSkills = [...entry.skills].sort((left, right) => left.name.localeCompare(right.name));
+  if (sortedSkills.length > 0) {
+    lines.push("");
+    for (const skill of sortedSkills) {
+      lines.push(`• ${skill.name} [${skill.enabled ? "enabled" : "disabled"}]`);
+      lines.push(`  ${skill.shortDescription?.trim() || skill.description.trim()}`);
+    }
+  } else {
+    lines.push("");
+    lines.push(`No skills available for ${entry.cwd}`);
+  }
+
+  if (entry.errors.length > 0) {
+    lines.push("");
+    lines.push("Warnings:");
+    const sortedErrors = [...entry.errors].sort((left, right) => left.path.localeCompare(right.path));
+    for (const error of sortedErrors.slice(0, LISTING_SECTION_ITEM_LIMIT)) {
+      lines.push(`- ${error.path}: ${error.message}`);
+    }
+    appendOverflowLine(lines, sortedErrors.length, LISTING_SECTION_ITEM_LIMIT);
+  }
+
+  return { text: clampListingText(lines.join("\n")) };
+}
+
+export function buildRenderedMcpListing(input: {
+  statuses: McpServerStatus[];
+  transportSummaries?: Record<string, string>;
+}): TelegramRenderedMessage {
+  const lines = ["/mcp"];
+
+  const sortedStatuses = [...input.statuses].sort((left, right) => left.name.localeCompare(right.name));
+  for (const status of sortedStatuses) {
+    lines.push("");
+    lines.push(`• ${status.name}`);
+    lines.push(`  Auth: ${normalizeMcpAuthStatusLabel(status.authStatus)}`);
+
+    const transportSummary = input.transportSummaries?.[status.name];
+    if (transportSummary) {
+      lines.push(`  ${transportSummary}`);
+    }
+
+    lines.push(`  Tools: ${summarizeMcpToolNames(status.tools)}`);
+    lines.push(`  Resources: ${summarizeMcpResourceNames(status.resources)}`);
+    lines.push(`  Resource templates: ${summarizeMcpResourceTemplateNames(status.resourceTemplates)}`);
+  }
+
+  if (input.statuses.length === 0) {
+    lines.push("");
+    lines.push("No MCP servers available");
+  }
+
+  return { text: clampListingText(lines.join("\n")) };
 }
 
 export function renderTelegramStatusDraft(
@@ -648,6 +710,53 @@ function chunkReplyKeyboardButtons(buttons: readonly string[], rowSize: number):
   }
 
   return rows;
+}
+
+function normalizeMcpAuthStatusLabel(authStatus: McpServerStatus["authStatus"]): string {
+  return authStatus === "oAuth" ? "oauth" : authStatus;
+}
+
+function summarizeMcpToolNames(tools: McpServerStatus["tools"]): string {
+  const names = Object.keys(tools).filter((name) => Boolean(tools[name]));
+  return summarizeNameList(names);
+}
+
+function summarizeMcpResourceNames(resources: McpServerStatus["resources"]): string {
+  return summarizeNameList(resources.map((resource) => resource.name));
+}
+
+function summarizeMcpResourceTemplateNames(resourceTemplates: McpServerStatus["resourceTemplates"]): string {
+  return summarizeNameList(resourceTemplates.map((template) => template.name));
+}
+
+function summarizeNameList(names: string[]): string {
+  const sortedNames = [...names].sort((left, right) => left.localeCompare(right));
+  if (sortedNames.length === 0) {
+    return "(none)";
+  }
+
+  const visibleNames = sortedNames.slice(0, LISTING_SECTION_ITEM_LIMIT);
+  const remaining = sortedNames.length - visibleNames.length;
+  return remaining > 0 ? `${visibleNames.join(", ")}, ...and ${remaining} more` : visibleNames.join(", ");
+}
+
+function appendOverflowLine(lines: string[], totalCount: number, visibleCount: number): void {
+  const remaining = totalCount - visibleCount;
+  if (remaining > 0) {
+    lines.push(`...and ${remaining} more`);
+  }
+}
+
+function clampListingText(text: string): string {
+  if (text.length <= TELEGRAM_MESSAGE_CHAR_LIMIT) {
+    return text;
+  }
+
+  const maxBodyLength = TELEGRAM_MESSAGE_CHAR_LIMIT - LISTING_TRUNCATED_SUFFIX.length;
+  const trimmed = text.slice(0, maxBodyLength);
+  const newlineIndex = trimmed.lastIndexOf("\n");
+  const clampedBody = newlineIndex > 0 ? trimmed.slice(0, newlineIndex) : trimmed;
+  return `${clampedBody}${LISTING_TRUNCATED_SUFFIX}`;
 }
 
 function buildArtifactAvailabilityMessage(button: TelegramInlineKeyboardButton, text: string): ArtifactMessage {

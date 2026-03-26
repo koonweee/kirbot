@@ -14,6 +14,8 @@ import type { CommandExecutionRequestApprovalResponse } from "./generated/codex/
 import type { FileChangeRequestApprovalParams } from "./generated/codex/v2/FileChangeRequestApprovalParams";
 import type { FileChangeRequestApprovalResponse } from "./generated/codex/v2/FileChangeRequestApprovalResponse";
 import type { Model } from "./generated/codex/v2/Model";
+import type { SkillsListEntry } from "./generated/codex/v2/SkillsListEntry";
+import type { McpServerStatus } from "./generated/codex/v2/McpServerStatus";
 import type { PermissionsRequestApprovalParams } from "./generated/codex/v2/PermissionsRequestApprovalParams";
 import type { PermissionsRequestApprovalResponse } from "./generated/codex/v2/PermissionsRequestApprovalResponse";
 import type { Config } from "./generated/codex/v2/Config";
@@ -425,6 +427,34 @@ export class CodexGateway {
       models.push(...response.data.filter((model) => !model.hidden));
       if (!response.nextCursor) {
         return models;
+      }
+      cursor = response.nextCursor;
+    }
+  }
+
+  async listSkills(profileId: string, cwd: string): Promise<SkillsListEntry | null> {
+    void profileId;
+    const response = await this.client.listSkills({
+      cwds: [cwd],
+      forceReload: true
+    });
+
+    return response.data.find((entry) => entry.cwd === cwd) ?? null;
+  }
+
+  async listMcpServers(profileId: string): Promise<McpServerStatus[]> {
+    void profileId;
+    const statuses: McpServerStatus[] = [];
+    let cursor: string | null = null;
+
+    while (true) {
+      const response = await this.client.listMcpServerStatus({
+        limit: 100,
+        ...(cursor !== null ? { cursor } : {})
+      });
+      statuses.push(...response.data);
+      if (response.nextCursor === null) {
+        return statuses;
       }
       cursor = response.nextCursor;
     }
