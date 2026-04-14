@@ -274,8 +274,8 @@ describe("codex home helpers", () => {
 
     fs.mkdirSync(join(targetHome, "rules"), { recursive: true });
     fs.writeFileSync(join(targetHome, "rules", "local.md"), "# keep me\n");
-    fs.mkdirSync(join(targetHome, "superpowers"), { recursive: true });
-    fs.writeFileSync(join(targetHome, "superpowers", "manifest.txt"), "skill-index\n");
+    fs.mkdirSync(join(targetHome, "session-state"), { recursive: true });
+    fs.writeFileSync(join(targetHome, "session-state", "manifest.txt"), "session-index\n");
     fs.writeFileSync(join(targetHome, "runtime.log"), "runtime-state\n");
     fs.writeFileSync(join(targetHome, "auth.json"), '{"token":"existing"}');
     fs.writeFileSync(join(targetHome, "config.toml"), 'model = "old-model"\n');
@@ -309,7 +309,7 @@ describe("codex home helpers", () => {
     expect(fs.existsSync(join(targetHome, "skills", "old-skill"))).toBe(false);
     expect(fs.readFileSync(join(targetHome, "skills", "brainstorming", "SKILL.md"), "utf8")).toBe("# brainstorming\n");
     expect(fs.readFileSync(join(targetHome, "rules", "local.md"), "utf8")).toBe("# keep me\n");
-    expect(fs.readFileSync(join(targetHome, "superpowers", "manifest.txt"), "utf8")).toBe("skill-index\n");
+    expect(fs.readFileSync(join(targetHome, "session-state", "manifest.txt"), "utf8")).toBe("session-index\n");
     expect(fs.readFileSync(join(targetHome, "runtime.log"), "utf8")).toBe("runtime-state\n");
   });
 
