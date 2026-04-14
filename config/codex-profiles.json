@@ -7,7 +7,6 @@
   "skills": {
     "agent-browser": {},
     "kirbot-skill-install": {},
-    "superpowers": {},
     "telegram-workspace-send": {}
   },
   "mcps": {
@@ -18,7 +17,7 @@
   },
   "profiles": {
     "general": {
-      "defaultCwd": "/home/dev/general",
+      "defaultCwd": "/home/kirbot/general",
       "model": "gpt-5.4-mini",
       "reasoningEffort": "xhigh",
       "serviceTier": "fast",
@@ -34,7 +33,7 @@
       ]
     },
     "coding": {
-      "defaultCwd": "/home/dev/coding",
+      "defaultCwd": "/home/kirbot/coding",
       "model": "gpt-5.4",
       "reasoningEffort": "high",
       "serviceTier": "fast",
@@ -43,7 +42,6 @@
       "skills": [
         "agent-browser",
         "kirbot-skill-install",
-        "superpowers",
         "telegram-workspace-send"
       ],
       "mcps": []

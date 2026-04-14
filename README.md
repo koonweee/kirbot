@@ -74,9 +74,9 @@ Codex profile setup:
     "plan": "coding"
   },
   "skills": {
-    "brainstorming": {},
+    "agent-browser": {},
     "kirbot-skill-install": {},
-    "superpowers": {}
+    "telegram-workspace-send": {}
   },
   "mcps": {
     "github": {
@@ -86,26 +86,25 @@ Codex profile setup:
   },
   "profiles": {
     "general": {
-      "defaultCwd": "/home/dev/general",
+      "defaultCwd": "/home/kirbot/general",
       "model": "gpt-5",
       "sandboxMode": "workspace-write",
       "approvalPolicy": "on-request",
-      "skills": [],
+      "skills": ["agent-browser", "kirbot-skill-install", "telegram-workspace-send"],
       "mcps": []
     },
     "coding": {
-      "defaultCwd": "/home/dev/coding",
+      "defaultCwd": "/home/kirbot/coding",
       "model": "gpt-5-codex",
       "sandboxMode": "danger-full-access",
       "approvalPolicy": "never",
-      "skills": ["brainstorming", "kirbot-skill-install", "superpowers"],
+      "skills": ["agent-browser", "kirbot-skill-install", "telegram-workspace-send"],
       "mcps": ["github"]
     }
   }
 }
 ```
 
-- Clone this repo with `git clone --recurse-submodules` or run `git submodule update --init --recursive` after checkout so the upstream `superpowers` collection is present.
 - `config/codex-profiles.json` is the checked-in source of truth for route selection, shared skill ids, shared MCP definitions, and per-profile defaults.
 - `general` owns the forum `General` surface.
 - `coding` owns `/thread` and `/plan`.
@@ -113,9 +112,9 @@ Codex profile setup:
 
 Managed profile homes:
 
-- Shared skill source lives in checked-in `skills/<skill-id>/`; `superpowers` is backed by the `vendor/superpowers` submodule and exposed through `skills/superpowers/skills`.
+- Shared skill source lives in checked-in `skills/<skill-id>/`.
 - On startup, Kirbot creates missing profile homes, rewrites each managed `config.toml`, and rebuilds each managed `skills/` subtree from `config/codex-profiles.json`.
-- Kirbot preserves runtime-owned files such as `auth.json`, Codex thread/session state, `rules/`, and `superpowers/`.
+- Kirbot preserves runtime-owned files such as `auth.json`, Codex thread/session state, and `rules/`.
 - Do not edit `dirname(DATABASE_PATH)/homes/<profile>/skills/` directly; with the default database path that is `data/homes/<profile>/skills/`. It is generated.
 - The cutover is hard: old sessions from the previous single-home setup are not migrated and will fail when first resumed. Start a new thread or topic instead.
 
@@ -183,7 +182,7 @@ Notes:
 
 - kirbot always starts the pinned `@openai/codex` app server from `node_modules`; it does not depend on a globally installed `codex`.
 - `config/codex-profiles.json` controls profile routing, MCP selection, the generated per-profile Codex homes, and the default Codex settings for each profile.
-- Shared skills are authored under `skills/` and synced into each managed home on startup; `superpowers` is surfaced from the `vendor/superpowers` submodule via `skills/superpowers/skills`.
+- Shared skills are authored under `skills/` and synced into each managed home on startup.
 
 Intentional override points beyond `config/codex-profiles.json` are:
 - `/model`, `/fast`, and `/permissions` in `General`, which override only the active General session

@@ -37,7 +37,7 @@ export function prepareKirbotCodexHome(options: PrepareKirbotCodexHomeOptions): 
   );
   seedAuthJsonIfMissing(sourceHomePath, options.targetHomePath);
   // Kirbot-managed boundary: rewrite config.toml and rebuild skills/ on every startup.
-  // Runtime-owned state such as auth.json, rules/, superpowers/, and session data stays untouched.
+  // Runtime-owned state such as auth.json, rules/, and session data stays untouched.
   try {
     stageManagedConfigToml(options.targetHomePath, options.managed.managedConfigToml);
     stageManagedSkills({
@@ -81,7 +81,7 @@ function stageManagedSkills(options: {
   targetHomePath: string;
   managedSkills: readonly ManagedSkillSource[];
 }): void {
-  // Kirbot-managed boundary: rebuild skills/ exactly; rules/, superpowers/, and runtime files are not managed here.
+  // Kirbot-managed boundary: rebuild skills/ exactly; rules/ and runtime files are not managed here.
   const stagedSkillsPath = join(options.targetHomePath, ".kirbot-managed-skills-next");
   let completed = false;
 
