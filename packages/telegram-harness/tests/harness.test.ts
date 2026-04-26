@@ -392,6 +392,7 @@ class ScriptedCodex implements BridgeCodexApi {
         defaultReasoningEffort: "medium",
         inputModalities: [],
         supportsPersonality: false,
+        additionalSpeedTiers: [],
         isDefault: true
       }
     ];

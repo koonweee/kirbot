@@ -738,14 +738,16 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "item-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
     await coordinator.handleItemCompleted("turn-1", {
       type: "agentMessage",
       id: "item-1",
       text: "Inspecting the rollout plan",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
@@ -797,14 +799,16 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "item-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
     await coordinator.handleItemCompleted("turn-1", {
       type: "agentMessage",
       id: "item-1",
       text: "Inspecting the rollout plan",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
@@ -839,14 +843,16 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "item-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
     await coordinator.handleItemCompleted("turn-1", {
       type: "agentMessage",
       id: "item-1",
       text: "Inspecting the rollout plan",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.finalizeInterruptedTurnById("thread-1", "turn-1");
 
@@ -993,14 +999,16 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "item-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting the rollout plan");
     await coordinator.handleItemCompleted("turn-1", {
       type: "agentMessage",
       id: "item-1",
       text: "Inspecting the rollout plan",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleItemStarted("turn-1", {
       type: "plan",
@@ -1057,14 +1065,16 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "item-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "item-1", commentaryText);
     await coordinator.handleItemCompleted("turn-1", {
       type: "agentMessage",
       id: "item-1",
       text: commentaryText,
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
@@ -1102,14 +1112,16 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "item-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "item-1", "Inspecting files");
     await coordinator.handleItemCompleted("turn-1", {
       type: "agentMessage",
       id: "item-1",
       text: "Inspecting files",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
@@ -1151,7 +1163,8 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "commentary-1",
       text: "",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.handleAssistantDelta("turn-1", "commentary-1", "Inspecting the rollout plan.");
     await coordinator.handleItemStarted("turn-1", {
@@ -1160,6 +1173,7 @@ describe("TurnLifecycleCoordinator", () => {
       command: "npm test",
       cwd: "/workspace",
       processId: null,
+      source: "agent",
       status: "inProgress",
       commandActions: [],
       aggregatedOutput: null,
@@ -1172,6 +1186,7 @@ describe("TurnLifecycleCoordinator", () => {
       command: "npm test",
       cwd: "/workspace",
       processId: null,
+      source: "agent",
       status: "completed",
       commandActions: [],
       aggregatedOutput: "ok",
@@ -1182,7 +1197,8 @@ describe("TurnLifecycleCoordinator", () => {
       type: "agentMessage",
       id: "commentary-1",
       text: "Inspecting the rollout plan.",
-      phase: "commentary"
+      phase: "commentary",
+      memoryCitation: null
     });
     await coordinator.completeTurn("thread-1", "turn-1");
 
@@ -1286,6 +1302,7 @@ describe("TurnLifecycleCoordinator", () => {
         command: "npm test",
         cwd: "/workspace",
         processId: null,
+        source: "agent",
         status: "inProgress",
         commandActions: [],
         aggregatedOutput: null,
@@ -1315,6 +1332,7 @@ describe("TurnLifecycleCoordinator", () => {
       command: "npm test",
       cwd: "/workspace",
       processId: null,
+      source: "agent",
       status: "completed",
       commandActions: [],
       aggregatedOutput: "ok",
@@ -1349,6 +1367,7 @@ describe("TurnLifecycleCoordinator", () => {
         command: "npm test",
         cwd: "/workspace",
         processId: null,
+        source: "agent",
         status: "inProgress",
         commandActions: [],
         aggregatedOutput: null,
@@ -1366,6 +1385,7 @@ describe("TurnLifecycleCoordinator", () => {
         command: "npm test",
         cwd: "/workspace",
         processId: null,
+        source: "agent",
         status: "completed",
         commandActions: [],
         aggregatedOutput: "ok",
@@ -1408,6 +1428,7 @@ describe("TurnLifecycleCoordinator", () => {
       await harness.coordinator.handleItemCompleted("turn-1", {
         type: "dynamicToolCall",
         id: "tool-1",
+        namespace: null,
         tool: "lookup_docs",
         arguments: {},
         status: "failed",
@@ -2012,6 +2033,7 @@ describe("TurnLifecycleCoordinator", () => {
       command: "npm test -- --runInBand",
       cwd: "/workspace/packages/kirbot-core",
       processId: null,
+      source: "agent",
       status: "failed",
       commandActions: [],
       aggregatedOutput: 'FAIL bridge.test.ts\nError: expected "waiting · 6s" to equal "waiting · 5s"',

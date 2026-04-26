@@ -277,8 +277,7 @@ export function resolvePermissionsApprovalResponse(
   return {
     permissions: {
       ...(params.permissions.network ? { network: params.permissions.network } : {}),
-      ...(params.permissions.fileSystem ? { fileSystem: params.permissions.fileSystem } : {}),
-      ...(params.permissions.macos ? { macos: params.permissions.macos } : {})
+      ...(params.permissions.fileSystem ? { fileSystem: params.permissions.fileSystem } : {})
     },
     scope
   };
