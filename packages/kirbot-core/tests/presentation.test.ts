@@ -840,10 +840,8 @@ describe("command presentation", () => {
       networkApprovalContext: { host: "registry.npmjs.org", protocol: "https" },
       additionalPermissions: {
         network: { enabled: true },
-        fileSystem: { read: ["/workspace/package.json"], write: ["/workspace/package-lock.json"] },
-        macos: null
+        fileSystem: { read: ["/workspace/package.json"], write: ["/workspace/package-lock.json"] }
       },
-      skillMetadata: { pathToSkillsMd: "/skills/npm/SKILL.md" },
       proposedExecpolicyAmendment: ["npm", "install"],
       proposedNetworkPolicyAmendments: null,
       availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
@@ -883,10 +881,8 @@ describe("command presentation", () => {
       networkApprovalContext: { host: "registry.npmjs.org", protocol: "https" },
       additionalPermissions: {
         network: { enabled: true },
-        fileSystem: { read: ["/workspace/package.json"], write: ["/workspace/package-lock.json"] },
-        macos: null
+        fileSystem: { read: ["/workspace/package.json"], write: ["/workspace/package-lock.json"] }
       },
-      skillMetadata: { pathToSkillsMd: "/skills/npm/SKILL.md" },
       proposedExecpolicyAmendment: ["npm", "install"],
       proposedNetworkPolicyAmendments: null,
       availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
@@ -894,9 +890,9 @@ describe("command presentation", () => {
 
     expect(rendered).toMatchObject({
       text:
-        "Command approval needed\n\nReason: network access required\n\nnpm install\n\nCWD: /workspace\nIntent: read package metadata from package.json\nNetwork: https://registry.npmjs.org\nPermissions: network, filesystem read (1), filesystem write (1)\nSkill: /skills/npm/SKILL.md\nScope: allow only this run, or all matching runs for this session"
+        "Command approval needed\n\nReason: network access required\n\nnpm install\n\nCWD: /workspace\nIntent: read package metadata from package.json\nNetwork: https://registry.npmjs.org\nPermissions: network, filesystem read (1), filesystem write (1)\nScope: allow only this run, or all matching runs for this session"
     });
-    expect(rendered.entities?.map((entity) => entity.type)).toEqual(["pre", "code", "code", "code"]);
+    expect(rendered.entities?.map((entity) => entity.type)).toEqual(["pre", "code", "code"]);
   });
 
   it("renders file approval cards with reason, requested root, and scope", () => {

@@ -1131,36 +1131,6 @@ function summarizeRequestedPermissions(
     });
   }
 
-  if (params.permissions.macos) {
-    if (params.permissions.macos.accessibility) {
-      lines.push({ value: "macOS Accessibility", code: false });
-    }
-    if (params.permissions.macos.launchServices) {
-      lines.push({ value: "macOS Launch Services", code: false });
-    }
-    if (params.permissions.macos.calendar) {
-      lines.push({ value: "macOS Calendar", code: false });
-    }
-    if (params.permissions.macos.reminders) {
-      lines.push({ value: "macOS Reminders", code: false });
-    }
-    if (params.permissions.macos.preferences && params.permissions.macos.preferences !== "none") {
-      lines.push({ value: `macOS Preferences (${params.permissions.macos.preferences})`, code: false });
-    }
-    if (params.permissions.macos.contacts && params.permissions.macos.contacts !== "none") {
-      lines.push({ value: `macOS Contacts (${params.permissions.macos.contacts})`, code: false });
-    }
-    if (params.permissions.macos.automations && params.permissions.macos.automations !== "none") {
-      lines.push({
-        value:
-          typeof params.permissions.macos.automations === "string"
-            ? `macOS Automation (${params.permissions.macos.automations})`
-            : `macOS Automation (${params.permissions.macos.automations.bundle_ids.join(", ")})`,
-        code: false
-      });
-    }
-  }
-
   return lines;
 }
 
@@ -1451,14 +1421,6 @@ function buildApprovalPermissionLines(
     });
   }
 
-  if (params.skillMetadata?.pathToSkillsMd?.trim()) {
-    lines.push({
-      label: "Skill",
-      value: params.skillMetadata.pathToSkillsMd.trim(),
-      code: true
-    });
-  }
-
   return lines;
 }
 
@@ -1481,10 +1443,6 @@ function summarizeAdditionalPermissions(params: CommandExecutionRequestApprovalP
   const writeCount = profile.fileSystem?.write?.length ?? 0;
   if (writeCount > 0) {
     parts.push(`filesystem write (${writeCount})`);
-  }
-
-  if (profile.macos) {
-    parts.push("macOS");
   }
 
   return parts.length > 0 ? parts.join(", ") : null;

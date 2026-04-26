@@ -265,7 +265,7 @@ class FakeCodex implements BridgeCodexApi {
   userInputs: Array<{ id: string | number; answers: ToolRequestUserInputResponse["answers"] }> = [];
   unsupported: Array<{ id: string | number; message: string }> = [];
   readTurnMessagesResult = "";
-  readTurnSnapshotResult: Partial<ResolvedTurnSnapshot> = {};
+  readTurnSnapshotResult: Record<string, unknown> = {};
   cwd = "/workspace";
   branch: string | null = "main";
   model = "gpt-5-codex";
@@ -320,6 +320,7 @@ class FakeCodex implements BridgeCodexApi {
       defaultReasoningEffort: "medium",
       inputModalities: [],
       supportsPersonality: false,
+      additionalSpeedTiers: [],
       isDefault: true
     }
   ];
@@ -572,7 +573,7 @@ class FakeCodex implements BridgeCodexApi {
       cwd: "/workspace",
       branch: "main",
       ...this.readTurnSnapshotResult
-    };
+    } as ResolvedTurnSnapshot;
   }
 
   async respondToCommandApproval(
@@ -618,10 +619,10 @@ class FakeCodex implements BridgeCodexApi {
     });
   }
 
-  emitNotification(notification: ServerNotification): void {
+  emitNotification(notification: unknown): void {
     this.emitEvent({
       kind: "notification",
-      notification
+      notification: notification as ServerNotification
     });
   }
 
@@ -3525,6 +3526,7 @@ describe("TelegramCodexBridge", () => {
         defaultReasoningEffort: "low",
         inputModalities: [],
         supportsPersonality: false,
+        additionalSpeedTiers: [],
         isDefault: false
       }
     ];
@@ -3758,6 +3760,7 @@ describe("TelegramCodexBridge", () => {
       defaultReasoningEffort: "medium",
       inputModalities: [],
       supportsPersonality: false,
+      additionalSpeedTiers: [],
       isDefault: index === 0
     }));
 
@@ -8511,14 +8514,14 @@ describe("TelegramCodexBridge", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "item-perm-1",
+        cwd: "/workspace",
         reason: "Need to write outside the workspace",
         permissions: {
           network: null,
           fileSystem: {
             read: null,
             write: ["/tmp/export"]
-          },
-          macos: null
+          }
         }
       }
     });
@@ -8601,14 +8604,14 @@ describe("TelegramCodexBridge", () => {
           threadId: "thread-1",
           turnId: "turn-1",
           itemId: "item-perm-1",
+          cwd: "/workspace",
           reason: "Need to write outside the workspace",
           permissions: {
             network: null,
             fileSystem: {
               read: null,
               write: ["/tmp/export"]
-            },
-            macos: null
+            }
           }
         }
       },
@@ -8752,14 +8755,14 @@ describe("TelegramCodexBridge", () => {
         threadId: "thread-2",
         turnId: turnIdWithoutUsername!,
         itemId: "item-perm-2",
+        cwd: "/workspace",
         reason: "Need a raw fallback prompt",
         permissions: {
           network: null,
           fileSystem: {
             read: null,
             write: ["/tmp/export"]
-          },
-          macos: null
+          }
         }
       }
     });
