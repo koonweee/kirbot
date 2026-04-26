@@ -34,7 +34,7 @@
     },
     "coding": {
       "defaultCwd": "/home/kirbot/coding",
-      "model": "gpt-5.4",
+      "model": "gpt-5.5",
       "reasoningEffort": "high",
       "serviceTier": "fast",
       "sandboxMode": "danger-full-access",
