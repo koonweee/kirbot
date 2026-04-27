@@ -13,6 +13,10 @@
     "homeassistant": {
       "url": "https://home.sf.kw0.dev/api/mcp",
       "bearer_token_env_var": "HOMEASSISTANT_TOKEN"
+    },
+    "splice": {
+      "url": "https://splice-api.kw0.dev/mcp",
+      "bearer_token_env_var": "SPLICE_TOKEN"
     }
   },
   "profiles": {
@@ -29,7 +33,8 @@
         "telegram-workspace-send"
       ],
       "mcps": [
-        "homeassistant"
+        "homeassistant",
+        "splice"
       ]
     },
     "coding": {
