@@ -49,7 +49,9 @@
         "kirbot-skill-install",
         "telegram-workspace-send"
       ],
-      "mcps": []
+      "mcps": [
+        "splice"
+      ]
     }
   }
 }
