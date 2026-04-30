@@ -39,6 +39,7 @@ describe("loadConfig", () => {
     expect(config.codex.profiles.coding!.serviceTier).toBe("fast");
     expect(config.codex.profiles.coding!.skills).toContain("kirbot-skill-install");
     expect(config.codex.profiles.coding!.skills).not.toContain("superpowers");
+    expect(config.codex.profiles.coding!.mcps).toContain("splice");
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

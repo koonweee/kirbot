@@ -1025,6 +1025,26 @@ export class TelegramCodexBridge {
       return;
     }
 
+    const trimmedPrompt = promptText.trim();
+    if (!trimmedPrompt && session.preferredMode === "plan") {
+      const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "default");
+      if (!updatedSession) {
+        await this.sendScopedBridgeMessage({
+          chatId: message.chatId,
+          topicId: message.topicId,
+          text: MODE_COMMAND_REQUIRES_SESSION_TEXT
+        });
+        return;
+      }
+
+      await this.sendScopedBridgeMessage({
+        chatId: message.chatId,
+        topicId: message.topicId,
+        text: PLAN_MODE_EXITED_TEXT
+      });
+      return;
+    }
+
     const updatedSession = await this.database.updateSessionPreferredMode(message.chatId, message.topicId!, "plan");
     if (!updatedSession) {
       await this.sendScopedBridgeMessage({
@@ -1035,7 +1055,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    if (!promptText.trim()) {
+    if (!trimmedPrompt) {
       await this.sendScopedBridgeMessage({
         chatId: message.chatId,
         topicId: message.topicId,
@@ -1049,7 +1069,7 @@ export class TelegramCodexBridge {
       topicId: message.topicId,
       text: PLAN_MODE_ENABLED_TEXT
     });
-    await this.sendTurnForSession(updatedSession, replaceMessageText(message, promptText));
+    await this.sendTurnForSession(updatedSession, replaceMessageText(message, trimmedPrompt));
   }
 
   private async implementLatestPlan(message: UserTurnMessage, extraInstructions: string): Promise<void> {

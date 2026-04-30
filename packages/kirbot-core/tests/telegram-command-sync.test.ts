@@ -97,7 +97,7 @@ describe("TelegramCommandSync", () => {
         commands: [
           {
             command: "plan",
-            description: "Switch this topic into plan mode"
+            description: "Toggle plan mode"
           },
           {
             command: "thread",
