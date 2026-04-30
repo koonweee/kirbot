@@ -1024,6 +1024,7 @@ describe("TelegramCodexBridge", () => {
           thread: "coding",
           plan: "coding"
         },
+        profileCommands: {},
         mcps: {},
         model: undefined,
         modelProvider: undefined,
@@ -2362,6 +2363,51 @@ describe("TelegramCodexBridge", () => {
       }
     });
     expect((await database.getSessionByTopic(-1001, 101))?.profileId).toBe("general");
+  });
+
+  it("creates a topic session from a configured profile command", async () => {
+    config.codex.profileCommands.code = {
+      profileId: "coding",
+      description: "Start a coding topic thread"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/code Wire the new profile route"
+    });
+
+    expect(telegram.createdTopics).toMatchObject([
+      {
+        chatId: -1001,
+        name: "Wire the new profile route"
+      }
+    ]);
+    expect(codex.createThreadProfileIds).toEqual(["coding"]);
+    expect(codex.createThreadCalls.at(-1)?.title).toBe("Wire the new profile route");
+    expect((await database.getSessionByTopic(-1001, 101))?.profileId).toBe("coding");
+  });
+
+  it("rejects bare configured profile commands before creating a topic", async () => {
+    config.codex.profileCommands.code = {
+      profileId: "coding",
+      description: "Start a coding topic thread"
+    };
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: null,
+      messageId: 18,
+      updateId: 28,
+      userId: 42,
+      text: "/code"
+    });
+
+    expect(telegram.createdTopics).toEqual([]);
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Usage: /code <initial prompt>");
   });
 
   it("merges profile settings with partial session overrides before sending turns", async () => {

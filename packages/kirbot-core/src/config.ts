@@ -80,6 +80,7 @@ export type AppConfig = {
     profilesConfigPath: string;
     profiles: CodexProfilesConfig["profiles"];
     routing: DatabaseProfileRouting;
+    profileCommands: CodexProfilesConfig["profileCommands"];
     mcps: CodexProfilesConfig["mcps"];
     model: undefined;
     modelProvider: undefined;
@@ -118,6 +119,7 @@ export function loadConfig(): AppConfig {
       profilesConfigPath: codexProfilesConfigPath,
       profiles: codexProfiles.profiles,
       routing: codexProfiles.routes as DatabaseProfileRouting,
+      profileCommands: codexProfiles.profileCommands,
       mcps: codexProfiles.mcps,
       model: undefined,
       modelProvider: undefined,

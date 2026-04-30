@@ -497,6 +497,7 @@ function buildConfig(
         thread: "coding",
         plan: includeDocs ? "docs" : "coding"
       },
+      profileCommands: {},
       mcps: {
         github: {
           type: "stdio",

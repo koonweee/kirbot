@@ -19,6 +19,7 @@ const baseTelegramEnv = {
 
 type CodexProfilesFile = {
   routes: Record<string, string>;
+  profileCommands?: Record<string, string | { profile: string; description?: string }>;
   skills?: Record<string, Record<string, never>>;
   mcps?: Record<string, Record<string, unknown>>;
   profiles: Record<
@@ -65,6 +66,7 @@ describe("core config module", () => {
           thread: "coding",
           plan: "coding"
         });
+        expect(config.codex.profileCommands).toEqual({});
         expect(config.codex.profiles.general!.defaultCwd).toBe("/home/dev/general");
         expect(config.codex.profiles.coding!.defaultCwd).toBe("/home/dev/coding");
         expect(config.codex.profiles.general!.homePath).toBe("/var/lib/kirbot/homes/general");
@@ -84,6 +86,36 @@ describe("core config module", () => {
         expect(config.database.path).toBe(resolve(homedir(), "kirbot/telegram-codex-bridge.sqlite"));
         expect(config.codex.profiles.general!.homePath).toBe(resolve(homedir(), "kirbot/homes/general"));
         expect(config.codex.profiles.coding!.homePath).toBe(resolve(homedir(), "kirbot/homes/coding"));
+      }
+    );
+  });
+
+  it("loads profile command mappings from the checked-in profile config", async () => {
+    await withFixture(
+      createConfig({
+        profileCommands: {
+          code: {
+            profile: "coding",
+            description: "Start a coding topic thread"
+          },
+          thread: "coding"
+        }
+      }),
+      {},
+      async () => {
+        const { loadConfig } = await import("../src/config");
+        const config = loadConfig();
+
+        expect(config.codex.profileCommands).toEqual({
+          code: {
+            profileId: "coding",
+            description: "Start a coding topic thread"
+          },
+          thread: {
+            profileId: "coding",
+            description: "Start a coding topic thread"
+          }
+        });
       }
     );
   });
@@ -594,6 +626,9 @@ function createConfig(overrides: Partial<CodexProfilesFile> = {}): CodexProfiles
       thread: "coding",
       plan: "coding",
       ...(overrides.routes ?? {})
+    },
+    profileCommands: {
+      ...(overrides.profileCommands ?? {})
     },
     skills: {
       ...(overrides.skills ?? {})

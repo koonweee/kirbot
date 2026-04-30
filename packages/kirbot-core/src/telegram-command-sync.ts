@@ -1,5 +1,6 @@
 import { getVisibleTelegramCommands, type TelegramBotCommand } from "./telegram-commands";
 import type { LoggerLike } from "./logging";
+import type { CodexProfilesConfig } from "./codex-profiles";
 
 type TelegramCommandScope =
   | {
@@ -34,6 +35,7 @@ export class TelegramCommandSync {
   constructor(
     private readonly telegram: TelegramCommandApi,
     private readonly workspaceChatId: number,
+    private readonly profileCommands: CodexProfilesConfig["profileCommands"] = {},
     private readonly logger: LoggerLike = console
   ) {}
 
@@ -54,7 +56,7 @@ export class TelegramCommandSync {
   }
 
   private async applyVisibleCommands(scope: TelegramCommandScope): Promise<void> {
-    const commands = getVisibleTelegramCommands();
+    const commands = getVisibleTelegramCommands(this.profileCommands);
     if (commands.length === 0) {
       await this.telegram.deleteMyCommands({ scope });
       return;

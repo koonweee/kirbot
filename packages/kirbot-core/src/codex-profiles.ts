@@ -22,8 +22,14 @@ export type CodexProfileConfig = {
   mcps: string[];
 };
 
+export type CodexProfileCommandConfig = {
+  profileId: CodexProfileId;
+  description: string;
+};
+
 export type CodexProfilesConfig = {
   routes: Record<string, CodexProfileId>;
+  profileCommands: Record<string, CodexProfileCommandConfig>;
   skills: Record<string, Record<string, JsonValue | undefined>>;
   mcps: Record<string, Record<string, JsonValue | undefined>>;
   profiles: Record<string, CodexProfileConfig>;
@@ -73,6 +79,16 @@ const codexProfileSourceSchema = z
   })
   .strict();
 
+const codexProfileCommandSourceSchema = z.union([
+  z.string().trim().min(1),
+  z
+    .object({
+      profile: z.string().trim().min(1),
+      description: z.string().trim().min(1).max(256).optional()
+    })
+    .strict()
+]);
+
 const codexProfilesSourceSchema = z
   .object({
     routes: z
@@ -82,6 +98,7 @@ const codexProfilesSourceSchema = z
         plan: z.string().min(1)
       })
       .catchall(z.string().min(1)),
+    profileCommands: z.record(z.string(), codexProfileCommandSourceSchema).default({}),
     skills: z.record(z.string(), z.record(z.string(), jsonValueSchema)).default({}),
     mcps: z.record(z.string(), z.record(z.string(), jsonValueSchema)).default({}),
     profiles: z.record(z.string(), codexProfileSourceSchema)
@@ -128,6 +145,44 @@ export function parseCodexProfilesConfig(
         message: `routing target ${JSON.stringify(profileId)} references an undeclared profile`
       });
     }
+  }
+
+  const profileCommands: CodexProfilesConfig["profileCommands"] = {};
+  for (const [commandName, commandConfig] of Object.entries(parsed.profileCommands)) {
+    if (!isSafeTelegramCommandName(commandName)) {
+      issues.push({
+        code: "custom",
+        path: ["profileCommands", commandName],
+        message: `profile command ${JSON.stringify(commandName)} must match Telegram command names: lowercase letters, digits, or underscores, starting with a letter, max 32 characters`
+      });
+      continue;
+    }
+
+    if (isReservedProfileCommandName(commandName)) {
+      issues.push({
+        code: "custom",
+        path: ["profileCommands", commandName],
+        message: `profile command /${commandName} conflicts with a built-in command`
+      });
+      continue;
+    }
+
+    const profileId = typeof commandConfig === "string" ? commandConfig : commandConfig.profile;
+    if (!(profileId in parsed.profiles)) {
+      issues.push({
+        code: "custom",
+        path: ["profileCommands", commandName],
+        message: `profile command /${commandName} target ${JSON.stringify(profileId)} references an undeclared profile`
+      });
+      continue;
+    }
+
+    profileCommands[commandName] = {
+      profileId,
+      description: typeof commandConfig === "string"
+        ? buildDefaultProfileCommandDescription(profileId)
+        : commandConfig.description ?? buildDefaultProfileCommandDescription(profileId)
+    };
   }
 
   const generalProfileId = parsed.routes.general;
@@ -237,6 +292,7 @@ export function parseCodexProfilesConfig(
 
   return {
     routes: parsed.routes,
+    profileCommands,
     skills: parsed.skills,
     mcps: parsed.mcps,
     profiles
@@ -336,6 +392,14 @@ function isSafeProfileId(profileId: string): boolean {
   return isSafePathSegment(profileId);
 }
 
+function isSafeTelegramCommandName(commandName: string): boolean {
+  return /^[a-z][a-z0-9_]{0,31}$/.test(commandName);
+}
+
+function isReservedProfileCommandName(commandName: string): boolean {
+  return commandName !== "thread" && RESERVED_PROFILE_COMMAND_NAMES.has(commandName);
+}
+
 function isSafePathSegment(value: string): boolean {
   return (
     value.length > 0 &&
@@ -345,3 +409,24 @@ function isSafePathSegment(value: string): boolean {
     !value.includes("\\")
   );
 }
+
+function buildDefaultProfileCommandDescription(profileId: string): string {
+  return `Start a ${profileId} topic thread`;
+}
+
+const RESERVED_PROFILE_COMMAND_NAMES = new Set([
+  "stop",
+  "plan",
+  "restart",
+  "implement",
+  "cmd",
+  "clear",
+  "commands",
+  "model",
+  "fast",
+  "compact",
+  "approvals",
+  "permissions",
+  "skills",
+  "mcp"
+]);

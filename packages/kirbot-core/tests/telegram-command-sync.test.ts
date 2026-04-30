@@ -161,6 +161,28 @@ describe("TelegramCommandSync", () => {
     ]);
   });
 
+  it("adds configured profile commands to the workspace command menu", async () => {
+    const telegram = new FakeTelegramCommandApi();
+    const sync = new TelegramCommandSync(
+      telegram,
+      42,
+      {
+        code: {
+          profileId: "coding",
+          description: "Start a coding topic thread"
+        }
+      }
+    );
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    await sync.initialize();
+
+    expect(telegram.setMyCommandsCalls[0]?.commands.at(-1)).toEqual({
+      command: "code",
+      description: "Start a coding topic thread"
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

@@ -86,6 +86,7 @@ export async function createKirbotRuntime(options: CreateKirbotRuntimeOptions): 
     const commandSync = new TelegramCommandSync(
       options.telegramCommandApi,
       config.telegram.workspaceChatId,
+      config.codex.profileCommands,
       appLogger
     );
     await initializeTelegramCommandSyncFailOpen(commandSync, appLogger);
