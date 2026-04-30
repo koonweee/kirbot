@@ -184,7 +184,6 @@ const CLEAR_COMMAND_REJECTED_TEXT = "Wait for the current response to finish or 
 const MODE_COMMAND_REQUIRES_SESSION_TEXT = "This topic does not have a Codex session yet. Send a normal message first to start one";
 const COMPACT_COMMAND_REQUIRES_SESSION_TEXT = "This chat does not have a Codex session yet. Send a normal message first to start one";
 const FAST_USAGE_TEXT = "Usage: /fast [on|off|status]";
-const THREAD_USAGE_TEXT = "Usage: /thread <initial prompt>";
 const RESTART_NOT_CONFIGURED_TEXT = "Restart is not configured for this kirbot deployment";
 const RESTART_COMPLETED_TEXT = "Kirbot production session restarted.";
 const PLAN_MODE_ENABLED_TEXT = "Plan mode enabled";
@@ -510,12 +509,23 @@ export class TelegramCodexBridge {
       return;
     }
 
+    const parsedProfileCommand = parseSlashCommandToken(message.text);
+    if (parsedProfileCommand && this.isConfiguredProfileStartCommand(parsedProfileCommand.command)) {
+      await this.startProfileTopicSessionFromRootMessage(
+        message,
+        parsedProfileCommand.argsText,
+        parsedProfileCommand.command,
+        this.resolveConfiguredProfileStartCommandProfileId(parsedProfileCommand.command)
+      );
+      return;
+    }
+
     const resolvedPendingInput = await this.tryResolveUserInput(message);
     if (resolvedPendingInput) {
       return;
     }
 
-    const parsedCustomCommand = parseSlashCommandToken(message.text);
+    const parsedCustomCommand = parsedProfileCommand ?? parseSlashCommandToken(message.text);
     if (parsedCustomCommand) {
       const handled = await this.tryHandleCustomCommandInvocation(message, parsedCustomCommand.command, parsedCustomCommand.argsText);
       if (handled) {
@@ -565,6 +575,11 @@ export class TelegramCodexBridge {
 
     const parsedCustomCommand = parseSlashCommandToken(message.text);
     if (parsedCustomCommand) {
+      if (this.isConfiguredProfileStartCommand(parsedCustomCommand.command)) {
+        await this.sendInvalidSlashCommandMessage(message);
+        return;
+      }
+
       const handled = await this.tryHandleCustomCommandInvocation(message, parsedCustomCommand.command, parsedCustomCommand.argsText);
       if (handled) {
         return;
@@ -628,7 +643,12 @@ export class TelegramCodexBridge {
     }
 
     if (command.command === "thread") {
-      await this.startThreadSessionFromRootMessage(message, command.argsText);
+      await this.startProfileTopicSessionFromRootMessage(
+        message,
+        command.argsText,
+        command.command,
+        this.resolveConfiguredProfileStartCommandProfileId(command.command)
+      );
       return;
     }
 
@@ -870,7 +890,7 @@ export class TelegramCodexBridge {
     commandName: string,
     argsText: string
   ): Promise<boolean> {
-    if (isBuiltInSlashCommand(commandName)) {
+    if (isBuiltInSlashCommand(commandName) || this.isConfiguredProfileStartCommand(commandName)) {
       return false;
     }
 
@@ -979,7 +999,7 @@ export class TelegramCodexBridge {
   }
 
   private async getCustomCommandConflictText(commandName: string, ignoredPendingId?: number): Promise<string | null> {
-    if (isBuiltInSlashCommand(commandName)) {
+    if (isBuiltInSlashCommand(commandName) || this.isConfiguredProfileStartCommand(commandName)) {
       return buildCustomCommandReservedText(commandName);
     }
 
@@ -1822,12 +1842,17 @@ export class TelegramCodexBridge {
     );
   }
 
-  private async startThreadSessionFromRootMessage(message: UserTurnMessage, promptText: string): Promise<void> {
+  private async startProfileTopicSessionFromRootMessage(
+    message: UserTurnMessage,
+    promptText: string,
+    commandName: string,
+    profileId: string
+  ): Promise<void> {
     const trimmedPrompt = promptText.trim();
     if (!trimmedPrompt) {
       await this.#messenger.sendMessage({
         chatId: message.chatId,
-        text: THREAD_USAGE_TEXT
+        text: buildProfileTopicCommandUsage(commandName)
       });
       return;
     }
@@ -1846,7 +1871,7 @@ export class TelegramCodexBridge {
     };
 
     await this.startSessionInTopic(topicMessage, title, {
-      profileId: this.resolveConfiguredProfileId("thread"),
+      profileId,
       initialPromptText: trimmedPrompt,
       firstTurnMessage: replaceMessageText(topicMessage, trimmedPrompt)
     });
@@ -2048,6 +2073,14 @@ export class TelegramCodexBridge {
 
   private resolveConfiguredProfileId(route: keyof AppConfig["codex"]["routing"]): string {
     return this.config.codex.routing[route]!;
+  }
+
+  private isConfiguredProfileStartCommand(commandName: string): boolean {
+    return commandName in this.config.codex.profileCommands;
+  }
+
+  private resolveConfiguredProfileStartCommandProfileId(commandName: string): string {
+    return this.config.codex.profileCommands[commandName]?.profileId ?? this.resolveConfiguredProfileId("thread");
   }
 
   private async resolveThreadSettingsTarget(
@@ -2530,7 +2563,7 @@ export class TelegramCodexBridge {
 
   private async buildTopicCommandReplyMarkup(scope: SlashCommandScope): Promise<ReplyKeyboardMarkup | undefined> {
     return buildTopicCommandKeyboard(
-      getVisibleSlashCommands(scope),
+      getVisibleSlashCommands(scope, this.config.codex.profileCommands),
       await this.database.listCustomCommands()
     );
   }
@@ -3258,6 +3291,10 @@ function buildPermissionsUpdatedMessage(scope: SettingsSelectionScope, label: st
     case "root":
       return `General thread permissions set to ${label}`;
   }
+}
+
+function buildProfileTopicCommandUsage(commandName: string): string {
+  return `Usage: /${commandName} <initial prompt>`;
 }
 
 function mergePersistedThreadSettings(

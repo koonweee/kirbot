@@ -40,6 +40,16 @@ describe("loadConfig", () => {
     expect(config.codex.profiles.coding!.skills).toContain("kirbot-skill-install");
     expect(config.codex.profiles.coding!.skills).not.toContain("superpowers");
     expect(config.codex.profiles.coding!.mcps).toContain("splice");
+    expect(config.codex.profileCommands).toMatchObject({
+      thread: {
+        profileId: "general",
+        description: "Start a general topic thread"
+      },
+      code: {
+        profileId: "coding",
+        description: "Start a coding topic thread"
+      }
+    });
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

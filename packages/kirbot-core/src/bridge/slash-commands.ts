@@ -1,3 +1,5 @@
+import type { CodexProfilesConfig } from "../codex-profiles";
+
 export type TelegramBotCommand = {
   command: string;
   description: string;
@@ -163,8 +165,11 @@ const TOPIC_COMMAND_SET: ReadonlySet<string> = new Set(
   SLASH_COMMAND_DEFINITIONS.filter((definition) => definition.allowInTopic).map((definition) => definition.command)
 );
 
-export function getVisibleSlashCommands(scope?: SlashCommandScope): readonly TelegramBotCommand[] {
-  return SLASH_COMMAND_DEFINITIONS
+export function getVisibleSlashCommands(
+  scope?: SlashCommandScope,
+  profileCommands: CodexProfilesConfig["profileCommands"] = {}
+): readonly TelegramBotCommand[] {
+  const visibleCommands = SLASH_COMMAND_DEFINITIONS
     .filter((definition) => definition.visible)
     .filter((definition) => {
       if (!scope) {
@@ -175,12 +180,28 @@ export function getVisibleSlashCommands(scope?: SlashCommandScope): readonly Tel
     })
     .map((definition) => ({
       command: definition.command,
-      description: definition.description
+      description: profileCommands[definition.command]?.description ?? definition.description
     }));
+
+  if (scope !== "general") {
+    return visibleCommands;
+  }
+
+  const visibleBuiltIns: Set<string> = new Set(visibleCommands.map((command) => command.command));
+  const dynamicProfileCommands = Object.entries(profileCommands)
+    .filter(([command]) => !visibleBuiltIns.has(command))
+    .map(([command, config]) => ({
+      command,
+      description: config.description
+    }));
+
+  return [...visibleCommands, ...dynamicProfileCommands];
 }
 
-export function getSurfaceableTopicSlashCommands(): readonly TelegramBotCommand[] {
-  return getVisibleSlashCommands("topic");
+export function getSurfaceableTopicSlashCommands(
+  profileCommands: CodexProfilesConfig["profileCommands"] = {}
+): readonly TelegramBotCommand[] {
+  return getVisibleSlashCommands("topic", profileCommands);
 }
 
 export function isAllowedSlashCommandInScope(command: string, scope: SlashCommandScope): boolean {

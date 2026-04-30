@@ -4,6 +4,16 @@
     "thread": "coding",
     "plan": "coding"
   },
+  "profileCommands": {
+    "thread": {
+      "profile": "general",
+      "description": "Start a general topic thread"
+    },
+    "code": {
+      "profile": "coding",
+      "description": "Start a coding topic thread"
+    }
+  },
   "skills": {
     "agent-browser": {},
     "kirbot-skill-install": {},

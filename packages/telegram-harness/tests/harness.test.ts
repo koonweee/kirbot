@@ -1159,6 +1159,7 @@ function createConfig(tempDir: string): AppConfig {
         thread: "coding",
         plan: "coding"
       },
+      profileCommands: {},
       mcps: {},
       model: undefined,
       modelProvider: undefined,
