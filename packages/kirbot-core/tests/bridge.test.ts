@@ -3961,6 +3961,57 @@ describe("TelegramCodexBridge", () => {
     });
   });
 
+  it("toggles out of plan mode when bare /plan is sent again", async () => {
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 7801,
+      messageId: 1501,
+      updateId: 2501,
+      userId: 42,
+      text: "Investigate the flaky CI run"
+    });
+
+    codex.emitNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [],
+          status: "completed",
+          error: null
+        }
+      }
+    });
+    await waitForAsyncNotifications();
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 7801,
+      messageId: 1502,
+      updateId: 2502,
+      userId: 42,
+      text: "/plan"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Plan mode enabled");
+
+    await bridge.handleUserTextMessage({
+      chatId: -1001,
+      topicId: 7801,
+      messageId: 1503,
+      updateId: 2503,
+      userId: 42,
+      text: "/plan"
+    });
+
+    expect(telegram.sentMessages.at(-1)?.text).toBe("Exited plan mode");
+    expect(codex.turns).toHaveLength(1);
+    expect(await database.getSessionByTopic(-1001, 7801)).toMatchObject({
+      preferredMode: "default"
+    });
+  });
+
   it("starts a plan-mode turn immediately when /plan includes a prompt", async () => {
     await bridge.handleUserTextMessage({
       chatId: -1001,

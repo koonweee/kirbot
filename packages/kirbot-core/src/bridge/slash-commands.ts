@@ -40,7 +40,7 @@ const SLASH_COMMAND_DEFINITIONS = [
   },
   {
     command: "plan",
-    description: "Switch this topic into plan mode",
+    description: "Toggle plan mode",
     kind: "kirbot",
     visible: true,
     allowInGeneral: true,
