@@ -16,6 +16,7 @@
   },
   "skills": {
     "agent-browser": {},
+    "dispatcharr-iptv": {},
     "kirbot-skill-install": {},
     "telegram-workspace-send": {}
   },
@@ -39,6 +40,7 @@
       "approvalPolicy": "on-request",
       "skills": [
         "agent-browser",
+        "dispatcharr-iptv",
         "kirbot-skill-install",
         "telegram-workspace-send"
       ],
@@ -56,6 +58,7 @@
       "approvalPolicy": "never",
       "skills": [
         "agent-browser",
+        "dispatcharr-iptv",
         "kirbot-skill-install",
         "telegram-workspace-send"
       ],
