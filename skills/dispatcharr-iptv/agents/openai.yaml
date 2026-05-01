@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dispatcharr IPTV"
+  short_description: "Manage Dispatcharr IPTV channels and groups"
+  default_prompt: "Use $dispatcharr-iptv to list my IPTV groups and help reorganize channels."
